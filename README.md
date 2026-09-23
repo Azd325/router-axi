@@ -92,8 +92,8 @@ is `devices[0]: no devices found` in compact form and
 
 The `Hosts` service is optional on some TR-064 implementations. A router that
 does not advertise it returns `unsupported_capability` and exit `5`; router
-faults or malformed host counts and active states remain protocol errors with
-exit `6`. Names, addresses, and interface types can be empty when the router
+faults, malformed or implausibly large host counts, and malformed active states
+remain protocol errors with exit `6`. Names, addresses, and interface types can be empty when the router
 does not know them. `interface_type` is the service's documented interface
 classification, not a physical switch port or inferred connection detail.
 
@@ -149,8 +149,8 @@ unset ROUTER_AXI_PASSWORD ROUTER_AXI_USERNAME ROUTER_AXI_HOST
 ```
 
 Do not add `-v`: the test deliberately reports only command-level failures and
-never logs responses, credentials, serial numbers, phone data, or router
-addresses. Ordinary `go test ./...` and all CI environments cannot enable the
+never logs responses, credentials, serial numbers, phone or device data, or
+router addresses. Ordinary `go test ./...` and all CI environments cannot enable the
 live test.
 
 ## License
