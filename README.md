@@ -212,7 +212,7 @@ command line:
 export ROUTER_AXI_HOST='fritz.box'
 read -rs 'ROUTER_AXI_USERNAME?Router username: '; export ROUTER_AXI_USERNAME; printf '\n'
 read -rs 'ROUTER_AXI_PASSWORD?Router password: '; export ROUTER_AXI_PASSWORD; printf '\n'
-ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^TestLiveReadOnlyCommands$' -count=1
+ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^(TestLiveReadOnlyCommands|TestLiveWiFi)$' -count=1
 unset ROUTER_AXI_PASSWORD ROUTER_AXI_USERNAME ROUTER_AXI_HOST
 ```
 
