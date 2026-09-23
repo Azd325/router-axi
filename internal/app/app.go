@@ -102,9 +102,6 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	reader, err := a.factory(Config{Host: host, Username: a.getenv("ROUTER_AXI_USERNAME"), Password: a.getenv("ROUTER_AXI_PASSWORD")})
 	if err != nil {
-		if opts.command == "wifi" {
-			return writeError(stderr, opts.json, ExitUsage, "invalid_configuration", "router address could not be parsed", "router-axi help")
-		}
 		return writeError(stderr, opts.json, ExitUsage, "invalid_configuration", err.Error(), "router-axi help")
 	}
 

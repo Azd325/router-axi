@@ -3,6 +3,8 @@ package tr064
 import (
 	"errors"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -74,8 +76,16 @@ func TestLiveWiFi(t *testing.T) {
 	if err != nil || len(radios) == 0 {
 		t.Fatal("advertised Wi-Fi capability could not be read")
 	}
-	for _, radio := range radios {
-		if radio.Channel > 255 || radio.AssociatedDevices > 65535 || radio.ServiceID == "" || radio.Band == "" || radio.SecurityMode == "" {
+	bands := map[string]bool{"2400": true, "5000": true, "6000": true, "unknown": true}
+	modes := map[string]bool{"None": true, "Basic": true, "WPA": true, "11i": true, "WPAand11i": true, "WPA3": true, "11iandWPA3": true, "OWE": true, "OWETrans": true, "unknown": true}
+	var previous uint64
+	for i, radio := range radios {
+		id, err := strconv.ParseUint(strings.TrimPrefix(radio.ServiceID, wlanIDPrefix), 10, 64)
+		if !strings.HasPrefix(radio.ServiceID, wlanIDPrefix) || err != nil || (i > 0 && id <= previous) {
+			t.Fatal("Wi-Fi live read returned invalid or unordered service IDs")
+		}
+		previous = id
+		if !bands[radio.Band] || !modes[radio.SecurityMode] || radio.Channel > 255 || radio.AssociatedDevices > 65535 {
 			t.Fatal("Wi-Fi live read returned invalid fields")
 		}
 	}

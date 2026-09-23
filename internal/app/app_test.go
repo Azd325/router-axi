@@ -405,19 +405,6 @@ func TestWiFiClientPrivacyBoundary(t *testing.T) {
 	}
 }
 
-func TestWiFiConfigurationErrorsDoNotEchoInput(t *testing.T) {
-	for _, args := range [][]string{{"wifi"}, {"wifi", "--json"}} {
-		application := New(func(Config) (Reader, error) {
-			return nil, errors.New(`invalid router address "synthetic-sensitive-host"`)
-		}, func(string) string { return "" })
-		var stdout, stderr bytes.Buffer
-		code := application.Run(t.Context(), args, &stdout, &stderr)
-		if code != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "router address could not be parsed") || strings.Contains(stderr.String(), "synthetic-sensitive-host") {
-			t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-		}
-	}
-}
-
 func TestWiFiFlagsAndHelp(t *testing.T) {
 	for _, flag := range []string{"--all", "--reveal", "--ssid"} {
 		code, stdout, _ := runTest(t, "wifi", flag)
@@ -432,10 +419,12 @@ func TestWiFiFlagsAndHelp(t *testing.T) {
 }
 
 func TestFactoryFailureIsConfigurationError(t *testing.T) {
-	application := New(func(Config) (Reader, error) { return nil, errors.New("bad address") }, func(string) string { return "" })
-	var stderr bytes.Buffer
-	code := application.Run(t.Context(), []string{"status"}, &bytes.Buffer{}, &stderr)
-	if code != ExitUsage || !strings.Contains(stderr.String(), "invalid_configuration") {
-		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	for _, command := range []string{"status", "wifi"} {
+		application := New(func(Config) (Reader, error) { return nil, errors.New("bad address") }, func(string) string { return "" })
+		var stderr bytes.Buffer
+		code := application.Run(t.Context(), []string{command}, &bytes.Buffer{}, &stderr)
+		if code != ExitUsage || !strings.Contains(stderr.String(), "invalid_configuration") || !strings.Contains(stderr.String(), "bad address") {
+			t.Fatalf("command=%s code=%d stderr=%q", command, code, stderr.String())
+		}
 	}
 }
