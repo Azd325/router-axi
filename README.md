@@ -12,7 +12,9 @@ The read-only MVP provides device information, WAN status, traffic statistics, a
 - Explicit confirmation for disruptive operations.
 - Local operation without telemetry or a hosted account.
 
-See [VISION.md](VISION.md) for the acceptance policy.
+See [VISION.md](VISION.md) for the acceptance policy. Contributors should read
+[CONTRIBUTING.md](CONTRIBUTING.md); security reports belong in
+[SECURITY.md](SECURITY.md).
 
 ## Usage
 
@@ -82,30 +84,10 @@ router origin.
 
 ## Development
 
-Requirements:
-
-- Nix with flakes enabled
-- Optional: direnv
-
-Enter the development environment with:
-
-```sh
-nix develop
-```
-
-Or, with direnv installed:
-
-```sh
-direnv allow
-```
-
-The environment provides Go 1.26, `golangci-lint`, and a `check` command.
-
-Run the project checks with:
-
-```sh
-check
-```
+Setup, checks, and the contribution workflow are in
+[CONTRIBUTING.md](CONTRIBUTING.md). Changes are submitted through the
+[no-mistakes](https://github.com/kunchenguid/no-mistakes) gate, which validates
+a feature branch and opens the pull request after the configured checks pass.
 
 ### Opt-in live router tests
 
