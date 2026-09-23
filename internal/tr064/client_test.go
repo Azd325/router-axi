@@ -125,6 +125,34 @@ func TestClientReadOnlyCommands(t *testing.T) {
 	}
 }
 
+func TestDiscoveryFindsNestedServices(t *testing.T) {
+	const nestedDescription = `<?xml version="1.0"?>
+<root><device><serviceList>
+  <service><serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType><controlURL>/upnp/control/deviceinfo</controlURL></service>
+</serviceList><deviceList><device><serviceList>
+  <service><serviceType>urn:dslforum-org:service:WANIPConnection:1</serviceType><controlURL>/upnp/control/wanipconn1</controlURL></service>
+  <service><serviceType>urn:dslforum-org:service:WANCommonInterfaceConfig:1</serviceType><controlURL>/upnp/control/wancommonifconfig1</controlURL></service>
+</serviceList></device></deviceList></device></root>`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(nestedDescription))
+	}))
+	defer server.Close()
+
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.discover(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := client.services["urn:dslforum-org:service:WANIPConnection:1"]; !ok {
+		t.Fatalf("services = %#v", client.services)
+	}
+	if _, ok := client.services["urn:dslforum-org:service:WANCommonInterfaceConfig:1"]; !ok {
+		t.Fatalf("services = %#v", client.services)
+	}
+}
+
 func TestWANSupportsPPPConnectionService(t *testing.T) {
 	pppDescription := strings.ReplaceAll(descriptionFixture, "WANIPConnection", "WANPPPConnection")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

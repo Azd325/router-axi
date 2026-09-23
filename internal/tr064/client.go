@@ -73,9 +73,32 @@ type service struct {
 	ControlURL string `xml:"controlURL"`
 }
 
-type description struct {
-	Services []service `xml:"device>serviceList>service"`
+type description struct{ Services []service }
+
+func (d *description) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement) error {
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if end, ok := token.(xml.EndElement); ok && end.Name == start.Name {
+			return nil
+		}
+		element, ok := token.(xml.StartElement)
+		if !ok || element.Name.Local != "service" {
+			continue
+		}
+		var svc service
+		if err := decoder.DecodeElement(&svc, &element); err != nil {
+			return err
+		}
+		d.Services = append(d.Services, svc)
+	}
 }
+
 type soapValues struct {
 	Status, LastError, ExternalIP                                string
 	Manufacturer, Model, Serial, Software, Hardware              string
