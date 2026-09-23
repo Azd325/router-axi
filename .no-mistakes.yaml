@@ -1,7 +1,7 @@
 commands:
   test: "nix develop --no-pure-eval --command go test ./..."
-  lint: "nix develop --no-pure-eval --command check"
-  format: "gofmt -w cmd internal"
+  lint: "nix develop --no-pure-eval --command sh -c 'go vet ./... && golangci-lint run'"
+  format: "nix develop --no-pure-eval --command gofmt -w cmd internal"
 
 auto_fix:
   review: 0

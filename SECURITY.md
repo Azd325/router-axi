@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are applied to the latest released version.
+Security fixes are applied to the latest released version; see [Releasing](CONTRIBUTING.md#releasing).
 
 ## Reporting a vulnerability
 

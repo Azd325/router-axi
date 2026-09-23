@@ -31,6 +31,12 @@ The gate validates the branch, opens the pull request, and records its attestati
 - Use sanitized fixtures only. Never commit router addresses, serial numbers, credentials, call data, or live protocol responses.
 - Compatibility comes from tested behavior, not router model names.
 
+## Releasing
+
+- Version releases with [SemVer](https://semver.org) tags (`vMAJOR.MINOR.PATCH`) on `main`.
+- Run `nix develop --no-pure-eval --command check` on the commit before tagging it.
+- Publish releases as source releases from the tag. Automated cross-platform binaries are deferred until target platforms are decided.
+
 ## Security
 
 Report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
