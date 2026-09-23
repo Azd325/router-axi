@@ -27,8 +27,9 @@ router-axi calls
 router-axi wan --json
 ```
 
-The router defaults to `fritz.box`. Override it with `--host ADDRESS` or
-`ROUTER_AXI_HOST`. Credentials are read only from the environment. The default
+The router defaults to `http://fritz.box:49000`. Override it with `--host ADDRESS` or
+`ROUTER_AXI_HOST`; an address without a port uses TR-064 port `49000` for HTTP or
+`49443` for HTTPS. Credentials are read only from the environment. The default
 output is compact AXI text; `--json` emits JSON on stdout. Errors are structured
 on stderr in the selected format. `calls` returns at most 20 entries by default,
 reports the omitted count, and accepts `--all` for the complete list.

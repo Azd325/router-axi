@@ -61,6 +61,29 @@ func fixtureServer(t *testing.T) *httptest.Server {
 	}))
 }
 
+func TestNewDefaultsToTR064Ports(t *testing.T) {
+	tests := []struct {
+		address string
+		want    string
+	}{
+		{"fritz.box", "http://fritz.box:49000"},
+		{"https://fritz.box", "https://fritz.box:49443"},
+		{"http://fritz.box:12345", "http://fritz.box:12345"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.address, func(t *testing.T) {
+			client, err := New(test.address, "", "", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := client.base.String(); got != test.want {
+				t.Fatalf("base = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestClientReadOnlyCommands(t *testing.T) {
 	server := fixtureServer(t)
 	defer server.Close()

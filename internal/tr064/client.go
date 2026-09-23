@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -156,6 +157,13 @@ func New(address, username, password string, httpClient *http.Client) (*Client, 
 	}
 	if base.Scheme != "http" && base.Scheme != "https" {
 		return nil, fmt.Errorf("router address must use http or https")
+	}
+	if base.Port() == "" {
+		port := "49000"
+		if base.Scheme == "https" {
+			port = "49443"
+		}
+		base.Host = net.JoinHostPort(base.Hostname(), port)
 	}
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 10 * time.Second}
