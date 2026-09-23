@@ -27,6 +27,12 @@ router-axi calls
 router-axi wan --json
 ```
 
+On the FRITZ!Box 6591 with FRITZ!OS 8.25, the advertised WAN service name does
+not reliably identify the returned address family. `wan` therefore classifies
+`ip_family` from the address itself. `traffic` includes `observed_at`, the UTC
+RFC 3339 time at which the CLI completed both counter reads; compact output
+shows `unknown` if an observation time is unavailable.
+
 The router defaults to `http://fritz.box:49000`. Override it with `--host ADDRESS` or
 `ROUTER_AXI_HOST`; an address without a port uses TR-064 port `49000` for HTTP or
 `49443` for HTTPS. Credentials are read only from the environment. The default
@@ -72,6 +78,26 @@ Run the project checks with:
 ```sh
 check
 ```
+
+### Opt-in live router tests
+
+The live suite invokes only the read actions listed above. It is skipped unless
+`ROUTER_AXI_LIVE_TEST` is exactly `1`, an explicit host and both credentials are
+set, and `CI` is empty. Run it locally without placing credentials on the
+command line:
+
+```sh
+export ROUTER_AXI_HOST='fritz.box'
+read -rs 'ROUTER_AXI_USERNAME?Router username: '; export ROUTER_AXI_USERNAME; printf '\n'
+read -rs 'ROUTER_AXI_PASSWORD?Router password: '; export ROUTER_AXI_PASSWORD; printf '\n'
+ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^TestLiveReadOnlyCommands$' -count=1
+unset ROUTER_AXI_PASSWORD ROUTER_AXI_USERNAME ROUTER_AXI_HOST
+```
+
+Do not add `-v`: the test deliberately reports only command-level failures and
+never logs responses, credentials, serial numbers, phone data, or router
+addresses. Ordinary `go test ./...` and all CI environments cannot enable the
+live test.
 
 ## License
 

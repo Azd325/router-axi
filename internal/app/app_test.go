@@ -27,10 +27,10 @@ func (f fakeReader) Status(context.Context) (tr064.Status, error) {
 	return tr064.Status{Manufacturer: "AVM", Model: "FRITZ!Box 7590 AX", Software: "8.02", UptimeSeconds: 93784}, f.err
 }
 func (f fakeReader) WAN(context.Context) (tr064.WAN, error) {
-	return tr064.WAN{Status: "Connected", ExternalIP: "203.0.113.42", UptimeSeconds: 86400, LastError: "ERROR_NONE"}, f.err
+	return tr064.WAN{Status: "Connected", ExternalIP: "203.0.113.42", IPFamily: "ipv4", UptimeSeconds: 86400, LastError: "ERROR_NONE"}, f.err
 }
 func (f fakeReader) Traffic(context.Context) (tr064.Traffic, error) {
-	return tr064.Traffic{TotalDownloadBytes: 12345678901, TotalUploadBytes: 987654321}, f.err
+	return tr064.Traffic{TotalDownloadBytes: 12345678901, TotalUploadBytes: 987654321, ObservedAt: "2025-03-08T09:11:12Z"}, f.err
 }
 func (f fakeReader) Calls(context.Context) ([]tr064.Call, error) {
 	return []tr064.Call{{ID: "12", Direction: "incoming", Remote: "+4930123456", Name: "Alice", Date: "10.03.24 12:34", Duration: "0:02"}}, f.err
@@ -47,8 +47,8 @@ func runTest(t *testing.T, args ...string) (int, string, string) {
 func TestCompactCommands(t *testing.T) {
 	tests := []struct{ command, contains string }{
 		{"status", "model: FRITZ!Box 7590 AX"},
-		{"wan", "external_ip: 203.0.113.42"},
-		{"traffic", "downloaded: 12.35 GB"},
+		{"wan", "ip_family: ipv4"},
+		{"traffic", "observed_at: 2025-03-08T09:11:12Z"},
 		{"calls", "calls[1]{id,direction,remote,name,date,duration}:"},
 	}
 	for _, test := range tests {
@@ -74,6 +74,21 @@ func TestCallsAreCompactByDefault(t *testing.T) {
 	if code != ExitOK || !strings.Contains(stdout.String(), "calls[23]") || strings.Contains(stdout.String(), "omitted:") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
+}
+
+func TestTrafficMakesMissingObservationTimeExplicit(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	application := New(func(Config) (Reader, error) { return fakeReaderWithoutObservation{}, nil }, func(string) string { return "" })
+	code := application.Run(t.Context(), []string{"traffic"}, &stdout, &stderr)
+	if code != ExitOK || !strings.Contains(stdout.String(), "observed_at: unknown") || stderr.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+type fakeReaderWithoutObservation struct{ fakeReader }
+
+func (fakeReaderWithoutObservation) Traffic(context.Context) (tr064.Traffic, error) {
+	return tr064.Traffic{TotalDownloadBytes: 1, TotalUploadBytes: 2}, nil
 }
 
 func TestJSONIsExplicit(t *testing.T) {

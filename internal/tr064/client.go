@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -47,6 +48,7 @@ type Status struct {
 type WAN struct {
 	Status        string `json:"status"`
 	ExternalIP    string `json:"external_ip"`
+	IPFamily      string `json:"ip_family"`
 	UptimeSeconds uint64 `json:"uptime_seconds"`
 	LastError     string `json:"last_error"`
 }
@@ -54,6 +56,7 @@ type WAN struct {
 type Traffic struct {
 	TotalDownloadBytes uint64 `json:"total_download_bytes"`
 	TotalUploadBytes   uint64 `json:"total_upload_bytes"`
+	ObservedAt         string `json:"observed_at"`
 }
 
 type Call struct {
@@ -166,6 +169,7 @@ type Client struct {
 	username, password string
 	http               *http.Client
 	services           map[string]service
+	now                func() time.Time
 }
 
 func New(address, username, password string, httpClient *http.Client) (*Client, error) {
@@ -189,7 +193,7 @@ func New(address, username, password string, httpClient *http.Client) (*Client, 
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 10 * time.Second}
 	}
-	return &Client{base: base, username: username, password: password, http: httpClient}, nil
+	return &Client{base: base, username: username, password: password, http: httpClient, now: time.Now}, nil
 }
 
 func (c *Client) Status(ctx context.Context) (Status, error) {
@@ -213,7 +217,7 @@ func (c *Client) WAN(ctx context.Context) (WAN, error) {
 	if err != nil {
 		return WAN{}, err
 	}
-	return WAN{v.Status, ip.ExternalIP, number(v.Uptime), v.LastError}, nil
+	return WAN{v.Status, ip.ExternalIP, ipFamily(ip.ExternalIP), number(v.Uptime), v.LastError}, nil
 }
 
 func (c *Client) Traffic(ctx context.Context) (Traffic, error) {
@@ -225,7 +229,11 @@ func (c *Client) Traffic(ctx context.Context) (Traffic, error) {
 	if err != nil {
 		return Traffic{}, err
 	}
-	return Traffic{number(received.TotalDownload), number(sent.TotalUpload)}, nil
+	return Traffic{
+		TotalDownloadBytes: number(received.TotalDownload),
+		TotalUploadBytes:   number(sent.TotalUpload),
+		ObservedAt:         c.now().UTC().Format(time.RFC3339),
+	}, nil
 }
 
 func (c *Client) Calls(ctx context.Context) ([]Call, error) {
@@ -386,6 +394,16 @@ func (c *Client) request(ctx context.Context, method string, u *url.URL, body []
 }
 
 func number(value string) uint64 { n, _ := strconv.ParseUint(value, 10, 64); return n }
+func ipFamily(value string) string {
+	address, err := netip.ParseAddr(strings.TrimSpace(value))
+	if err != nil {
+		return "unknown"
+	}
+	if address.Unmap().Is4() {
+		return "ipv4"
+	}
+	return "ipv6"
+}
 func sameOrigin(a, b *url.URL) bool {
 	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
 }

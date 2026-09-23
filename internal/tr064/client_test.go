@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 //go:embed testdata/tr64desc.xml
@@ -92,6 +93,7 @@ func TestClientReadOnlyCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	client.now = func() time.Time { return time.Date(2025, 3, 8, 10, 11, 12, 0, time.FixedZone("test", 3600)) }
 
 	status, err := client.Status(t.Context())
 	if err != nil {
@@ -105,7 +107,7 @@ func TestClientReadOnlyCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wan.Status != "Connected" || wan.ExternalIP != "203.0.113.42" {
+	if wan.Status != "Connected" || wan.ExternalIP != "2001:db8::42" || wan.IPFamily != "ipv6" {
 		t.Fatalf("wan = %#v", wan)
 	}
 
@@ -113,7 +115,7 @@ func TestClientReadOnlyCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if traffic.TotalDownloadBytes != 12345678901 || traffic.TotalUploadBytes != 987654321 {
+	if traffic.TotalDownloadBytes != 12345678901 || traffic.TotalUploadBytes != 987654321 || traffic.ObservedAt != "2025-03-08T09:11:12Z" {
 		t.Fatalf("traffic = %#v", traffic)
 	}
 
@@ -123,6 +125,21 @@ func TestClientReadOnlyCommands(t *testing.T) {
 	}
 	if len(calls) != 2 || calls[0].Direction != "incoming" || calls[1].Direction != "missed" {
 		t.Fatalf("calls = %#v", calls)
+	}
+}
+
+func TestIPFamilyUsesReturnedAddress(t *testing.T) {
+	tests := map[string]string{
+		"192.0.2.1":         "ipv4",
+		"::ffff:192.0.2.1":  "ipv4",
+		"2001:db8::1":       "ipv6",
+		"":                  "unknown",
+		"not-an-ip-address": "unknown",
+	}
+	for address, want := range tests {
+		if got := ipFamily(address); got != want {
+			t.Errorf("ipFamily(%q) = %q, want %q", address, got, want)
+		}
 	}
 }
 

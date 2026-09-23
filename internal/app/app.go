@@ -182,11 +182,11 @@ func writeCompact(w io.Writer, command string, value any) error {
 		return err
 	case "wan":
 		v := value.(tr064.WAN)
-		_, err := fmt.Fprintf(w, "wan:\n  status: %s\n  external_ip: %s\n  uptime: %s\n  last_error: %s\nnext: router-axi traffic\n", scalar(v.Status), scalar(v.ExternalIP), duration(v.UptimeSeconds), scalar(v.LastError))
+		_, err := fmt.Fprintf(w, "wan:\n  status: %s\n  external_ip: %s\n  ip_family: %s\n  uptime: %s\n  last_error: %s\nnext: router-axi traffic\n", scalar(v.Status), scalar(v.ExternalIP), scalar(v.IPFamily), duration(v.UptimeSeconds), scalar(v.LastError))
 		return err
 	case "traffic":
 		v := value.(tr064.Traffic)
-		_, err := fmt.Fprintf(w, "traffic:\n  downloaded: %s\n  uploaded: %s\n", size(v.TotalDownloadBytes), size(v.TotalUploadBytes))
+		_, err := fmt.Fprintf(w, "traffic:\n  downloaded: %s\n  uploaded: %s\n  observed_at: %s\n", size(v.TotalDownloadBytes), size(v.TotalUploadBytes), scalar(v.ObservedAt))
 		return err
 	case "calls":
 		result := value.(callResult)
