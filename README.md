@@ -12,7 +12,9 @@ The read-only MVP provides device information, WAN status, traffic statistics, a
 - Explicit confirmation for disruptive operations.
 - Local operation without telemetry or a hosted account.
 
-See [VISION.md](VISION.md) for the acceptance policy.
+See [VISION.md](VISION.md) for the acceptance policy. Contributors should read
+[CONTRIBUTING.md](CONTRIBUTING.md); security reports belong in
+[SECURITY.md](SECURITY.md).
 
 ## Usage
 
@@ -81,6 +83,11 @@ read actions. Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 router origin.
 
 ## Development
+
+The project uses Go checks in Nix-based CI. Changes are submitted through the
+[no-mistakes](https://github.com/kunchenguid/no-mistakes) gate, which validates
+a feature branch and opens the pull request after the configured checks pass.
+
 
 Requirements:
 

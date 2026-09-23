@@ -1,0 +1,14 @@
+commands:
+  test: "nix develop --no-pure-eval --command go test ./..."
+  lint: "nix develop --no-pure-eval --command check"
+  format: "gofmt -w cmd internal"
+
+auto_fix:
+  review: 0
+
+document:
+  instructions: |
+    Public command behavior is documented in README.md and VISION.md.
+    Contributor and agent workflow is documented in CONTRIBUTING.md and AGENTS.md.
+    Security reporting is documented in SECURITY.md.
+    Keep live-router tests local-only and never document private router data.
