@@ -36,11 +36,12 @@ func fixtureServer(t *testing.T) *httptest.Server {
 		"/calllist.lua": callsFixture,
 	}
 	actions := map[string]string{
-		"GetInfo":              deviceFixture,
-		"GetStatusInfo":        wanStatusFixture,
-		"GetExternalIPAddress": wanIPFixture,
-		"GetAddonInfos":        trafficFixture,
-		"GetCallList":          callListURLFixture,
+		"GetInfo":               deviceFixture,
+		"GetStatusInfo":         wanStatusFixture,
+		"GetExternalIPAddress":  wanIPFixture,
+		"GetTotalBytesReceived": trafficFixture,
+		"GetTotalBytesSent":     trafficFixture,
+		"GetCallList":           callListURLFixture,
 	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if response, ok := responses[r.URL.Path]; ok {
@@ -104,7 +105,7 @@ func TestClientReadOnlyCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wan.Status != "Connected" || wan.ExternalIPv4 != "203.0.113.42" {
+	if wan.Status != "Connected" || wan.ExternalIP != "203.0.113.42" {
 		t.Fatalf("wan = %#v", wan)
 	}
 
@@ -112,7 +113,7 @@ func TestClientReadOnlyCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if traffic.DownloadBytesPerSecond != 2500000 || traffic.TotalUploadBytes != 987654321 {
+	if traffic.TotalDownloadBytes != 12345678901 || traffic.TotalUploadBytes != 987654321 {
 		t.Fatalf("traffic = %#v", traffic)
 	}
 

@@ -46,16 +46,14 @@ type Status struct {
 
 type WAN struct {
 	Status        string `json:"status"`
-	ExternalIPv4  string `json:"external_ipv4"`
+	ExternalIP    string `json:"external_ip"`
 	UptimeSeconds uint64 `json:"uptime_seconds"`
 	LastError     string `json:"last_error"`
 }
 
 type Traffic struct {
-	DownloadBytesPerSecond uint64 `json:"download_bytes_per_second"`
-	UploadBytesPerSecond   uint64 `json:"upload_bytes_per_second"`
-	TotalDownloadBytes     uint64 `json:"total_download_bytes"`
-	TotalUploadBytes       uint64 `json:"total_upload_bytes"`
+	TotalDownloadBytes uint64 `json:"total_download_bytes"`
+	TotalUploadBytes   uint64 `json:"total_upload_bytes"`
 }
 
 type Call struct {
@@ -219,11 +217,15 @@ func (c *Client) WAN(ctx context.Context) (WAN, error) {
 }
 
 func (c *Client) Traffic(ctx context.Context) (Traffic, error) {
-	v, err := c.action(ctx, "urn:dslforum-org:service:WANCommonInterfaceConfig:", "GetAddonInfos")
+	received, err := c.action(ctx, "urn:dslforum-org:service:WANCommonInterfaceConfig:", "GetTotalBytesReceived")
 	if err != nil {
 		return Traffic{}, err
 	}
-	return Traffic{number(v.DownloadRate), number(v.UploadRate), number(v.TotalDownload), number(v.TotalUpload)}, nil
+	sent, err := c.action(ctx, "urn:dslforum-org:service:WANCommonInterfaceConfig:", "GetTotalBytesSent")
+	if err != nil {
+		return Traffic{}, err
+	}
+	return Traffic{number(received.TotalDownload), number(sent.TotalUpload)}, nil
 }
 
 func (c *Client) Calls(ctx context.Context) ([]Call, error) {

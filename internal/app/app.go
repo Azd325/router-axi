@@ -182,11 +182,11 @@ func writeCompact(w io.Writer, command string, value any) error {
 		return err
 	case "wan":
 		v := value.(tr064.WAN)
-		_, err := fmt.Fprintf(w, "wan:\n  status: %s\n  external_ipv4: %s\n  uptime: %s\n  last_error: %s\nnext: router-axi traffic\n", scalar(v.Status), scalar(v.ExternalIPv4), duration(v.UptimeSeconds), scalar(v.LastError))
+		_, err := fmt.Fprintf(w, "wan:\n  status: %s\n  external_ip: %s\n  uptime: %s\n  last_error: %s\nnext: router-axi traffic\n", scalar(v.Status), scalar(v.ExternalIP), duration(v.UptimeSeconds), scalar(v.LastError))
 		return err
 	case "traffic":
 		v := value.(tr064.Traffic)
-		_, err := fmt.Fprintf(w, "traffic:\n  download_rate: %s\n  upload_rate: %s\n  downloaded: %s\n  uploaded: %s\n", rate(v.DownloadBytesPerSecond), rate(v.UploadBytesPerSecond), size(v.TotalDownloadBytes), size(v.TotalUploadBytes))
+		_, err := fmt.Fprintf(w, "traffic:\n  downloaded: %s\n  uploaded: %s\n", size(v.TotalDownloadBytes), size(v.TotalUploadBytes))
 		return err
 	case "calls":
 		result := value.(callResult)
@@ -269,5 +269,4 @@ func toon(value string) string {
 func duration(seconds uint64) string {
 	return fmt.Sprintf("%dd %02dh %02dm", seconds/86400, seconds%86400/3600, seconds%3600/60)
 }
-func rate(bytes uint64) string { return fmt.Sprintf("%.2f MB/s", float64(bytes)/1_000_000) }
 func size(bytes uint64) string { return fmt.Sprintf("%.2f GB", float64(bytes)/1_000_000_000) }

@@ -42,7 +42,7 @@ router or protocol error.
 The implementation discovers services through `/tr64desc.xml` and invokes only
 read actions: `DeviceInfo:GetInfo`, `WANIPConnection` or
 `WANPPPConnection:GetStatusInfo` and `GetExternalIPAddress`,
-`WANCommonInterfaceConfig:GetAddonInfos`, and AVM's documented
+`WANCommonInterfaceConfig:GetTotalBytesReceived` and `GetTotalBytesSent`, and AVM's documented
 `X_AVM-DE_OnTel:GetCallList`. Call-list URLs are accepted only from the same
 router origin.
 
