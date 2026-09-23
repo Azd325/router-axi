@@ -62,6 +62,9 @@ func TestLiveReadOnlyCommands(t *testing.T) {
 	if _, err := client.Status(t.Context()); err != nil {
 		t.Fatal("status live read failed")
 	}
+	if _, err := client.Overview(t.Context()); err != nil {
+		t.Fatal("overview live read failed")
+	}
 	wan, err := client.WAN(t.Context())
 	if err != nil {
 		t.Fatal("wan live read failed")

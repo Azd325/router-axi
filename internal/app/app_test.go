@@ -13,7 +13,12 @@ import (
 )
 
 type fakeReader struct{ err error }
+type partialReader struct{ fakeReader }
 type manyCallsReader struct{ fakeReader }
+
+func (partialReader) Overview(context.Context) (tr064.Overview, error) {
+	return tr064.Overview{}, &tr064.Error{Kind: "unsupported", Message: "WAN unavailable"}
+}
 
 func (manyCallsReader) Calls(context.Context) ([]tr064.Call, error) {
 	calls := make([]tr064.Call, 23)
@@ -25,6 +30,18 @@ func (manyCallsReader) Calls(context.Context) ([]tr064.Call, error) {
 
 func (f fakeReader) Status(context.Context) (tr064.Status, error) {
 	return tr064.Status{Manufacturer: "AVM", Model: "FRITZ!Box 7590 AX", Software: "8.02", UptimeSeconds: 93784}, f.err
+}
+func (f fakeReader) Overview(ctx context.Context) (tr064.Overview, error) {
+	router, err := f.Status(ctx)
+	if err != nil {
+		return tr064.Overview{}, err
+	}
+	wan, err := f.WAN(ctx)
+	if err != nil {
+		return tr064.Overview{}, err
+	}
+	traffic, err := f.Traffic(ctx)
+	return tr064.Overview{Router: router, WAN: wan, Traffic: traffic}, err
 }
 func (f fakeReader) WAN(context.Context) (tr064.WAN, error) {
 	return tr064.WAN{Status: "Connected", ExternalIP: "203.0.113.42", IPFamily: "ipv4", UptimeSeconds: 86400, LastError: "ERROR_NONE"}, f.err
@@ -47,6 +64,7 @@ func runTest(t *testing.T, args ...string) (int, string, string) {
 func TestCompactCommands(t *testing.T) {
 	tests := []struct{ command, contains string }{
 		{"status", "model: FRITZ!Box 7590 AX"},
+		{"overview", "traffic: 12.35 GB downloaded, 0.99 GB uploaded"},
 		{"wan", "ip_family: ipv4"},
 		{"traffic", "observed_at: 2025-03-08T09:11:12Z"},
 		{"calls", "calls[1]{id,direction,remote,name,date,duration}:"},
@@ -58,6 +76,32 @@ func TestCompactCommands(t *testing.T) {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 			}
 		})
+	}
+}
+
+func TestNoCommandRunsStatus(t *testing.T) {
+	code, stdout, stderr := runTest(t)
+	if code != ExitOK || !strings.HasPrefix(stdout, "router:\n") || stderr != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestOverviewJSONIsDeterministic(t *testing.T) {
+	code, stdout, stderr := runTest(t, "overview", "--json")
+	want := `{"router":{"manufacturer":"AVM","model":"FRITZ!Box 7590 AX","serial":"","software_version":"8.02","hardware_version":"","uptime_seconds":93784},"wan":{"status":"Connected","external_ip":"203.0.113.42","ip_family":"ipv4","uptime_seconds":86400,"last_error":"ERROR_NONE"},"traffic":{"total_download_bytes":12345678901,"total_upload_bytes":987654321,"observed_at":"2025-03-08T09:11:12Z"}}` + "\n"
+	if code != ExitOK || stdout != want || stderr != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestOverviewFailureProducesNoPartialOutput(t *testing.T) {
+	application := New(func(Config) (Reader, error) {
+		return partialReader{}, nil
+	}, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"overview"}, &stdout, &stderr)
+	if code != ExitUnsupported || stdout.Len() != 0 || !strings.Contains(stderr.String(), "code: unsupported_capability") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 

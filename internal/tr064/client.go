@@ -59,6 +59,12 @@ type Traffic struct {
 	ObservedAt         string `json:"observed_at"`
 }
 
+type Overview struct {
+	Router  Status  `json:"router"`
+	WAN     WAN     `json:"wan"`
+	Traffic Traffic `json:"traffic"`
+}
+
 type Call struct {
 	ID        string `json:"id"`
 	Direction string `json:"direction"`
@@ -218,6 +224,24 @@ func (c *Client) WAN(ctx context.Context) (WAN, error) {
 		return WAN{}, err
 	}
 	return WAN{v.Status, ip.ExternalIP, ipFamily(ip.ExternalIP), number(v.Uptime), v.LastError}, nil
+}
+
+func (c *Client) Overview(ctx context.Context) (Overview, error) {
+	var overview Overview
+	var err error
+	overview.Router, err = c.Status(ctx)
+	if err != nil {
+		return Overview{}, err
+	}
+	overview.WAN, err = c.WAN(ctx)
+	if err != nil {
+		return Overview{}, err
+	}
+	overview.Traffic, err = c.Traffic(ctx)
+	if err != nil {
+		return Overview{}, err
+	}
+	return overview, nil
 }
 
 func (c *Client) Traffic(ctx context.Context) (Traffic, error) {

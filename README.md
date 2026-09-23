@@ -20,7 +20,9 @@ See [VISION.md](VISION.md) for the acceptance policy.
 export ROUTER_AXI_USERNAME='router-user'
 export ROUTER_AXI_PASSWORD='router-password'
 
+router-axi                 # status is the default view
 router-axi status
+router-axi overview
 router-axi wan
 router-axi traffic
 router-axi calls
@@ -32,6 +34,12 @@ not reliably identify the returned address family. `wan` therefore classifies
 `ip_family` from the address itself. `traffic` includes `observed_at`, the UTC
 RFC 3339 time at which the CLI completed both counter reads; compact output
 shows `unknown` if an observation time is unavailable.
+
+`overview` reads router identity, WAN state, and traffic totals in that fixed
+order. It is atomic: if any read fails, stdout is empty and the command emits
+the failed operation as a structured error on stderr with its normal non-zero
+exit code. It never presents a partial overview as successful. JSON output has
+stable `router`, `wan`, and `traffic` objects in that order.
 
 The router defaults to `http://fritz.box:49000`. Override it with `--host ADDRESS` or
 `ROUTER_AXI_HOST`; an address without a port uses TR-064 port `49000` for HTTP or

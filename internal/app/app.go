@@ -25,6 +25,7 @@ const (
 type Config struct{ Host, Username, Password string }
 type Reader interface {
 	Status(context.Context) (tr064.Status, error)
+	Overview(context.Context) (tr064.Overview, error)
 	WAN(context.Context) (tr064.WAN, error)
 	Traffic(context.Context) (tr064.Traffic, error)
 	Calls(context.Context) ([]tr064.Call, error)
@@ -56,11 +57,14 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if err != nil {
 		return writeError(stderr, false, ExitUsage, "invalid_arguments", err.Error(), "router-axi help")
 	}
-	if opts.help || opts.command == "help" || opts.command == "" {
+	if opts.help || opts.command == "help" {
 		if _, err := io.WriteString(stdout, help(opts.command)); err != nil {
 			return ExitInternal
 		}
 		return ExitOK
+	}
+	if opts.command == "" {
+		opts.command = "status"
 	}
 	if opts.command == "version" {
 		if opts.json {
@@ -91,6 +95,8 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	switch opts.command {
 	case "status":
 		value, err = reader.Status(ctx)
+	case "overview":
+		value, err = reader.Overview(ctx)
 	case "wan":
 		value, err = reader.WAN(ctx)
 	case "traffic":
@@ -151,7 +157,7 @@ func parse(args []string) (options, error) {
 }
 
 func validCommand(command string) bool {
-	return command == "status" || command == "wan" || command == "traffic" || command == "calls"
+	return command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls"
 }
 
 func help(command string) string {
@@ -162,7 +168,7 @@ func help(command string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + "\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] <command>\n\ncommands:\n  status   router identity and firmware\n  wan      internet connection state\n  traffic  current rates and byte totals\n  calls    call history\n  version  CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -179,6 +185,10 @@ func writeCompact(w io.Writer, command string, value any) error {
 	case "status":
 		v := value.(tr064.Status)
 		_, err := fmt.Fprintf(w, "router:\n  manufacturer: %s\n  model: %s\n  software: %s\n  hardware: %s\n  serial: %s\n  uptime: %s\nnext: router-axi wan\n", scalar(v.Manufacturer), scalar(v.Model), scalar(v.Software), scalar(v.Hardware), scalar(v.Serial), duration(v.UptimeSeconds))
+		return err
+	case "overview":
+		v := value.(tr064.Overview)
+		_, err := fmt.Fprintf(w, "overview:\n  router: %s (%s)\n  wan: %s, %s, %s\n  traffic: %s downloaded, %s uploaded\n  observed_at: %s\n", scalar(v.Router.Model), scalar(v.Router.Software), scalar(v.WAN.Status), scalar(v.WAN.ExternalIP), scalar(v.WAN.IPFamily), size(v.Traffic.TotalDownloadBytes), size(v.Traffic.TotalUploadBytes), scalar(v.Traffic.ObservedAt))
 		return err
 	case "wan":
 		v := value.(tr064.WAN)

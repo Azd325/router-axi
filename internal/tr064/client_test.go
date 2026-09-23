@@ -128,6 +128,24 @@ func TestClientReadOnlyCommands(t *testing.T) {
 	}
 }
 
+func TestOverviewUsesFixtureBackedReadOperations(t *testing.T) {
+	server := fixtureServer(t)
+	defer server.Close()
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.now = func() time.Time { return time.Date(2025, 3, 8, 9, 11, 12, 0, time.UTC) }
+
+	overview, err := client.Overview(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if overview.Router.Model != "FRITZ!Box 7590 AX" || overview.WAN.Status != "Connected" || overview.Traffic.TotalDownloadBytes != 12345678901 {
+		t.Fatalf("overview = %#v", overview)
+	}
+}
+
 func TestIPFamilyUsesReturnedAddress(t *testing.T) {
 	tests := map[string]string{
 		"192.0.2.1":         "ipv4",
