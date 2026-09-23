@@ -111,8 +111,11 @@ type Device struct {
 
 type Radio struct {
 	ServiceID         string `json:"service_id"`
+	SSID              string `json:"ssid"`
+	Enabled           bool   `json:"enabled"`
 	Channel           uint64 `json:"channel"`
 	Band              string `json:"band"`
+	Standard          string `json:"standard"`
 	AssociatedDevices uint64 `json:"associated_devices"`
 	SecurityMode      string `json:"security_mode"`
 }
@@ -156,6 +159,7 @@ type soapValues struct {
 	CallListURL, HostNumberOfEntries                             string
 	MACAddress, IPAddress, InterfaceType, Active, HostName       string
 	FaultCode, FaultDescription                                  string
+	Enable, SSID, Standard                                       string
 	Channel, FrequencyBand, TotalAssociations, BeaconType        string
 }
 
@@ -216,6 +220,12 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.Active
 		case "NewHostName":
 			target = &v.HostName
+		case "NewEnable":
+			target = &v.Enable
+		case "NewSSID":
+			target = &v.SSID
+		case "NewStandard":
+			target = &v.Standard
 		case "NewChannel":
 			target = &v.Channel
 		case "NewX_AVM-DE_FrequencyBand":
@@ -434,6 +444,31 @@ func (c *Client) WiFi(ctx context.Context) ([]Radio, error) {
 	})
 	radios := make([]Radio, 0, len(services))
 	for _, svc := range services {
+		// GetInfo returns the SSID and the BSSID of the beacon. The SSID is
+		// public beacon data and is reported; the BSSID and every other
+		// returned field are discarded here and never leave the client.
+		info, err := c.actionOnService(ctx, svc, "GetInfo")
+		if err != nil {
+			return nil, wifiError(err)
+		}
+		enabled := false
+		switch strings.TrimSpace(info.Enable) {
+		case "0":
+		case "1":
+			enabled = true
+		default:
+			return nil, &Error{Kind: "protocol", Operation: "wifi", Message: "router returned an invalid Wi-Fi enable state"}
+		}
+		band := "unknown"
+		switch info.FrequencyBand {
+		case "2400", "5000", "6000":
+			band = info.FrequencyBand
+		}
+		standard := "unknown"
+		switch info.Standard {
+		case "b", "g", "n", "ac", "ax", "be":
+			standard = info.Standard
+		}
 		channel, err := c.actionOnService(ctx, svc, "GetChannelInfo")
 		if err != nil {
 			return nil, wifiError(err)
@@ -457,17 +492,12 @@ func (c *Client) WiFi(ctx context.Context) ([]Radio, error) {
 		if security.BeaconType == "" {
 			return nil, &Error{Kind: "protocol", Operation: "wifi", Message: "router omitted the Wi-Fi security mode"}
 		}
-		band := "unknown"
-		switch channel.FrequencyBand {
-		case "2400", "5000", "6000":
-			band = channel.FrequencyBand
-		}
 		mode := "unknown"
 		switch security.BeaconType {
 		case "None", "Basic", "WPA", "11i", "WPAand11i", "WPA3", "11iandWPA3", "OWE", "OWETrans":
 			mode = security.BeaconType
 		}
-		radios = append(radios, Radio{svc.ID, number, band, count, mode})
+		radios = append(radios, Radio{svc.ID, info.SSID, enabled, number, band, standard, count, mode})
 	}
 	return radios, nil
 }

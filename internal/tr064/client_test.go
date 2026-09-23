@@ -47,6 +47,9 @@ var hostEntryOneFixture string
 //go:embed testdata/wifi-description.xml
 var wifiDescriptionFixture string
 
+//go:embed testdata/wifi-info.xml
+var wifiInfoFixture string
+
 //go:embed testdata/wifi-channel.xml
 var wifiChannelFixture string
 
@@ -115,6 +118,7 @@ func wifiFixtureClient(t *testing.T, description string, overrides map[string]wi
 	t.Helper()
 	requests := make(chan string, 100)
 	responses := map[string]string{
+		"GetInfo":              wifiInfoFixture,
 		"GetChannelInfo":       wifiChannelFixture,
 		"GetTotalAssociations": wifiAssociationsFixture,
 		"GetBeaconType":        wifiSecurityFixture,
@@ -182,18 +186,18 @@ func TestWiFiEnumeratesNestedInstancesInNumericOrder(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := []Radio{
-				{wlanIDPrefix + "1", 0, "5000", 2, "11iandWPA3"},
-				{wlanIDPrefix + "2", 36, "5000", 65535, "11iandWPA3"},
-				{wlanIDPrefix + "10", 36, "5000", 2, "11iandWPA3"},
+				{wlanIDPrefix + "1", "synthetic-ap", true, 0, "5000", "ax", 2, "11iandWPA3"},
+				{wlanIDPrefix + "2", "synthetic-ap", true, 36, "5000", "ax", 65535, "11iandWPA3"},
+				{wlanIDPrefix + "10", "synthetic-ap", true, 36, "5000", "ax", 2, "11iandWPA3"},
 			}
 			if !reflect.DeepEqual(radios, want) {
 				t.Fatalf("radios = %#v, want %#v", radios, want)
 			}
-			if len(client.allServices) != 4 || len(requests) != 9 {
+			if len(client.allServices) != 4 || len(requests) != 12 {
 				t.Fatalf("services=%d requests=%d", len(client.allServices), len(requests))
 			}
 			for _, path := range []string{"/wifi1", "/wifi2", "/wifi10"} {
-				for _, action := range []string{"GetChannelInfo", "GetTotalAssociations", "GetBeaconType"} {
+				for _, action := range []string{"GetInfo", "GetChannelInfo", "GetTotalAssociations", "GetBeaconType"} {
 					if got := <-requests; got != path+"#"+action {
 						t.Fatalf("request = %q", got)
 					}
@@ -203,7 +207,7 @@ func TestWiFiEnumeratesNestedInstancesInNumericOrder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(encoded) != `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration1","channel":0,"band":"5000","associated_devices":2,"security_mode":"11iandWPA3"}` {
+			if string(encoded) != `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration1","ssid":"synthetic-ap","enabled":true,"channel":0,"band":"5000","standard":"ax","associated_devices":2,"security_mode":"11iandWPA3"}` {
 				t.Fatalf("radio JSON = %s", encoded)
 			}
 		})
@@ -233,6 +237,32 @@ func TestWiFiMissingService(t *testing.T) {
 	var protocolErr *Error
 	if radios != nil || !errors.As(err, &protocolErr) || protocolErr.Kind != "unsupported" || !strings.Contains(protocolErr.Message, wifiRemediation) || len(requests) != 0 {
 		t.Fatalf("radios=%#v error=%v", radios, err)
+	}
+}
+
+func TestWiFiValidatesEnableState(t *testing.T) {
+	for _, value := range []string{"0", "1", "", "2", "-1", "true", "private-value", "missing"} {
+		t.Run(value, func(t *testing.T) {
+			original := "<NewEnable>1</NewEnable>"
+			replacement := "<NewEnable>" + value + "</NewEnable>"
+			if value == "missing" {
+				replacement = ""
+			}
+			client, _ := wifiFixtureClient(t, wifiDescriptionFixture, map[string]wifiResponse{
+				"GetInfo": {body: strings.Replace(wifiInfoFixture, original, replacement, 1)},
+			})
+			radios, err := client.WiFi(t.Context())
+			if value == "0" || value == "1" {
+				if err != nil || len(radios) != 3 || radios[0].Enabled != (value == "1") {
+					t.Fatalf("radios=%#v error=%v", radios, err)
+				}
+				return
+			}
+			var protocolErr *Error
+			if radios != nil || !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || strings.Contains(err.Error(), "private-value") {
+				t.Fatalf("radios=%#v error=%v", radios, err)
+			}
+		})
 	}
 }
 
@@ -267,7 +297,7 @@ func TestWiFiValidatesNumericFields(t *testing.T) {
 	}
 }
 
-func TestWiFiAllowlistsBandAndSecurity(t *testing.T) {
+func TestWiFiAllowlistsBandStandardAndSecurity(t *testing.T) {
 	for _, band := range []string{"2400", "5000", "6000", "unknown", "private-value", ""} {
 		t.Run("band/"+band, func(t *testing.T) {
 			replacement := "<NewX_AVM-DE_FrequencyBand>" + band + "</NewX_AVM-DE_FrequencyBand>"
@@ -275,7 +305,7 @@ func TestWiFiAllowlistsBandAndSecurity(t *testing.T) {
 				replacement = ""
 			}
 			client, _ := wifiFixtureClient(t, wifiDescriptionFixture, map[string]wifiResponse{
-				"GetChannelInfo": {body: strings.Replace(wifiChannelFixture, "<NewX_AVM-DE_FrequencyBand>5000</NewX_AVM-DE_FrequencyBand>", replacement, 1)},
+				"GetInfo": {body: strings.Replace(wifiInfoFixture, "<NewX_AVM-DE_FrequencyBand>5000</NewX_AVM-DE_FrequencyBand>", replacement, 1)},
 			})
 			radios, err := client.WiFi(t.Context())
 			want := band
@@ -283,6 +313,25 @@ func TestWiFiAllowlistsBandAndSecurity(t *testing.T) {
 				want = "unknown"
 			}
 			if err != nil || len(radios) != 3 || radios[0].Band != want {
+				t.Fatalf("radios=%#v error=%v", radios, err)
+			}
+		})
+	}
+	for _, standard := range []string{"b", "g", "n", "ac", "ax", "be", "", "private-value"} {
+		t.Run("standard/"+standard, func(t *testing.T) {
+			replacement := "<NewStandard>" + standard + "</NewStandard>"
+			if standard == "" {
+				replacement = ""
+			}
+			client, _ := wifiFixtureClient(t, wifiDescriptionFixture, map[string]wifiResponse{
+				"GetInfo": {body: strings.Replace(wifiInfoFixture, "<NewStandard>ax</NewStandard>", replacement, 1)},
+			})
+			radios, err := client.WiFi(t.Context())
+			want := standard
+			if standard == "" || standard == "private-value" {
+				want = "unknown"
+			}
+			if err != nil || len(radios) != 3 || radios[0].Standard != want {
 				t.Fatalf("radios=%#v error=%v", radios, err)
 			}
 		})
@@ -301,6 +350,25 @@ func TestWiFiAllowlistsBandAndSecurity(t *testing.T) {
 				t.Fatalf("radios=%#v error=%v", radios, err)
 			}
 		})
+	}
+}
+
+func TestWiFiReportsSSIDAndDiscardsBSSID(t *testing.T) {
+	client, _ := wifiFixtureClient(t, wifiDescriptionFixture, map[string]wifiResponse{
+		"GetInfo": {body: strings.Replace(wifiInfoFixture, "<NewSSID>synthetic-ap</NewSSID>", "<NewSSID>synthetic, \"quoted\" ap</NewSSID>", 1)},
+	})
+	radios, err := client.WiFi(t.Context())
+	if err != nil || len(radios) != 3 || radios[0].SSID != "synthetic, \"quoted\" ap" {
+		t.Fatalf("radios=%#v error=%v", radios, err)
+	}
+	for _, radio := range radios {
+		encoded, err := json.Marshal(radio)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(encoded), "synthetic-sensitive-bssid") {
+			t.Fatal("radio JSON leaked the BSSID")
+		}
 	}
 }
 
@@ -337,7 +405,7 @@ func TestWiFiLateErrorsAreAtomicAndSanitized(t *testing.T) {
 			if radios != nil || !errors.As(err, &protocolErr) || protocolErr.Kind != test.kind || protocolErr.StatusCode != test.status || protocolErr.FaultCode != "" || protocolErr.Operation != "wifi" {
 				t.Fatalf("radios=%#v error=%#v", radios, err)
 			}
-			if strings.Contains(fmt.Sprintf("%#v", err), "private") || strings.Contains(err.Error(), "/wifi") || len(requests) != 9 {
+			if strings.Contains(fmt.Sprintf("%#v", err), "private") || strings.Contains(err.Error(), "/wifi") || len(requests) != 12 {
 				t.Fatalf("unsanitized or premature failure: %#v", err)
 			}
 		})

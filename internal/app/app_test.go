@@ -88,7 +88,7 @@ func (f fakeReader) Devices(context.Context) ([]tr064.Device, error) {
 }
 
 func (f fakeReader) WiFi(context.Context) ([]tr064.Radio, error) {
-	return []tr064.Radio{{ServiceID: "urn:WLANConfiguration-com:serviceId:WLANConfiguration1", Channel: 6, Band: "2400", AssociatedDevices: 2, SecurityMode: "11i"}}, f.err
+	return []tr064.Radio{{ServiceID: "urn:WLANConfiguration-com:serviceId:WLANConfiguration1", SSID: "synthetic-ap", Enabled: true, Channel: 6, Band: "2400", Standard: "ax", AssociatedDevices: 2, SecurityMode: "11i"}}, f.err
 }
 
 type wifiReader struct {
@@ -117,7 +117,7 @@ func TestCompactCommands(t *testing.T) {
 		{"traffic", "observed_at: 2025-03-08T09:11:12Z"},
 		{"calls", "calls[1]{id,direction,remote,name,date,duration}:"},
 		{"devices", "devices[1]{name,ip_address,mac_address,interface_type,active}:"},
-		{"wifi", "radios[1]{service_id,channel,band,associated_devices,security_mode}:"},
+		{"wifi", "radios[1]{service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode}:"},
 	}
 	for _, test := range tests {
 		t.Run(test.command, func(t *testing.T) {
@@ -302,8 +302,8 @@ func TestWiFiOutputContract(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"wifi"}, "radios[1]{service_id,channel,band,associated_devices,security_mode}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration1,6,2400,2,11i\n"},
-		{[]string{"wifi", "--json"}, `{"radios":[{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration1","channel":6,"band":"2400","associated_devices":2,"security_mode":"11i"}],"total":1}` + "\n"},
+		{[]string{"wifi"}, "radios[1]{service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration1,synthetic-ap,true,6,2400,ax,2,11i\n"},
+		{[]string{"wifi", "--json"}, `{"radios":[{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration1","ssid":"synthetic-ap","enabled":true,"channel":6,"band":"2400","standard":"ax","associated_devices":2,"security_mode":"11i"}],"total":1}` + "\n"},
 	} {
 		code, stdout, stderr := runTest(t, test.args...)
 		if code != ExitOK || stdout != test.want || stderr != "" {
@@ -364,12 +364,14 @@ func TestWiFiClientPrivacyBoundary(t *testing.T) {
 				}
 				fields := ""
 				switch action {
+				case `"urn:dslforum-org:service:WLANConfiguration:1#GetInfo"`:
+					fields = "<NewEnable>1</NewEnable><NewStatus>Up</NewStatus><NewSSID>synthetic-ap</NewSSID><NewStandard>ax</NewStandard><NewX_AVM-DE_FrequencyBand>2400</NewX_AVM-DE_FrequencyBand><NewBSSID>synthetic-sensitive-bssid</NewBSSID>"
 				case `"urn:dslforum-org:service:WLANConfiguration:1#GetChannelInfo"`:
 					fields = "<NewChannel>6</NewChannel><NewX_AVM-DE_FrequencyBand>synthetic-sensitive-band</NewX_AVM-DE_FrequencyBand>"
 				case `"urn:dslforum-org:service:WLANConfiguration:1#GetTotalAssociations"`:
 					fields = "<NewTotalAssociations>0</NewTotalAssociations>"
 				case `"urn:dslforum-org:service:WLANConfiguration:1#GetBeaconType"`:
-					fields = "<NewBeaconType>synthetic-sensitive-security</NewBeaconType>"
+					fields = "<NewBeaconType>11i</NewBeaconType>"
 					if fail {
 						w.WriteHeader(http.StatusInternalServerError)
 						fields = "<errorCode>501</errorCode><errorDescription>synthetic-sensitive-fault</errorDescription>"
@@ -391,14 +393,14 @@ func TestWiFiClientPrivacyBoundary(t *testing.T) {
 			if strings.Contains(stdout.String()+stderr.String(), "synthetic-sensitive") || strings.Contains(stdout.String()+stderr.String(), server.URL) {
 				t.Fatal("Wi-Fi output leaked untrusted data")
 			}
-			if len(actions) != 3 {
+			if len(actions) != 4 {
 				t.Fatalf("action count=%d", len(actions))
 			}
 			if fail {
 				if code != ExitRouter || stdout.Len() != 0 || stderr.Len() == 0 {
 					t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 				}
-			} else if code != ExitOK || stderr.Len() != 0 || !strings.Contains(stdout.String(), "unknown") {
+			} else if code != ExitOK || stderr.Len() != 0 || !strings.Contains(stdout.String(), "synthetic-ap") || !strings.Contains(stdout.String(), "2400") {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
 		}

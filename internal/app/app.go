@@ -210,7 +210,7 @@ func help(command string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + "\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  devices   connected and known LAN clients\n  wifi      privacy-preserving Wi-Fi service inspection\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  devices   connected and known LAN clients\n  wifi      read-only Wi-Fi radio inspection\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -280,11 +280,11 @@ func writeCompact(w io.Writer, command string, value any) error {
 			_, err := io.WriteString(w, "radios[0]: no Wi-Fi services found\n")
 			return err
 		}
-		if _, err := fmt.Fprintf(w, "radios[%d]{service_id,channel,band,associated_devices,security_mode}:\n", len(result.Radios)); err != nil {
+		if _, err := fmt.Fprintf(w, "radios[%d]{service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode}:\n", len(result.Radios)); err != nil {
 			return err
 		}
 		for _, radio := range result.Radios {
-			if _, err := fmt.Fprintf(w, "  %s,%d,%s,%d,%s\n", toon(radio.ServiceID), radio.Channel, toon(radio.Band), radio.AssociatedDevices, toon(radio.SecurityMode)); err != nil {
+			if _, err := fmt.Fprintf(w, "  %s,%s,%t,%d,%s,%s,%d,%s\n", toon(radio.ServiceID), toon(radio.SSID), radio.Enabled, radio.Channel, toon(radio.Band), toon(radio.Standard), radio.AssociatedDevices, toon(radio.SecurityMode)); err != nil {
 				return err
 			}
 		}
