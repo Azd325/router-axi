@@ -1,4 +1,5 @@
-/bin/
+/bin/*
+!/bin/router-axi
 /coverage.out
 .DS_Store
 .devenv/
