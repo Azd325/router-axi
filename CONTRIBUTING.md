@@ -9,6 +9,8 @@ nix develop --no-pure-eval
 check
 ```
 
+With direnv installed, `direnv allow` loads the same environment. It provides Go 1.26, `golangci-lint`, and the `check` command, which runs `go test`, `go vet`, and `golangci-lint`.
+
 Live-router tests are local-only. Follow the credential-safe invocation in [README.md](README.md#opt-in-live-router-tests); do not run them in CI or include their output in issues or pull requests.
 
 ## Workflow

@@ -84,35 +84,10 @@ router origin.
 
 ## Development
 
-The project uses Go checks in Nix-based CI. Changes are submitted through the
+Setup, checks, and the contribution workflow are in
+[CONTRIBUTING.md](CONTRIBUTING.md). Changes are submitted through the
 [no-mistakes](https://github.com/kunchenguid/no-mistakes) gate, which validates
 a feature branch and opens the pull request after the configured checks pass.
-
-
-Requirements:
-
-- Nix with flakes enabled
-- Optional: direnv
-
-Enter the development environment with:
-
-```sh
-nix develop
-```
-
-Or, with direnv installed:
-
-```sh
-direnv allow
-```
-
-The environment provides Go 1.26, `golangci-lint`, and a `check` command.
-
-Run the project checks with:
-
-```sh
-check
-```
 
 ### Opt-in live router tests
 
