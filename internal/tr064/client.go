@@ -377,13 +377,15 @@ func (c *Client) Traffic(ctx context.Context) (Traffic, error) {
 	}, nil
 }
 
+const maxHostEntries = 4096
+
 func (c *Client) Devices(ctx context.Context) ([]Device, error) {
 	countValues, err := c.action(ctx, "urn:dslforum-org:service:Hosts:", "GetHostNumberOfEntries")
 	if err != nil {
 		return nil, err
 	}
 	count, err := strconv.ParseUint(strings.TrimSpace(countValues.HostNumberOfEntries), 10, 32)
-	if err != nil {
+	if err != nil || count > maxHostEntries {
 		return nil, &Error{Kind: "protocol", Operation: "GetHostNumberOfEntries", Message: "router returned an invalid host count"}
 	}
 	devices := make([]Device, 0, count)

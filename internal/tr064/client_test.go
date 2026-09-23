@@ -360,6 +360,36 @@ func TestDevicesReportMissingHostsCapability(t *testing.T) {
 	}
 }
 
+func TestDevicesRejectsOversizedHostCount(t *testing.T) {
+	var entryRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/tr64desc.xml" {
+			_, _ = w.Write([]byte(descriptionFixture))
+			return
+		}
+		if strings.Contains(r.Header.Get("SOAPAction"), "GetGenericHostEntry") {
+			entryRequests++
+			_, _ = w.Write([]byte(hostEntryZeroFixture))
+			return
+		}
+		_, _ = w.Write([]byte(strings.Replace(hostCountFixture, ">2<", ">4294967295<", 1)))
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.Devices(t.Context())
+	var protocolErr *Error
+	if !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || protocolErr.Operation != "GetHostNumberOfEntries" {
+		t.Fatalf("error = %#v", err)
+	}
+	if entryRequests != 0 {
+		t.Fatalf("GetGenericHostEntry requests = %d, want 0", entryRequests)
+	}
+}
+
 func TestCallsRejectsCrossOriginURL(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/tr64desc.xml" {
