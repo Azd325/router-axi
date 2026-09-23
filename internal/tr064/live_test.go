@@ -59,6 +59,16 @@ func TestLiveReadOnlyCommands(t *testing.T) {
 		t.Fatal("live router configuration was rejected")
 	}
 
+	doctor, err := client.Doctor(t.Context())
+	if err != nil {
+		t.Fatal("doctor live read failed")
+	}
+	if doctor.Reachability.State != "reachable" || doctor.Protocol.State != "available" || doctor.Authentication.State != "authenticated" || doctor.Model == "" || doctor.Firmware == "" {
+		t.Fatal("doctor live read returned incomplete checks")
+	}
+	if doctor.Capabilities.Status.State != "advertised" || doctor.Capabilities.Overview.State != "advertised" || doctor.Capabilities.WAN.State != "advertised" || doctor.Capabilities.Traffic.State != "advertised" || doctor.Capabilities.Calls.State != "advertised" {
+		t.Fatal("doctor live read returned an unexpected capability state")
+	}
 	if _, err := client.Status(t.Context()); err != nil {
 		t.Fatal("status live read failed")
 	}

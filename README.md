@@ -6,7 +6,7 @@ The read-only MVP provides device information, WAN status, traffic statistics, a
 
 ## Design constraints
 
-- Compact TOON output by default, with JSON available explicitly.
+- Compact AXI output by default, with JSON available explicitly.
 - Non-interactive commands, structured errors, and meaningful exit codes.
 - Read-only behavior by default.
 - Explicit confirmation for disruptive operations.
@@ -21,6 +21,8 @@ export ROUTER_AXI_USERNAME='router-user'
 export ROUTER_AXI_PASSWORD='router-password'
 
 router-axi                 # status is the default view
+router-axi doctor
+router-axi doctor --json
 router-axi status
 router-axi overview
 router-axi wan
@@ -34,6 +36,23 @@ not reliably identify the returned address family. `wan` therefore classifies
 `ip_family` from the address itself. `traffic` includes `observed_at`, the UTC
 RFC 3339 time at which the CLI completed both counter reads; compact output
 shows `unknown` if an observation time is unavailable.
+
+`doctor` performs one bounded diagnosis: it fetches the TR-064 device
+description once and, when `DeviceInfo` is advertised, invokes only
+`DeviceInfo:GetInfo` to verify authentication and obtain model and firmware.
+It reports endpoint reachability, TR-064 availability, authentication, and
+whether the router advertises the services required by `status`, `overview`,
+`wan`, `traffic`, and `calls`. It does not invoke those commands, retrieve a WAN
+address or call list, infer support from a model name, or emit serial numbers,
+WAN/phone addresses, call data, or credentials. Unsupported optional
+capabilities are a successful diagnosis and include remediation.
+
+Doctor preserves completed checks when diagnosis cannot continue: the partial
+report is written to stdout and a structured error to stderr. Unreachable
+routers exit `4`, rejected credentials exit `3`, disabled or missing core
+TR-064 support exits `5`, and malformed/router protocol responses exit `6`.
+Both compact AXI and JSON field order are deterministic. JSON consumers must
+therefore inspect the process exit code as well as stdout.
 
 `overview` reads router identity, WAN state, and traffic totals in that fixed
 order. It is atomic: if any read fails, stdout is empty and the command emits
@@ -54,7 +73,8 @@ router is unreachable, `5` for unsupported router capabilities, and `6` for a
 router or protocol error.
 
 The implementation discovers services through `/tr64desc.xml` and invokes only
-read actions: `DeviceInfo:GetInfo`, `WANIPConnection` or
+read actions. Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
+`DeviceInfo:GetInfo`, `WANIPConnection` or
 `WANPPPConnection:GetStatusInfo` and `GetExternalIPAddress`,
 `WANCommonInterfaceConfig:GetTotalBytesReceived` and `GetTotalBytesSent`, and AVM's documented
 `X_AVM-DE_OnTel:GetCallList`. Call-list URLs are accepted only from the same

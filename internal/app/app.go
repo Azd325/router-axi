@@ -24,6 +24,7 @@ const (
 
 type Config struct{ Host, Username, Password string }
 type Reader interface {
+	Doctor(context.Context) (tr064.Doctor, error)
 	Status(context.Context) (tr064.Status, error)
 	Overview(context.Context) (tr064.Overview, error)
 	WAN(context.Context) (tr064.WAN, error)
@@ -93,6 +94,8 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 
 	var value any
 	switch opts.command {
+	case "doctor":
+		value, err = reader.Doctor(ctx)
 	case "status":
 		value, err = reader.Status(ctx)
 	case "overview":
@@ -113,6 +116,15 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		}
 	}
 	if err != nil {
+		if opts.command == "doctor" {
+			if opts.json {
+				if writeJSON(stdout, value) != ExitOK {
+					return ExitInternal
+				}
+			} else if writeErr := writeCompact(stdout, opts.command, value); writeErr != nil {
+				return ExitInternal
+			}
+		}
 		return renderProtocolError(stderr, opts.json, err)
 	}
 	if opts.json {
@@ -157,7 +169,7 @@ func parse(args []string) (options, error) {
 }
 
 func validCommand(command string) bool {
-	return command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls"
+	return command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls"
 }
 
 func help(command string) string {
@@ -168,7 +180,7 @@ func help(command string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + "\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -182,6 +194,22 @@ func writeJSON(w io.Writer, value any) int {
 
 func writeCompact(w io.Writer, command string, value any) error {
 	switch command {
+	case "doctor":
+		v := value.(tr064.Doctor)
+		if _, err := fmt.Fprintf(w, "doctor:\n  endpoint: %s\n  reachability: %s\n  protocol: %s\n  authentication: %s\n  model: %s\n  firmware: %s\ncapabilities:\n", scalar(v.Endpoint), check(v.Reachability), check(v.Protocol), check(v.Authentication), scalar(v.Model), scalar(v.Firmware)); err != nil {
+			return err
+		}
+		for _, capability := range []struct {
+			name  string
+			check tr064.DoctorCheck
+		}{
+			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"calls", v.Capabilities.Calls},
+		} {
+			if _, err := fmt.Fprintf(w, "  %s: %s\n", capability.name, check(capability.check)); err != nil {
+				return err
+			}
+		}
+		return nil
 	case "status":
 		v := value.(tr064.Status)
 		_, err := fmt.Fprintf(w, "router:\n  manufacturer: %s\n  model: %s\n  software: %s\n  hardware: %s\n  serial: %s\n  uptime: %s\nnext: router-axi wan\n", scalar(v.Manufacturer), scalar(v.Model), scalar(v.Software), scalar(v.Hardware), scalar(v.Serial), duration(v.UptimeSeconds))
@@ -259,6 +287,13 @@ func writeError(w io.Writer, jsonOutput bool, exit int, code, message, hint stri
 		}
 	}
 	return exit
+}
+
+func check(value tr064.DoctorCheck) string {
+	if value.Remediation == "" {
+		return value.State
+	}
+	return value.State + "; remediation: " + value.Remediation
 }
 
 func scalar(value string) string {

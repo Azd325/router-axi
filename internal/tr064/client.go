@@ -65,6 +65,29 @@ type Overview struct {
 	Traffic Traffic `json:"traffic"`
 }
 
+type DoctorCheck struct {
+	State       string `json:"state"`
+	Remediation string `json:"remediation,omitempty"`
+}
+
+type DoctorCapabilities struct {
+	Status   DoctorCheck `json:"status"`
+	Overview DoctorCheck `json:"overview"`
+	WAN      DoctorCheck `json:"wan"`
+	Traffic  DoctorCheck `json:"traffic"`
+	Calls    DoctorCheck `json:"calls"`
+}
+
+type Doctor struct {
+	Endpoint       string             `json:"endpoint"`
+	Reachability   DoctorCheck        `json:"reachability"`
+	Protocol       DoctorCheck        `json:"protocol"`
+	Authentication DoctorCheck        `json:"authentication"`
+	Model          string             `json:"model"`
+	Firmware       string             `json:"firmware"`
+	Capabilities   DoctorCapabilities `json:"capabilities"`
+}
+
 type Call struct {
 	ID        string `json:"id"`
 	Direction string `json:"direction"`
@@ -200,6 +223,74 @@ func New(address, username, password string, httpClient *http.Client) (*Client, 
 		httpClient = &http.Client{Timeout: 10 * time.Second}
 	}
 	return &Client{base: base, username: username, password: password, http: httpClient, now: time.Now}, nil
+}
+
+func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
+	unknown := DoctorCheck{State: "unknown", Remediation: "restore TR-064 access, then run doctor again"}
+	report := Doctor{
+		Endpoint:       c.base.String(),
+		Reachability:   unknown,
+		Protocol:       unknown,
+		Authentication: unknown,
+		Capabilities: DoctorCapabilities{
+			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Calls: unknown,
+		},
+	}
+	if err := c.discover(ctx); err != nil {
+		var protocolErr *Error
+		if errors.As(err, &protocolErr) && protocolErr.Kind == "network" {
+			report.Reachability = DoctorCheck{State: "unreachable", Remediation: "check --host, router power, and local network access"}
+			return report, err
+		}
+		report.Reachability = DoctorCheck{State: "reachable"}
+		if errors.As(err, &protocolErr) && protocolErr.StatusCode == http.StatusNotFound {
+			report.Protocol = DoctorCheck{State: "disabled", Remediation: "enable TR-064 access on the router, then run doctor again"}
+			return report, &Error{Kind: "unsupported", Operation: "doctor", Message: "TR-064 is disabled or unavailable"}
+		}
+		report.Protocol = DoctorCheck{State: "invalid", Remediation: "confirm the endpoint exposes a documented TR-064 device description"}
+		return report, err
+	}
+	report.Reachability = DoctorCheck{State: "reachable"}
+	report.Protocol = DoctorCheck{State: "available"}
+
+	report.Capabilities.Status = c.advertisedCapability([]string{"urn:dslforum-org:service:DeviceInfo:"}, "enable the DeviceInfo TR-064 service or use supported firmware")
+	report.Capabilities.WAN = c.advertisedCapability([]string{"urn:dslforum-org:service:WANIPConnection:", "urn:dslforum-org:service:WANPPPConnection:"}, "enable a WAN connection TR-064 service or use supported firmware")
+	report.Capabilities.Traffic = c.advertisedCapability([]string{"urn:dslforum-org:service:WANCommonInterfaceConfig:"}, "enable the WAN common-interface TR-064 service or use supported firmware")
+	report.Capabilities.Calls = c.advertisedCapability([]string{"urn:dslforum-org:service:X_AVM-DE_OnTel:"}, "enable telephony and its TR-064 service or use supported firmware")
+	if report.Capabilities.Status.State == "advertised" && report.Capabilities.WAN.State == "advertised" && report.Capabilities.Traffic.State == "advertised" {
+		report.Capabilities.Overview = DoctorCheck{State: "advertised"}
+	} else {
+		report.Capabilities.Overview = DoctorCheck{State: "unsupported", Remediation: "resolve unsupported status, wan, or traffic capability"}
+	}
+	if report.Capabilities.Status.State != "advertised" {
+		report.Authentication = DoctorCheck{State: "not_checked", Remediation: "enable the DeviceInfo TR-064 service, then run doctor again"}
+		return report, &Error{Kind: "unsupported", Operation: "doctor", Message: "router does not advertise DeviceInfo; authentication could not be verified"}
+	}
+	status, err := c.Status(ctx)
+	if err != nil {
+		var protocolErr *Error
+		if errors.As(err, &protocolErr) && protocolErr.Kind == "auth" {
+			report.Authentication = DoctorCheck{State: "unauthenticated", Remediation: "set valid ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD credentials"}
+		} else {
+			report.Authentication = DoctorCheck{State: "unverified", Remediation: "resolve the reported DeviceInfo error, then run doctor again"}
+		}
+		return report, err
+	}
+	report.Authentication = DoctorCheck{State: "authenticated"}
+	report.Model = status.Model
+	report.Firmware = status.Software
+	return report, nil
+}
+
+func (c *Client) advertisedCapability(prefixes []string, remediation string) DoctorCheck {
+	for serviceType := range c.services {
+		for _, prefix := range prefixes {
+			if strings.HasPrefix(serviceType, prefix) {
+				return DoctorCheck{State: "advertised"}
+			}
+		}
+	}
+	return DoctorCheck{State: "unsupported", Remediation: remediation}
 }
 
 func (c *Client) Status(ctx context.Context) (Status, error) {

@@ -128,6 +128,95 @@ func TestClientReadOnlyCommands(t *testing.T) {
 	}
 }
 
+func TestDoctorUsesFixtureBackedDescriptionAndDeviceInfo(t *testing.T) {
+	server := fixtureServer(t)
+	defer server.Close()
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := client.Doctor(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Endpoint != server.URL || report.Reachability.State != "reachable" || report.Protocol.State != "available" || report.Authentication.State != "authenticated" {
+		t.Fatalf("doctor checks = %#v", report)
+	}
+	if report.Model != "FRITZ!Box 7590 AX" || report.Firmware != "8.02" {
+		t.Fatalf("doctor identity = %#v", report)
+	}
+	if report.Capabilities.Status.State != "advertised" || report.Capabilities.Overview.State != "advertised" || report.Capabilities.WAN.State != "advertised" || report.Capabilities.Traffic.State != "advertised" || report.Capabilities.Calls.State != "advertised" {
+		t.Fatalf("doctor capabilities = %#v", report.Capabilities)
+	}
+}
+
+func TestDoctorReportsOptionalUnsupportedCapabilities(t *testing.T) {
+	const description = `<root><device><serviceList><service><serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType><controlURL>/device</controlURL></service></serviceList></device></root>`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == descriptionPath {
+			_, _ = w.Write([]byte(description))
+			return
+		}
+		_, _ = w.Write([]byte(deviceFixture))
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := client.Doctor(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Capabilities.Status.State != "advertised" || report.Capabilities.WAN.State != "unsupported" || report.Capabilities.Overview.State != "unsupported" {
+		t.Fatalf("capabilities = %#v", report.Capabilities)
+	}
+	if report.Capabilities.WAN.Remediation == "" {
+		t.Fatal("unsupported WAN capability has no remediation")
+	}
+}
+
+func TestDoctorReportsAuthenticationFailureWithoutSecrets(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == descriptionPath {
+			_, _ = w.Write([]byte(descriptionFixture))
+			return
+		}
+		w.Header().Set("WWW-Authenticate", `Digest realm="router", nonce="nonce", qop="auth"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "private-user", "private-password", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := client.Doctor(t.Context())
+	if err == nil || report.Authentication.State != "unauthenticated" {
+		t.Fatalf("report=%#v error=%v", report, err)
+	}
+	combined := report.Authentication.Remediation + err.Error()
+	if strings.Contains(combined, "private-user") || strings.Contains(combined, "private-password") {
+		t.Fatalf("diagnosis leaked credentials: %q", combined)
+	}
+}
+
+func TestDoctorReportsDisabledTR064(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := client.Doctor(t.Context())
+	if err == nil || report.Reachability.State != "reachable" || report.Protocol.State != "disabled" || report.Protocol.Remediation == "" {
+		t.Fatalf("report=%#v error=%v", report, err)
+	}
+}
+
 func TestOverviewUsesFixtureBackedReadOperations(t *testing.T) {
 	server := fixtureServer(t)
 	defer server.Close()

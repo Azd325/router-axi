@@ -28,6 +28,15 @@ func (manyCallsReader) Calls(context.Context) ([]tr064.Call, error) {
 	return calls, nil
 }
 
+func (f fakeReader) Doctor(context.Context) (tr064.Doctor, error) {
+	advertised := tr064.DoctorCheck{State: "advertised"}
+	return tr064.Doctor{
+		Endpoint: "http://router.test:49000", Reachability: tr064.DoctorCheck{State: "reachable"},
+		Protocol: tr064.DoctorCheck{State: "available"}, Authentication: tr064.DoctorCheck{State: "authenticated"},
+		Model: "FRITZ!Box 7590 AX", Firmware: "8.02",
+		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Calls: advertised},
+	}, f.err
+}
 func (f fakeReader) Status(context.Context) (tr064.Status, error) {
 	return tr064.Status{Manufacturer: "AVM", Model: "FRITZ!Box 7590 AX", Software: "8.02", UptimeSeconds: 93784}, f.err
 }
@@ -63,6 +72,7 @@ func runTest(t *testing.T, args ...string) (int, string, string) {
 
 func TestCompactCommands(t *testing.T) {
 	tests := []struct{ command, contains string }{
+		{"doctor", "authentication: authenticated"},
 		{"status", "model: FRITZ!Box 7590 AX"},
 		{"overview", "traffic: 12.35 GB downloaded, 0.99 GB uploaded"},
 		{"wan", "ip_family: ipv4"},
@@ -83,6 +93,25 @@ func TestNoCommandRunsStatus(t *testing.T) {
 	code, stdout, stderr := runTest(t)
 	if code != ExitOK || !strings.HasPrefix(stdout, "router:\n") || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestDoctorJSONIsDeterministic(t *testing.T) {
+	code, stdout, stderr := runTest(t, "doctor", "--json")
+	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"}}}` + "\n"
+	if code != ExitOK || stdout != want || stderr != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestDoctorPreservesPartialReportOnFailure(t *testing.T) {
+	application := New(func(Config) (Reader, error) {
+		return fakeReader{err: &tr064.Error{Kind: "auth", Message: "router rejected credentials"}}, nil
+	}, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"doctor"}, &stdout, &stderr)
+	if code != ExitAuth || !strings.Contains(stdout.String(), "doctor:\n") || !strings.Contains(stderr.String(), "authentication_failed") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
 
