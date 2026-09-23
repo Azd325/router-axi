@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:GetGenericHostEntryResponse xmlns:u="urn:dslforum-org:service:Hosts:1"><NewIPAddress>192.0.2.20</NewIPAddress><NewAddressSource>DHCP</NewAddressSource><NewLeaseTimeRemaining>3600</NewLeaseTimeRemaining><NewMACAddress>02:00:00:00:00:20</NewMACAddress><NewInterfaceType>802.11</NewInterfaceType><NewActive>0</NewActive><NewHostName></NewHostName></u:GetGenericHostEntryResponse></s:Body></s:Envelope>

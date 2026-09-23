@@ -51,6 +51,8 @@ router-axi overview
 router-axi wan
 router-axi traffic
 router-axi calls
+router-axi devices
+router-axi devices --json
 router-axi wan --json
 ```
 
@@ -65,7 +67,7 @@ description once and, when `DeviceInfo` is advertised, invokes only
 `DeviceInfo:GetInfo` to verify authentication and obtain model and firmware.
 It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
-`wan`, `traffic`, and `calls`. It does not invoke those commands, retrieve a WAN
+`wan`, `traffic`, `calls`, and `devices`. It does not invoke those commands, retrieve a WAN
 address or call list, infer support from a model name, or emit serial numbers,
 WAN/phone addresses, call data, or credentials. Unsupported optional
 capabilities are a successful diagnosis and include remediation.
@@ -76,6 +78,24 @@ routers exit `4`, rejected credentials exit `3`, disabled or missing core
 TR-064 support exits `5`, and malformed/router protocol responses exit `6`.
 Both compact AXI and JSON field order are deterministic. JSON consumers must
 therefore inspect the process exit code as well as stdout.
+
+`devices` reads the documented TR-064 `Hosts:1` table and includes both active
+and remembered inactive LAN clients. Each entry contains only `name` when the
+router provides one, `ip_address`, `mac_address`, `interface_type`, and
+`active`. The MAC address is the stable identifier when the router provides
+one; router-assigned table indexes are not exposed because they are not stable.
+Entries are sorted by MAC address, then IP address and name. Compact and JSON
+output return at most 20 entries by default and accept `--all`; compact output
+reports omitted entries, while JSON includes `total` and `omitted`. Empty output
+is `devices[0]: no devices found` in compact form and
+`{"devices":[],"total":0,"omitted":0}` in JSON.
+
+The `Hosts` service is optional on some TR-064 implementations. A router that
+does not advertise it returns `unsupported_capability` and exit `5`; router
+faults or malformed host counts and active states remain protocol errors with
+exit `6`. Names, addresses, and interface types can be empty when the router
+does not know them. `interface_type` is the service's documented interface
+classification, not a physical switch port or inferred connection detail.
 
 `overview` reads router identity, WAN state, and traffic totals in that fixed
 order. It is atomic: if any read fails, stdout is empty and the command emits
@@ -99,9 +119,11 @@ The implementation discovers services through `/tr64desc.xml` and invokes only
 read actions. Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 `DeviceInfo:GetInfo`, `WANIPConnection` or
 `WANPPPConnection:GetStatusInfo` and `GetExternalIPAddress`,
-`WANCommonInterfaceConfig:GetTotalBytesReceived` and `GetTotalBytesSent`, and AVM's documented
-`X_AVM-DE_OnTel:GetCallList`. Call-list URLs are accepted only from the same
-router origin.
+`WANCommonInterfaceConfig:GetTotalBytesReceived` and `GetTotalBytesSent`, AVM's
+documented `X_AVM-DE_OnTel:GetCallList`, and the standard
+`Hosts:GetHostNumberOfEntries` plus zero-based `GetGenericHostEntry(NewIndex)`.
+Call-list URLs are accepted only from the same router origin. Device inspection
+does not use AVM host-list URLs, browser scraping, or network scanning.
 
 ## Development
 
