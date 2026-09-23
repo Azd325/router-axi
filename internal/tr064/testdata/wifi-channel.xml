@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:GetChannelInfoResponse xmlns:u="urn:dslforum-org:service:WLANConfiguration:1"><NewChannel>36</NewChannel><NewX_AVM-DE_FrequencyBand>5000</NewX_AVM-DE_FrequencyBand></u:GetChannelInfoResponse></s:Body></s:Envelope>

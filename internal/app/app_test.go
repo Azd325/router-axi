@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -53,7 +56,7 @@ func (f fakeReader) Doctor(context.Context) (tr064.Doctor, error) {
 		Endpoint: "http://router.test:49000", Reachability: tr064.DoctorCheck{State: "reachable"},
 		Protocol: tr064.DoctorCheck{State: "available"}, Authentication: tr064.DoctorCheck{State: "authenticated"},
 		Model: "FRITZ!Box 7590 AX", Firmware: "8.02",
-		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Calls: advertised, Devices: advertised},
+		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Calls: advertised, Devices: advertised, WiFi: advertised},
 	}, f.err
 }
 func (f fakeReader) Status(context.Context) (tr064.Status, error) {
@@ -84,6 +87,19 @@ func (f fakeReader) Devices(context.Context) ([]tr064.Device, error) {
 	return []tr064.Device{{Name: "sanitized-device", IPAddress: "192.0.2.10", MACAddress: "02:00:00:00:00:10", InterfaceType: "Ethernet", Active: true}}, f.err
 }
 
+func (f fakeReader) WiFi(context.Context) ([]tr064.Radio, error) {
+	return []tr064.Radio{{ServiceID: "urn:WLANConfiguration-com:serviceId:WLANConfiguration1", Channel: 6, Band: "2400", AssociatedDevices: 2, SecurityMode: "11i"}}, f.err
+}
+
+type wifiReader struct {
+	fakeReader
+	radios []tr064.Radio
+}
+
+func (f wifiReader) WiFi(context.Context) ([]tr064.Radio, error) {
+	return f.radios, f.err
+}
+
 func runTest(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
@@ -101,6 +117,7 @@ func TestCompactCommands(t *testing.T) {
 		{"traffic", "observed_at: 2025-03-08T09:11:12Z"},
 		{"calls", "calls[1]{id,direction,remote,name,date,duration}:"},
 		{"devices", "devices[1]{name,ip_address,mac_address,interface_type,active}:"},
+		{"wifi", "radios[1]{service_id,channel,band,associated_devices,security_mode}:"},
 	}
 	for _, test := range tests {
 		t.Run(test.command, func(t *testing.T) {
@@ -121,7 +138,7 @@ func TestNoCommandRunsStatus(t *testing.T) {
 
 func TestDoctorJSONIsDeterministic(t *testing.T) {
 	code, stdout, stderr := runTest(t, "doctor", "--json")
-	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"}}}` + "\n"
+	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"wifi":{"state":"advertised"}}}` + "\n"
 	if code != ExitOK || stdout != want || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -277,6 +294,140 @@ func TestCredentialsComeFromEnvironment(t *testing.T) {
 	}
 	if got.Host != "router.test" || got.Username != "agent" || got.Password != "secret" {
 		t.Fatalf("config = %#v", got)
+	}
+}
+
+func TestWiFiOutputContract(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"wifi"}, "radios[1]{service_id,channel,band,associated_devices,security_mode}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration1,6,2400,2,11i\n"},
+		{[]string{"wifi", "--json"}, `{"radios":[{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration1","channel":6,"band":"2400","associated_devices":2,"security_mode":"11i"}],"total":1}` + "\n"},
+	} {
+		code, stdout, stderr := runTest(t, test.args...)
+		if code != ExitOK || stdout != test.want || stderr != "" {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+	}
+}
+
+func TestWiFiEmptyAndFailureOutput(t *testing.T) {
+	for _, jsonOutput := range []bool{false, true} {
+		for _, test := range []struct {
+			kind string
+			exit int
+		}{
+			{"", ExitOK}, {"unsupported", ExitUnsupported}, {"auth", ExitAuth}, {"network", ExitNetwork}, {"protocol", ExitRouter}, {"router", ExitRouter},
+		} {
+			reader := wifiReader{}
+			if test.kind != "" {
+				reader.err = &tr064.Error{Kind: test.kind, Message: "Wi-Fi inspection failed"}
+				reader.radios = []tr064.Radio{{Channel: 6}}
+			}
+			application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })
+			args := []string{"wifi"}
+			want := "radios[0]: no Wi-Fi services found\n"
+			if jsonOutput {
+				args = append(args, "--json")
+				want = "{\"radios\":[],\"total\":0}\n"
+			}
+			var stdout, stderr bytes.Buffer
+			code := application.Run(t.Context(), args, &stdout, &stderr)
+			if code != test.exit {
+				t.Fatalf("kind=%s code=%d", test.kind, code)
+			}
+			if test.kind == "" {
+				if stdout.String() != want || stderr.Len() != 0 {
+					t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+				}
+			} else if stdout.Len() != 0 || stderr.Len() == 0 {
+				t.Fatalf("partial output=%q stderr=%q", stdout.String(), stderr.String())
+			}
+		}
+	}
+}
+
+func TestWiFiClientPrivacyBoundary(t *testing.T) {
+	for _, jsonOutput := range []bool{false, true} {
+		for _, fail := range []bool{false, true} {
+			var actions []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/tr64desc.xml" {
+					_, _ = io.WriteString(w, `<root><device><serviceList><service><serviceType>urn:dslforum-org:service:WLANConfiguration:1</serviceType><serviceId>urn:WLANConfiguration-com:serviceId:WLANConfiguration1</serviceId><controlURL>/wlan1</controlURL></service></serviceList></device></root>`)
+					return
+				}
+				action := r.Header.Get("SOAPAction")
+				actions = append(actions, action)
+				if r.Method != http.MethodPost || r.URL.Path != "/wlan1" {
+					t.Error("unexpected Wi-Fi request")
+				}
+				fields := ""
+				switch action {
+				case `"urn:dslforum-org:service:WLANConfiguration:1#GetChannelInfo"`:
+					fields = "<NewChannel>6</NewChannel><NewX_AVM-DE_FrequencyBand>synthetic-sensitive-band</NewX_AVM-DE_FrequencyBand>"
+				case `"urn:dslforum-org:service:WLANConfiguration:1#GetTotalAssociations"`:
+					fields = "<NewTotalAssociations>0</NewTotalAssociations>"
+				case `"urn:dslforum-org:service:WLANConfiguration:1#GetBeaconType"`:
+					fields = "<NewBeaconType>synthetic-sensitive-security</NewBeaconType>"
+					if fail {
+						w.WriteHeader(http.StatusInternalServerError)
+						fields = "<errorCode>501</errorCode><errorDescription>synthetic-sensitive-fault</errorDescription>"
+					}
+				default:
+					t.Error("forbidden Wi-Fi action")
+					w.WriteHeader(http.StatusBadRequest)
+				}
+				_, _ = io.WriteString(w, "<Envelope><Body>"+fields+"</Body></Envelope>")
+			}))
+			application := New(func(Config) (Reader, error) { return tr064.New(server.URL, "", "", server.Client()) }, func(string) string { return "" })
+			args := []string{"wifi"}
+			if jsonOutput {
+				args = append(args, "--json")
+			}
+			var stdout, stderr bytes.Buffer
+			code := application.Run(t.Context(), args, &stdout, &stderr)
+			server.Close()
+			if strings.Contains(stdout.String()+stderr.String(), "synthetic-sensitive") || strings.Contains(stdout.String()+stderr.String(), server.URL) {
+				t.Fatal("Wi-Fi output leaked untrusted data")
+			}
+			if len(actions) != 3 {
+				t.Fatalf("action count=%d", len(actions))
+			}
+			if fail {
+				if code != ExitRouter || stdout.Len() != 0 || stderr.Len() == 0 {
+					t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+				}
+			} else if code != ExitOK || stderr.Len() != 0 || !strings.Contains(stdout.String(), "unknown") {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+		}
+	}
+}
+
+func TestWiFiConfigurationErrorsDoNotEchoInput(t *testing.T) {
+	for _, args := range [][]string{{"wifi"}, {"wifi", "--json"}} {
+		application := New(func(Config) (Reader, error) {
+			return nil, errors.New(`invalid router address "synthetic-sensitive-host"`)
+		}, func(string) string { return "" })
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), args, &stdout, &stderr)
+		if code != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "router address could not be parsed") || strings.Contains(stderr.String(), "synthetic-sensitive-host") {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestWiFiFlagsAndHelp(t *testing.T) {
+	for _, flag := range []string{"--all", "--reveal", "--ssid"} {
+		code, stdout, _ := runTest(t, "wifi", flag)
+		if code != ExitUsage || stdout != "" {
+			t.Fatalf("flag=%s code=%d stdout=%q", flag, code, stdout)
+		}
+	}
+	code, stdout, stderr := runTest(t, "wifi", "--help")
+	if code != ExitOK || stdout != "usage: router-axi wifi [--host ADDRESS] [--json]\n" || stderr != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
 

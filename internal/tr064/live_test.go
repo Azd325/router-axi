@@ -1,6 +1,7 @@
 package tr064
 
 import (
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -46,6 +47,37 @@ func TestLiveTestSafetyGate(t *testing.T) {
 				t.Fatalf("enabled = %t, want %t", got, test.want)
 			}
 		})
+	}
+}
+
+func TestLiveWiFi(t *testing.T) {
+	settings, enabled := liveTestConfig(os.Getenv)
+	if !enabled {
+		t.Skip("live router tests require explicit local opt-in and complete configuration")
+	}
+	client, err := New(settings.host, settings.username, settings.password, nil)
+	if err != nil {
+		t.Fatal("live router configuration was rejected")
+	}
+	if err := client.discover(t.Context()); err != nil {
+		t.Fatal("Wi-Fi capability discovery failed")
+	}
+	capability := client.advertisedCapability([]string{wlanServicePrefix}, wifiRemediation)
+	radios, err := client.WiFi(t.Context())
+	if capability.State == "unsupported" {
+		var protocolErr *Error
+		if radios != nil || !errors.As(err, &protocolErr) || protocolErr.Kind != "unsupported" {
+			t.Fatal("absent Wi-Fi capability was not reported as unsupported")
+		}
+		return
+	}
+	if err != nil || len(radios) == 0 {
+		t.Fatal("advertised Wi-Fi capability could not be read")
+	}
+	for _, radio := range radios {
+		if radio.Channel > 255 || radio.AssociatedDevices > 65535 || radio.ServiceID == "" || radio.Band == "" || radio.SecurityMode == "" {
+			t.Fatal("Wi-Fi live read returned invalid fields")
+		}
 	}
 }
 

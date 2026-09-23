@@ -31,6 +31,7 @@ type Reader interface {
 	Traffic(context.Context) (tr064.Traffic, error)
 	Calls(context.Context) ([]tr064.Call, error)
 	Devices(context.Context) ([]tr064.Device, error)
+	WiFi(context.Context) ([]tr064.Radio, error)
 }
 type Factory func(Config) (Reader, error)
 type App struct {
@@ -58,6 +59,11 @@ type deviceResult struct {
 	Devices []tr064.Device `json:"devices"`
 	Total   int            `json:"total"`
 	Omitted int            `json:"omitted"`
+}
+
+type wifiResult struct {
+	Radios []tr064.Radio `json:"radios"`
+	Total  int           `json:"total"`
 }
 
 func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -96,6 +102,9 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	reader, err := a.factory(Config{Host: host, Username: a.getenv("ROUTER_AXI_USERNAME"), Password: a.getenv("ROUTER_AXI_PASSWORD")})
 	if err != nil {
+		if opts.command == "wifi" {
+			return writeError(stderr, opts.json, ExitUsage, "invalid_configuration", "router address could not be parsed", "router-axi help")
+		}
 		return writeError(stderr, opts.json, ExitUsage, "invalid_configuration", err.Error(), "router-axi help")
 	}
 
@@ -121,6 +130,13 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			}
 			value = callResult{Calls: calls, Total: total, Omitted: total - len(calls)}
 		}
+	case "wifi":
+		var radios []tr064.Radio
+		radios, err = reader.WiFi(ctx)
+		if radios == nil {
+			radios = []tr064.Radio{}
+		}
+		value = wifiResult{Radios: radios, Total: len(radios)}
 	case "devices":
 		var devices []tr064.Device
 		devices, err = reader.Devices(ctx)
@@ -186,7 +202,7 @@ func parse(args []string) (options, error) {
 }
 
 func validCommand(command string) bool {
-	return command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices"
+	return command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "wifi"
 }
 
 func help(command string) string {
@@ -197,7 +213,7 @@ func help(command string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + "\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  devices   connected and known LAN clients\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  devices   connected and known LAN clients\n  wifi      privacy-preserving Wi-Fi service inspection\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -220,7 +236,7 @@ func writeCompact(w io.Writer, command string, value any) error {
 			name  string
 			check tr064.DoctorCheck
 		}{
-			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"calls", v.Capabilities.Calls}, {"devices", v.Capabilities.Devices},
+			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"calls", v.Capabilities.Calls}, {"devices", v.Capabilities.Devices}, {"wifi", v.Capabilities.WiFi},
 		} {
 			if _, err := fmt.Fprintf(w, "  %s: %s\n", capability.name, check(capability.check)); err != nil {
 				return err
@@ -260,6 +276,20 @@ func writeCompact(w io.Writer, command string, value any) error {
 		if result.Omitted > 0 {
 			_, err := fmt.Fprintf(w, "omitted: %d\nnext: router-axi calls --all\n", result.Omitted)
 			return err
+		}
+	case "wifi":
+		result := value.(wifiResult)
+		if len(result.Radios) == 0 {
+			_, err := io.WriteString(w, "radios[0]: no Wi-Fi services found\n")
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "radios[%d]{service_id,channel,band,associated_devices,security_mode}:\n", len(result.Radios)); err != nil {
+			return err
+		}
+		for _, radio := range result.Radios {
+			if _, err := fmt.Fprintf(w, "  %s,%d,%s,%d,%s\n", toon(radio.ServiceID), radio.Channel, toon(radio.Band), radio.AssociatedDevices, toon(radio.SecurityMode)); err != nil {
+				return err
+			}
 		}
 	case "devices":
 		result := value.(deviceResult)
