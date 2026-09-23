@@ -16,6 +16,27 @@ See [VISION.md](VISION.md) for the acceptance policy. Contributors should read
 [CONTRIBUTING.md](CONTRIBUTING.md); security reports belong in
 [SECURITY.md](SECURITY.md).
 
+## Installation
+
+Install v0.1.0 with Go:
+
+```sh
+go install github.com/Azd325/router-axi/cmd/router-axi@v0.1.0
+```
+
+This installs `router-axi` in `GOBIN`, or in `GOPATH/bin` when `GOBIN` is not
+set. The command becomes available after that directory is on `PATH`.
+
+From a checked-out repository, use the launcher instead:
+
+```sh
+./bin/router-axi --help
+```
+
+The launcher builds the current checkout in the Nix development environment
+and runs it. It requires Nix with flakes enabled and is intended for development,
+not as a versioned installation.
+
 ## Usage
 
 ```sh
@@ -85,7 +106,8 @@ router origin.
 ## Development
 
 Setup, checks, and the contribution workflow are in
-[CONTRIBUTING.md](CONTRIBUTING.md). Changes are submitted through the
+[CONTRIBUTING.md](CONTRIBUTING.md). Release maintainers should follow
+[RELEASING.md](RELEASING.md). Changes are submitted through the
 [no-mistakes](https://github.com/kunchenguid/no-mistakes) gate, which validates
 a feature branch and opens the pull request after the configured checks pass.
 
