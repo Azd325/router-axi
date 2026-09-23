@@ -158,9 +158,7 @@ Doctor reports advertisement only, with explicit unsupported remediation; it
 does not probe these actions. Firmware must support all four reads and the
 documented service identifiers; routers whose `GetInfo` omits the
 frequency-band extension report `band: unknown`. Compatibility is
-fixture-backed, not inferred from a model name; the command has been run
-manually against one FRITZ!Box but the live suite has not been executed with
-real credentials.
+fixture-backed, not inferred from a model name.
 
 `overview` reads router identity, WAN state, and traffic totals in that fixed
 order. It is atomic: if any read fails, stdout is empty and the command emits
