@@ -2,6 +2,8 @@ package tr064
 
 import (
 	_ "embed"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,6 +32,15 @@ var callListURLFixture string
 //go:embed testdata/calls.xml
 var callsFixture string
 
+//go:embed testdata/host-count.xml
+var hostCountFixture string
+
+//go:embed testdata/host-entry-0.xml
+var hostEntryZeroFixture string
+
+//go:embed testdata/host-entry-1.xml
+var hostEntryOneFixture string
+
 func fixtureServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	responses := map[string]string{
@@ -37,12 +48,13 @@ func fixtureServer(t *testing.T) *httptest.Server {
 		"/calllist.lua": callsFixture,
 	}
 	actions := map[string]string{
-		"GetInfo":               deviceFixture,
-		"GetStatusInfo":         wanStatusFixture,
-		"GetExternalIPAddress":  wanIPFixture,
-		"GetTotalBytesReceived": trafficFixture,
-		"GetTotalBytesSent":     trafficFixture,
-		"GetCallList":           callListURLFixture,
+		"GetInfo":                deviceFixture,
+		"GetStatusInfo":          wanStatusFixture,
+		"GetExternalIPAddress":   wanIPFixture,
+		"GetTotalBytesReceived":  trafficFixture,
+		"GetTotalBytesSent":      trafficFixture,
+		"GetCallList":            callListURLFixture,
+		"GetHostNumberOfEntries": hostCountFixture,
 	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if response, ok := responses[r.URL.Path]; ok {
@@ -52,6 +64,22 @@ func fixtureServer(t *testing.T) *httptest.Server {
 		action := strings.Trim(r.Header.Get("SOAPAction"), `"`)
 		if i := strings.LastIndex(action, "#"); i >= 0 {
 			action = action[i+1:]
+		}
+		if action == "GetGenericHostEntry" {
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				http.Error(w, "could not read request", http.StatusBadRequest)
+				return
+			}
+			switch {
+			case strings.Contains(string(body), "<NewIndex>0</NewIndex>"):
+				_, _ = w.Write([]byte(hostEntryZeroFixture))
+			case strings.Contains(string(body), "<NewIndex>1</NewIndex>"):
+				_, _ = w.Write([]byte(hostEntryOneFixture))
+			default:
+				http.Error(w, "unexpected host index", http.StatusBadRequest)
+			}
+			return
 		}
 		response, ok := actions[action]
 		if !ok {
@@ -126,6 +154,14 @@ func TestClientReadOnlyCommands(t *testing.T) {
 	if len(calls) != 2 || calls[0].Direction != "incoming" || calls[1].Direction != "missed" {
 		t.Fatalf("calls = %#v", calls)
 	}
+
+	devices, err := client.Devices(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 2 || devices[0].Name != "sanitized-device" || devices[0].MACAddress != "02:00:00:00:00:10" || !devices[0].Active || devices[1].Active {
+		t.Fatalf("devices = %#v", devices)
+	}
 }
 
 func TestDoctorUsesFixtureBackedDescriptionAndDeviceInfo(t *testing.T) {
@@ -146,7 +182,7 @@ func TestDoctorUsesFixtureBackedDescriptionAndDeviceInfo(t *testing.T) {
 	if report.Model != "FRITZ!Box 7590 AX" || report.Firmware != "8.02" {
 		t.Fatalf("doctor identity = %#v", report)
 	}
-	if report.Capabilities.Status.State != "advertised" || report.Capabilities.Overview.State != "advertised" || report.Capabilities.WAN.State != "advertised" || report.Capabilities.Traffic.State != "advertised" || report.Capabilities.Calls.State != "advertised" {
+	if report.Capabilities.Status.State != "advertised" || report.Capabilities.Overview.State != "advertised" || report.Capabilities.WAN.State != "advertised" || report.Capabilities.Traffic.State != "advertised" || report.Capabilities.Calls.State != "advertised" || report.Capabilities.Devices.State != "advertised" {
 		t.Fatalf("doctor capabilities = %#v", report.Capabilities)
 	}
 }
@@ -173,8 +209,8 @@ func TestDoctorReportsOptionalUnsupportedCapabilities(t *testing.T) {
 	if report.Capabilities.Status.State != "advertised" || report.Capabilities.WAN.State != "unsupported" || report.Capabilities.Overview.State != "unsupported" {
 		t.Fatalf("capabilities = %#v", report.Capabilities)
 	}
-	if report.Capabilities.WAN.Remediation == "" {
-		t.Fatal("unsupported WAN capability has no remediation")
+	if report.Capabilities.WAN.Remediation == "" || report.Capabilities.Devices.Remediation == "" {
+		t.Fatal("unsupported capability has no remediation")
 	}
 }
 
@@ -303,6 +339,54 @@ func TestWANSupportsPPPConnectionService(t *testing.T) {
 	}
 	if wan.Status != "Connected" {
 		t.Fatalf("WAN = %#v", wan)
+	}
+}
+
+func TestDevicesReportMissingHostsCapability(t *testing.T) {
+	const description = `<root><device><serviceList><service><serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType><controlURL>/device</controlURL></service></serviceList></device></root>`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(description))
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.Devices(t.Context())
+	var protocolErr *Error
+	if !errors.As(err, &protocolErr) || protocolErr.Kind != "unsupported" || protocolErr.Operation != "GetHostNumberOfEntries" {
+		t.Fatalf("error = %#v", err)
+	}
+}
+
+func TestDevicesRejectsOversizedHostCount(t *testing.T) {
+	var entryRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/tr64desc.xml" {
+			_, _ = w.Write([]byte(descriptionFixture))
+			return
+		}
+		if strings.Contains(r.Header.Get("SOAPAction"), "GetGenericHostEntry") {
+			entryRequests++
+			_, _ = w.Write([]byte(hostEntryZeroFixture))
+			return
+		}
+		_, _ = w.Write([]byte(strings.Replace(hostCountFixture, ">2<", ">4294967295<", 1)))
+	}))
+	defer server.Close()
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.Devices(t.Context())
+	var protocolErr *Error
+	if !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || protocolErr.Operation != "GetHostNumberOfEntries" {
+		t.Fatalf("error = %#v", err)
+	}
+	if entryRequests != 0 {
+		t.Fatalf("GetGenericHostEntry requests = %d, want 0", entryRequests)
 	}
 }
 

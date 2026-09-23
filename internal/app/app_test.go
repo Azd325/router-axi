@@ -15,6 +15,9 @@ import (
 type fakeReader struct{ err error }
 type partialReader struct{ fakeReader }
 type manyCallsReader struct{ fakeReader }
+type manyDevicesReader struct{ fakeReader }
+type emptyDevicesReader struct{ fakeReader }
+type unsupportedDevicesReader struct{ fakeReader }
 
 func (partialReader) Overview(context.Context) (tr064.Overview, error) {
 	return tr064.Overview{}, &tr064.Error{Kind: "unsupported", Message: "WAN unavailable"}
@@ -28,13 +31,29 @@ func (manyCallsReader) Calls(context.Context) ([]tr064.Call, error) {
 	return calls, nil
 }
 
+func (manyDevicesReader) Devices(context.Context) ([]tr064.Device, error) {
+	devices := make([]tr064.Device, 23)
+	for i := range devices {
+		devices[i] = tr064.Device{IPAddress: fmt.Sprintf("192.0.2.%d", i+1), MACAddress: fmt.Sprintf("02:00:00:00:00:%02x", i+1), InterfaceType: "Ethernet", Active: true}
+	}
+	return devices, nil
+}
+
+func (emptyDevicesReader) Devices(context.Context) ([]tr064.Device, error) {
+	return []tr064.Device{}, nil
+}
+
+func (unsupportedDevicesReader) Devices(context.Context) ([]tr064.Device, error) {
+	return nil, &tr064.Error{Kind: "unsupported", Operation: "GetHostNumberOfEntries", Message: "router does not advertise the required TR-064 service"}
+}
+
 func (f fakeReader) Doctor(context.Context) (tr064.Doctor, error) {
 	advertised := tr064.DoctorCheck{State: "advertised"}
 	return tr064.Doctor{
 		Endpoint: "http://router.test:49000", Reachability: tr064.DoctorCheck{State: "reachable"},
 		Protocol: tr064.DoctorCheck{State: "available"}, Authentication: tr064.DoctorCheck{State: "authenticated"},
 		Model: "FRITZ!Box 7590 AX", Firmware: "8.02",
-		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Calls: advertised},
+		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Calls: advertised, Devices: advertised},
 	}, f.err
 }
 func (f fakeReader) Status(context.Context) (tr064.Status, error) {
@@ -61,6 +80,9 @@ func (f fakeReader) Traffic(context.Context) (tr064.Traffic, error) {
 func (f fakeReader) Calls(context.Context) ([]tr064.Call, error) {
 	return []tr064.Call{{ID: "12", Direction: "incoming", Remote: "+4930123456", Name: "Alice", Date: "10.03.24 12:34", Duration: "0:02"}}, f.err
 }
+func (f fakeReader) Devices(context.Context) ([]tr064.Device, error) {
+	return []tr064.Device{{Name: "sanitized-device", IPAddress: "192.0.2.10", MACAddress: "02:00:00:00:00:10", InterfaceType: "Ethernet", Active: true}}, f.err
+}
 
 func runTest(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
@@ -78,6 +100,7 @@ func TestCompactCommands(t *testing.T) {
 		{"wan", "ip_family: ipv4"},
 		{"traffic", "observed_at: 2025-03-08T09:11:12Z"},
 		{"calls", "calls[1]{id,direction,remote,name,date,duration}:"},
+		{"devices", "devices[1]{name,ip_address,mac_address,interface_type,active}:"},
 	}
 	for _, test := range tests {
 		t.Run(test.command, func(t *testing.T) {
@@ -98,7 +121,7 @@ func TestNoCommandRunsStatus(t *testing.T) {
 
 func TestDoctorJSONIsDeterministic(t *testing.T) {
 	code, stdout, stderr := runTest(t, "doctor", "--json")
-	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"}}}` + "\n"
+	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"}}}` + "\n"
 	if code != ExitOK || stdout != want || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -146,6 +169,53 @@ func TestCallsAreCompactByDefault(t *testing.T) {
 	code = application.Run(t.Context(), []string{"calls", "--all"}, &stdout, &stderr)
 	if code != ExitOK || !strings.Contains(stdout.String(), "calls[23]") || strings.Contains(stdout.String(), "omitted:") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDevicesAreCompactByDefault(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return manyDevicesReader{}, nil }, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"devices"}, &stdout, &stderr)
+	if code != ExitOK || !strings.Contains(stdout.String(), "devices[20]") || !strings.Contains(stdout.String(), "omitted: 3") || !strings.Contains(stdout.String(), "devices --all") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	code = application.Run(t.Context(), []string{"devices", "--all"}, &stdout, &stderr)
+	if code != ExitOK || !strings.Contains(stdout.String(), "devices[23]") || strings.Contains(stdout.String(), "omitted:") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDevicesEmptyOutputIsDefinitive(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return emptyDevicesReader{}, nil }, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"devices"}, &stdout, &stderr)
+	if code != ExitOK || stdout.String() != "devices[0]: no devices found\n" || stderr.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+
+	stdout.Reset()
+	code = application.Run(t.Context(), []string{"devices", "--json"}, &stdout, &stderr)
+	if code != ExitOK || stdout.String() != "{\"devices\":[],\"total\":0,\"omitted\":0}\n" || stderr.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDevicesCapabilityAbsenceIsExplicit(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return unsupportedDevicesReader{}, nil }, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"devices"}, &stdout, &stderr)
+	if code != ExitUnsupported || stdout.Len() != 0 || !strings.Contains(stderr.String(), "code: unsupported_capability") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDevicesJSONIsDeterministic(t *testing.T) {
+	code, stdout, stderr := runTest(t, "devices", "--json")
+	want := `{"devices":[{"name":"sanitized-device","ip_address":"192.0.2.10","mac_address":"02:00:00:00:00:10","interface_type":"Ethernet","active":true}],"total":1,"omitted":0}` + "\n"
+	if code != ExitOK || stdout != want || stderr != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
 

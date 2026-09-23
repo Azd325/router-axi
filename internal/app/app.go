@@ -30,6 +30,7 @@ type Reader interface {
 	WAN(context.Context) (tr064.WAN, error)
 	Traffic(context.Context) (tr064.Traffic, error)
 	Calls(context.Context) ([]tr064.Call, error)
+	Devices(context.Context) ([]tr064.Device, error)
 }
 type Factory func(Config) (Reader, error)
 type App struct {
@@ -51,6 +52,12 @@ type callResult struct {
 	Calls   []tr064.Call `json:"calls"`
 	Total   int          `json:"total"`
 	Omitted int          `json:"omitted"`
+}
+
+type deviceResult struct {
+	Devices []tr064.Device `json:"devices"`
+	Total   int            `json:"total"`
+	Omitted int            `json:"omitted"`
 }
 
 func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -114,6 +121,16 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			}
 			value = callResult{Calls: calls, Total: total, Omitted: total - len(calls)}
 		}
+	case "devices":
+		var devices []tr064.Device
+		devices, err = reader.Devices(ctx)
+		if err == nil {
+			total := len(devices)
+			if !opts.all && len(devices) > 20 {
+				devices = devices[:20]
+			}
+			value = deviceResult{Devices: devices, Total: total, Omitted: total - len(devices)}
+		}
 	}
 	if err != nil {
 		if opts.command == "doctor" {
@@ -162,25 +179,25 @@ func parse(args []string) (options, error) {
 			opts.command = args[i]
 		}
 	}
-	if opts.all && opts.command != "calls" {
-		return opts, errors.New("--all is valid only for calls")
+	if opts.all && opts.command != "calls" && opts.command != "devices" {
+		return opts, errors.New("--all is valid only for calls or devices")
 	}
 	return opts, nil
 }
 
 func validCommand(command string) bool {
-	return command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls"
+	return command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices"
 }
 
 func help(command string) string {
 	if validCommand(command) {
 		extra := ""
-		if command == "calls" {
+		if command == "calls" || command == "devices" {
 			extra = " [--all]"
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + "\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  devices   connected and known LAN clients\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -203,7 +220,7 @@ func writeCompact(w io.Writer, command string, value any) error {
 			name  string
 			check tr064.DoctorCheck
 		}{
-			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"calls", v.Capabilities.Calls},
+			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"calls", v.Capabilities.Calls}, {"devices", v.Capabilities.Devices},
 		} {
 			if _, err := fmt.Fprintf(w, "  %s: %s\n", capability.name, check(capability.check)); err != nil {
 				return err
@@ -242,6 +259,24 @@ func writeCompact(w io.Writer, command string, value any) error {
 		}
 		if result.Omitted > 0 {
 			_, err := fmt.Fprintf(w, "omitted: %d\nnext: router-axi calls --all\n", result.Omitted)
+			return err
+		}
+	case "devices":
+		result := value.(deviceResult)
+		if len(result.Devices) == 0 {
+			_, err := io.WriteString(w, "devices[0]: no devices found\n")
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "devices[%d]{name,ip_address,mac_address,interface_type,active}:\n", len(result.Devices)); err != nil {
+			return err
+		}
+		for _, device := range result.Devices {
+			if _, err := fmt.Fprintf(w, "  %s,%s,%s,%s,%t\n", toon(device.Name), toon(device.IPAddress), toon(device.MACAddress), toon(device.InterfaceType), device.Active); err != nil {
+				return err
+			}
+		}
+		if result.Omitted > 0 {
+			_, err := fmt.Fprintf(w, "omitted: %d\nnext: router-axi devices --all\n", result.Omitted)
 			return err
 		}
 	}

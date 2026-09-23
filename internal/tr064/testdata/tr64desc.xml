@@ -5,5 +5,6 @@
     <service><serviceType>urn:dslforum-org:service:WANIPConnection:1</serviceType><controlURL>/upnp/control/wanipconn1</controlURL></service>
     <service><serviceType>urn:dslforum-org:service:WANCommonInterfaceConfig:1</serviceType><controlURL>/upnp/control/wancommonifconfig1</controlURL></service>
     <service><serviceType>urn:dslforum-org:service:X_AVM-DE_OnTel:1</serviceType><controlURL>/upnp/control/x_contact</controlURL></service>
+    <service><serviceType>urn:dslforum-org:service:Hosts:1</serviceType><controlURL>/upnp/control/hosts</controlURL></service>
   </serviceList></device>
 </root>

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -76,6 +77,7 @@ type DoctorCapabilities struct {
 	WAN      DoctorCheck `json:"wan"`
 	Traffic  DoctorCheck `json:"traffic"`
 	Calls    DoctorCheck `json:"calls"`
+	Devices  DoctorCheck `json:"devices"`
 }
 
 type Doctor struct {
@@ -96,6 +98,14 @@ type Call struct {
 	Date      string `json:"date"`
 	Duration  string `json:"duration"`
 	Device    string `json:"device,omitempty"`
+}
+
+type Device struct {
+	Name          string `json:"name,omitempty"`
+	IPAddress     string `json:"ip_address"`
+	MACAddress    string `json:"mac_address"`
+	InterfaceType string `json:"interface_type"`
+	Active        bool   `json:"active"`
 }
 
 type service struct {
@@ -133,9 +143,12 @@ type soapValues struct {
 	Status, LastError, ExternalIP                                string
 	Manufacturer, Model, Serial, Software, Hardware              string
 	Uptime, DownloadRate, UploadRate, TotalDownload, TotalUpload string
-	CallListURL                                                  string
+	CallListURL, HostNumberOfEntries                             string
+	MACAddress, IPAddress, InterfaceType, Active, HostName       string
 	FaultCode, FaultDescription                                  string
 }
+
+type soapArgument struct{ Name, Value string }
 
 func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error {
 	for {
@@ -180,6 +193,18 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.TotalUpload
 		case "NewCallListURL":
 			target = &v.CallListURL
+		case "NewHostNumberOfEntries":
+			target = &v.HostNumberOfEntries
+		case "NewMACAddress":
+			target = &v.MACAddress
+		case "NewIPAddress":
+			target = &v.IPAddress
+		case "NewInterfaceType":
+			target = &v.InterfaceType
+		case "NewActive":
+			target = &v.Active
+		case "NewHostName":
+			target = &v.HostName
 		case "errorCode":
 			target = &v.FaultCode
 		case "errorDescription":
@@ -233,7 +258,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 		Protocol:       unknown,
 		Authentication: unknown,
 		Capabilities: DoctorCapabilities{
-			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Calls: unknown,
+			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Calls: unknown, Devices: unknown,
 		},
 	}
 	if err := c.discover(ctx); err != nil {
@@ -257,6 +282,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 	report.Capabilities.WAN = c.advertisedCapability([]string{"urn:dslforum-org:service:WANIPConnection:", "urn:dslforum-org:service:WANPPPConnection:"}, "enable a WAN connection TR-064 service or use supported firmware")
 	report.Capabilities.Traffic = c.advertisedCapability([]string{"urn:dslforum-org:service:WANCommonInterfaceConfig:"}, "enable the WAN common-interface TR-064 service or use supported firmware")
 	report.Capabilities.Calls = c.advertisedCapability([]string{"urn:dslforum-org:service:X_AVM-DE_OnTel:"}, "enable telephony and its TR-064 service or use supported firmware")
+	report.Capabilities.Devices = c.advertisedCapability([]string{"urn:dslforum-org:service:Hosts:"}, "enable the Hosts TR-064 service or use supported firmware")
 	if report.Capabilities.Status.State == "advertised" && report.Capabilities.WAN.State == "advertised" && report.Capabilities.Traffic.State == "advertised" {
 		report.Capabilities.Overview = DoctorCheck{State: "advertised"}
 	} else {
@@ -351,6 +377,40 @@ func (c *Client) Traffic(ctx context.Context) (Traffic, error) {
 	}, nil
 }
 
+const maxHostEntries = 4096
+
+func (c *Client) Devices(ctx context.Context) ([]Device, error) {
+	countValues, err := c.action(ctx, "urn:dslforum-org:service:Hosts:", "GetHostNumberOfEntries")
+	if err != nil {
+		return nil, err
+	}
+	count, err := strconv.ParseUint(strings.TrimSpace(countValues.HostNumberOfEntries), 10, 32)
+	if err != nil || count > maxHostEntries {
+		return nil, &Error{Kind: "protocol", Operation: "GetHostNumberOfEntries", Message: "router returned an invalid host count"}
+	}
+	devices := make([]Device, 0, count)
+	for index := uint64(0); index < count; index++ {
+		values, err := c.action(ctx, "urn:dslforum-org:service:Hosts:", "GetGenericHostEntry", soapArgument{Name: "NewIndex", Value: strconv.FormatUint(index, 10)})
+		if err != nil {
+			return nil, err
+		}
+		active, err := strconv.ParseBool(strings.TrimSpace(values.Active))
+		if err != nil {
+			return nil, &Error{Kind: "protocol", Operation: "GetGenericHostEntry", Message: "router returned an invalid active state"}
+		}
+		devices = append(devices, Device{
+			Name: values.HostName, IPAddress: values.IPAddress, MACAddress: values.MACAddress,
+			InterfaceType: values.InterfaceType, Active: active,
+		})
+	}
+	sort.SliceStable(devices, func(i, j int) bool {
+		left := strings.ToLower(devices[i].MACAddress) + "\x00" + devices[i].IPAddress + "\x00" + devices[i].Name
+		right := strings.ToLower(devices[j].MACAddress) + "\x00" + devices[j].IPAddress + "\x00" + devices[j].Name
+		return left < right
+	})
+	return devices, nil
+}
+
 func (c *Client) Calls(ctx context.Context) ([]Call, error) {
 	v, err := c.action(ctx, "urn:dslforum-org:service:X_AVM-DE_OnTel:", "GetCallList")
 	if err != nil {
@@ -418,7 +478,7 @@ func (c *Client) wanConnectionService(ctx context.Context) (string, error) {
 	return "", &Error{Kind: "unsupported", Operation: "wan", Message: "router does not advertise a WAN connection service"}
 }
 
-func (c *Client) action(ctx context.Context, prefix, action string) (soapValues, error) {
+func (c *Client) action(ctx context.Context, prefix, action string, arguments ...soapArgument) (soapValues, error) {
 	if err := c.discover(ctx); err != nil {
 		return soapValues{}, err
 	}
@@ -432,7 +492,15 @@ func (c *Client) action(ctx context.Context, prefix, action string) (soapValues,
 	if svc.Type == "" {
 		return soapValues{}, &Error{Kind: "unsupported", Operation: action, Message: "router does not advertise the required TR-064 service"}
 	}
-	envelope := `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` + action + ` xmlns:u="` + svc.Type + `"></u:` + action + `></s:Body></s:Envelope>`
+	var argumentXML strings.Builder
+	for _, argument := range arguments {
+		argumentXML.WriteString("<" + argument.Name + ">")
+		if err := xml.EscapeText(&argumentXML, []byte(argument.Value)); err != nil {
+			return soapValues{}, &Error{Kind: "protocol", Operation: action, Message: "could not encode SOAP request"}
+		}
+		argumentXML.WriteString("</" + argument.Name + ">")
+	}
+	envelope := `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` + action + ` xmlns:u="` + svc.Type + `">` + argumentXML.String() + `</u:` + action + `></s:Body></s:Envelope>`
 	u := c.base.ResolveReference(&url.URL{Path: svc.ControlURL})
 	headers := http.Header{"Content-Type": {`text/xml; charset="utf-8"`}, "SOAPAction": {`"` + svc.Type + `#` + action + `"`}}
 	body, status, err := c.request(ctx, http.MethodPost, u, []byte(envelope), headers)

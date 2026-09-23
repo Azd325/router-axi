@@ -66,7 +66,7 @@ func TestLiveReadOnlyCommands(t *testing.T) {
 	if doctor.Reachability.State != "reachable" || doctor.Protocol.State != "available" || doctor.Authentication.State != "authenticated" || doctor.Model == "" || doctor.Firmware == "" {
 		t.Fatal("doctor live read returned incomplete checks")
 	}
-	if doctor.Capabilities.Status.State != "advertised" || doctor.Capabilities.Overview.State != "advertised" || doctor.Capabilities.WAN.State != "advertised" || doctor.Capabilities.Traffic.State != "advertised" || doctor.Capabilities.Calls.State != "advertised" {
+	if doctor.Capabilities.Status.State != "advertised" || doctor.Capabilities.Overview.State != "advertised" || doctor.Capabilities.WAN.State != "advertised" || doctor.Capabilities.Traffic.State != "advertised" || doctor.Capabilities.Calls.State != "advertised" || doctor.Capabilities.Devices.State != "advertised" {
 		t.Fatal("doctor live read returned an unexpected capability state")
 	}
 	if _, err := client.Status(t.Context()); err != nil {
@@ -91,5 +91,8 @@ func TestLiveReadOnlyCommands(t *testing.T) {
 	}
 	if _, err := client.Calls(t.Context()); err != nil {
 		t.Fatal("calls live read failed")
+	}
+	if _, err := client.Devices(t.Context()); err != nil {
+		t.Fatal("devices live read failed")
 	}
 }
