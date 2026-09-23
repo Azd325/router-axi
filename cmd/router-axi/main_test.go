@@ -35,7 +35,7 @@ func TestRunUnknownCommand(t *testing.T) {
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "code: not_implemented") {
+	if !strings.Contains(stderr.String(), "code: unknown_command") {
 		t.Fatalf("stderr = %q, want structured error code", stderr.String())
 	}
 }

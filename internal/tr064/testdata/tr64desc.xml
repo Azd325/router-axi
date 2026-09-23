@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<root xmlns="urn:dslforum-org:device-1-0">
+  <device><serviceList>
+    <service><serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType><controlURL>/upnp/control/deviceinfo</controlURL></service>
+    <service><serviceType>urn:dslforum-org:service:WANIPConnection:1</serviceType><controlURL>/upnp/control/wanipconn1</controlURL></service>
+    <service><serviceType>urn:dslforum-org:service:WANCommonInterfaceConfig:1</serviceType><controlURL>/upnp/control/wancommonifconfig1</controlURL></service>
+    <service><serviceType>urn:dslforum-org:service:X_AVM-DE_OnTel:1</serviceType><controlURL>/upnp/control/x_contact</controlURL></service>
+  </serviceList></device>
+</root>

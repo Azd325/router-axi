@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root><timestamp>1710000000</timestamp><Call><Id>12</Id><Type>1</Type><Caller>+4930123456</Caller><Called>030987654</Called><CalledNumber>030987654</CalledNumber><Name>Alice</Name><Numbertype>sip</Numbertype><Device>Telephone</Device><Port>1</Port><Date>10.03.24 12:34</Date><Duration>0:02</Duration></Call><Call><Id>11</Id><Type>2</Type><Caller>030987654</Caller><Called>+4940123456</Called><Name></Name><Date>09.03.24 08:00</Date><Duration>0:00</Duration></Call></root>

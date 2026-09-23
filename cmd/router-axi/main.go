@@ -1,32 +1,22 @@
 package main
 
 import (
-	"fmt"
+	"context"
 	"io"
 	"os"
+
+	"github.com/Azd325/router-axi/internal/app"
+	"github.com/Azd325/router-axi/internal/tr064"
 )
 
 var version = "dev"
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 1 && args[0] == "version" {
-		if _, err := fmt.Fprintf(stdout, "version: %s\n", version); err != nil {
-			return 1
-		}
-		return 0
-	}
-
-	for _, line := range []string{
-		"error:",
-		"  code: not_implemented",
-		"  message: router inspection is not implemented yet",
-		"help[1]: router-axi version",
-	} {
-		if _, err := fmt.Fprintln(stderr, line); err != nil {
-			return 1
-		}
-	}
-	return 2
+	application := app.New(func(config app.Config) (app.Reader, error) {
+		return tr064.New(config.Host, config.Username, config.Password, nil)
+	}, os.Getenv)
+	application.Version = version
+	return application.Run(context.Background(), args, stdout, stderr)
 }
 
 func main() {

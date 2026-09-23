@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:GetCallListResponse xmlns:u="urn:dslforum-org:service:X_AVM-DE_OnTel:1"><NewCallListURL>/calllist.lua?sid=redacted</NewCallListURL></u:GetCallListResponse></s:Body></s:Envelope>

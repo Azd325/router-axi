@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:GetInfoResponse xmlns:u="urn:dslforum-org:service:DeviceInfo:1">
+<NewManufacturerName>AVM</NewManufacturerName><NewModelName>FRITZ!Box 7590 AX</NewModelName><NewSerialNumber>ABC123</NewSerialNumber><NewSoftwareVersion>8.02</NewSoftwareVersion><NewHardwareVersion>259</NewHardwareVersion><NewUpTime>93784</NewUpTime>
+</u:GetInfoResponse></s:Body></s:Envelope>

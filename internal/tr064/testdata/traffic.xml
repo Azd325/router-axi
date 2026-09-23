@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:GetAddonInfosResponse xmlns:u="urn:dslforum-org:service:WANCommonInterfaceConfig:1"><NewByteSendRate>125000</NewByteSendRate><NewByteReceiveRate>2500000</NewByteReceiveRate><NewTotalBytesSent>987654321</NewTotalBytesSent><NewTotalBytesReceived>12345678901</NewTotalBytesReceived><NewDNSServer1>192.0.2.53</NewDNSServer1><NewDNSServer2>192.0.2.54</NewDNSServer2></u:GetAddonInfosResponse></s:Body></s:Envelope>
