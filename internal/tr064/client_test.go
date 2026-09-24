@@ -3,6 +3,7 @@ package tr064
 import (
 	_ "embed"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -58,6 +60,18 @@ var wifiAssociationsFixture string
 
 //go:embed testdata/wifi-security.xml
 var wifiSecurityFixture string
+
+//go:embed testdata/port-mapping-description.xml
+var portMappingDescriptionFixture string
+
+//go:embed testdata/port-mapping-scpd.xml
+var portMappingSCPDFixture string
+
+//go:embed testdata/port-mapping-count.xml
+var portMappingCountFixture string
+
+//go:embed testdata/port-mapping-entry.xml
+var portMappingEntryFixture string
 
 func fixtureServer(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -472,8 +486,428 @@ func TestDoctorAdvertisesWiFiWithoutWiFiActions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(string(encoded), `,"wifi":{"state":"advertised"}}`) || strings.Index(string(encoded), `"devices"`) > strings.Index(string(encoded), `"wifi"`) {
+	if !strings.Contains(string(encoded), `,"wifi":{"state":"advertised"},"forwards":{"state":"unsupported","remediation":`) || strings.Index(string(encoded), `"devices"`) > strings.Index(string(encoded), `"wifi"`) {
 		t.Fatalf("capabilities JSON = %s", encoded)
+	}
+}
+
+type forwardExchange struct {
+	path, action, index, body string
+	status                    int
+	location                  string
+}
+
+func forwardFixtureClient(t *testing.T, exchanges []forwardExchange) *Client {
+	t.Helper()
+	pending := make(chan forwardExchange, len(exchanges))
+	for _, exchange := range exchanges {
+		pending <- exchange
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var exchange forwardExchange
+		select {
+		case exchange = <-pending:
+		default:
+			t.Errorf("unexpected request: %s %s %s", r.Method, r.URL.Path, r.Header.Get("SOAPAction"))
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		method := http.MethodGet
+		serviceType := "urn:dslforum-org:service:WANIPConnection:1"
+		if exchange.path == "/ppp1" {
+			serviceType = "urn:dslforum-org:service:WANPPPConnection:1"
+		}
+		if exchange.path == "/device" {
+			serviceType = "urn:dslforum-org:service:DeviceInfo:1"
+		}
+		var wantBody, wantAction string
+		if exchange.action != "" {
+			method = http.MethodPost
+			if exchange.action != "GetPortMappingNumberOfEntries" && exchange.action != "GetGenericPortMappingEntry" && (exchange.path != "/device" || exchange.action != "GetInfo") {
+				t.Errorf("test permitted forbidden action %q", exchange.action)
+			}
+			argument := ""
+			if exchange.action == "GetGenericPortMappingEntry" {
+				argument = "<NewPortMappingIndex>" + exchange.index + "</NewPortMappingIndex>"
+			}
+			wantAction = `"` + serviceType + "#" + exchange.action + `"`
+			wantBody = `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` + exchange.action + ` xmlns:u="` + serviceType + `">` + argument + `</u:` + exchange.action + `></s:Body></s:Envelope>`
+		} else if exchange.path != descriptionPath && exchange.path != "/ip1.xml" && exchange.path != "/ip2.xml" && exchange.path != "/ppp1.xml" {
+			t.Errorf("test permitted forbidden GET %q", exchange.path)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		if r.Method != method || r.URL.RequestURI() != exchange.path || r.Header.Get("SOAPAction") != wantAction || string(body) != wantBody {
+			t.Errorf("request = %s %s %q %s; want %s %s %q %s", r.Method, r.URL.RequestURI(), r.Header.Get("SOAPAction"), body, method, exchange.path, wantAction, wantBody)
+		}
+		if exchange.location != "" {
+			w.Header().Set("Location", exchange.location)
+		}
+		if exchange.status != 0 {
+			w.WriteHeader(exchange.status)
+		}
+		_, _ = w.Write([]byte(strings.ReplaceAll(exchange.body, "__ORIGIN__", "http://"+r.Host)))
+	}))
+	t.Cleanup(func() {
+		server.Close()
+		if len(pending) != 0 {
+			t.Errorf("%d expected requests were not made", len(pending))
+		}
+	})
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+func forwardScript(tables ...[]string) []forwardExchange {
+	exchanges := []forwardExchange{{path: descriptionPath, body: portMappingDescriptionFixture}}
+	paths := []string{"/ip1", "/ip2", "/ppp1"}
+	for _, path := range paths {
+		exchanges = append(exchanges, forwardExchange{path: path + ".xml", body: portMappingSCPDFixture})
+	}
+	for i, path := range paths {
+		var entries []string
+		if i < len(tables) {
+			entries = tables[i]
+		}
+		count := forwardExchange{path: path, action: "GetPortMappingNumberOfEntries", body: strings.Replace(portMappingCountFixture, ">2<", fmt.Sprintf(">%d<", len(entries)), 1)}
+		exchanges = append(exchanges, count)
+		for index, entry := range entries {
+			exchanges = append(exchanges, forwardExchange{path: path, action: "GetGenericPortMappingEntry", index: fmt.Sprint(index), body: entry})
+		}
+		exchanges = append(exchanges, count)
+	}
+	return exchanges
+}
+
+func mappingField(body, tag, value string) string {
+	start := strings.Index(body, "<"+tag+">")
+	end := strings.Index(body, "</"+tag+">") + len(tag) + 3
+	replacement := ""
+	if value != "missing" {
+		var escaped strings.Builder
+		_ = xml.EscapeText(&escaped, []byte(value))
+		replacement = "<" + tag + ">" + escaped.String() + "</" + tag + ">"
+	}
+	return body[:start] + replacement + body[end:]
+}
+
+func mappingEntry(forward Forward) string {
+	body := portMappingEntryFixture
+	for tag, value := range map[string]string{
+		"NewRemoteHost": forward.RemoteHost, "NewExternalPort": fmt.Sprint(forward.ExternalPort),
+		"NewProtocol": forward.Protocol, "NewInternalPort": fmt.Sprint(forward.InternalPort),
+		"NewInternalClient": forward.InternalClient, "NewEnabled": fmt.Sprint(forward.Enabled),
+		"NewPortMappingDescription": forward.Description,
+	} {
+		body = mappingField(body, tag, value)
+	}
+	lease := "missing"
+	if forward.LeaseDuration != nil {
+		lease = fmt.Sprint(*forward.LeaseDuration)
+	}
+	return mappingField(body, "NewLeaseDuration", lease)
+}
+
+func assertForwardError(t *testing.T, client *Client, kind string, status int) *Error {
+	t.Helper()
+	forwards, err := client.Forwards(t.Context())
+	var protocolErr *Error
+	if forwards != nil || !errors.As(err, &protocolErr) || protocolErr.Kind != kind || protocolErr.Operation != "forwards" || protocolErr.StatusCode != status || protocolErr.FaultCode != "" {
+		t.Fatalf("forwards=%#v error=%#v", forwards, err)
+	}
+	for _, secret := range []string{"private", client.base.Host, "/ip1", "/ip2", "/ppp1"} {
+		if strings.Contains(fmt.Sprintf("%#v %s", protocolErr, err), secret) {
+			t.Fatalf("unsanitized error: %#v", protocolErr)
+		}
+	}
+	return protocolErr
+}
+
+func TestForwardsAggregatesNestedInstancesAndSortsFullTuple(t *testing.T) {
+	zero, two, ten, maximum := uint64(0), uint64(2), uint64(10), uint64(4294967295)
+	want := []Forward{
+		{false, "TCP", 2, "192.0.2.10", 2, "synthetic-a", "", nil},
+		{false, "TCP", 2, "192.0.2.10", 2, "synthetic-a", "", &zero},
+		{false, "TCP", 2, "192.0.2.10", 2, "synthetic-a", "", &two},
+		{false, "TCP", 2, "192.0.2.10", 2, "synthetic-a", "", &ten},
+		{false, "TCP", 2, "192.0.2.10", 2, "synthetic-a", "", &maximum},
+		{false, "TCP", 2, "192.0.2.10", 2, "synthetic-b", "", nil},
+		{true, "TCP", 2, "192.0.2.10", 2, "synthetic-a", "", nil},
+		{false, "TCP", 2, "192.0.2.10", 10, "synthetic-a", "", nil},
+		{false, "TCP", 2, "192.0.2.20", 2, "synthetic-a", "", nil},
+		{false, "TCP", 2, "192.0.2.10", 2, "synthetic-a", "198.51.100.2", nil},
+		{false, "TCP", 10, "192.0.2.10", 2, "synthetic-a", "", nil},
+		{true, "TCP", 65535, "192.0.2.10", 65535, "synthetic, \"quoted\" & web", "", &zero},
+		{false, "UDP", 1, "192.0.2.10", 1, "", "", nil},
+	}
+	for _, shift := range []int{0, 4, 9} {
+		t.Run(fmt.Sprint(shift), func(t *testing.T) {
+			tables := make([][]string, 3)
+			for i := range want {
+				entry := want[(len(want)-1-i+shift)%len(want)]
+				tables[i%3] = append(tables[i%3], mappingEntry(entry))
+			}
+			client := forwardFixtureClient(t, forwardScript(tables...))
+			got, err := client.Forwards(t.Context())
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("forwards=%#v want=%#v error=%v", got, want, err)
+			}
+		})
+	}
+}
+
+func TestForwardsZeroCountsDoNotFetchEntries(t *testing.T) {
+	client := forwardFixtureClient(t, forwardScript())
+	got, err := client.Forwards(t.Context())
+	if err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("forwards=%#v error=%v", got, err)
+	}
+}
+
+func TestForwardsValidatesRequiredFields(t *testing.T) {
+	for _, field := range []struct {
+		tag    string
+		values []string
+	}{
+		{"NewExternalPort", []string{"missing", "", "0", "-1", "+1", "1.5", "private-value", "65536"}},
+		{"NewInternalPort", []string{"missing", "", "0", "-1", "private-value", "65536"}},
+		{"NewRemoteHost", []string{"missing"}},
+		{"NewEnabled", []string{"missing", "", "2", "private-value"}},
+		{"NewProtocol", []string{"missing", "", "tcp", "ICMP", "private-value"}},
+		{"NewInternalClient", []string{"missing", "", " "}},
+		{"NewLeaseDuration", []string{"", "-1", "1.5", "private-value", "4294967296"}},
+	} {
+		for _, value := range field.values {
+			t.Run(field.tag+"/"+value, func(t *testing.T) {
+				script := forwardScript([]string{portMappingEntryFixture, mappingField(portMappingEntryFixture, field.tag, value)})
+				_ = assertForwardError(t, forwardFixtureClient(t, script[:7]), "protocol", 0)
+			})
+		}
+	}
+}
+
+func TestForwardsValidatesCountsBeforeAndAfterEnumeration(t *testing.T) {
+	for _, value := range []string{"missing", "", "-1", "+1", "1.5", "private-value", "4097", "65536", "18446744073709551616"} {
+		for _, position := range []int{4, 7} {
+			t.Run(fmt.Sprintf("%s/%d", value, position), func(t *testing.T) {
+				script := forwardScript([]string{portMappingEntryFixture, portMappingEntryFixture})
+				script[position].body = mappingField(portMappingCountFixture, "NewPortMappingNumberOfEntries", value)
+				_ = assertForwardError(t, forwardFixtureClient(t, script[:position+1]), "protocol", 0)
+			})
+		}
+	}
+}
+
+func TestForwardsEnforcesAggregateLimit(t *testing.T) {
+	for _, secondCount := range []int{0, 1} {
+		t.Run(fmt.Sprint(secondCount), func(t *testing.T) {
+			entries := make([]string, 4096)
+			for i := range entries {
+				entries[i] = portMappingEntryFixture
+			}
+			script := forwardScript(entries)
+			if secondCount == 1 {
+				position := 4 + 1 + len(entries) + 1
+				script[position].body = mappingField(portMappingCountFixture, "NewPortMappingNumberOfEntries", "1")
+				_ = assertForwardError(t, forwardFixtureClient(t, script[:position+1]), "protocol", 0)
+				return
+			}
+			got, err := forwardFixtureClient(t, script).Forwards(t.Context())
+			if err != nil || len(got) != 4096 {
+				t.Fatalf("count=%d error=%v", len(got), err)
+			}
+		})
+	}
+}
+
+func TestForwardsUnsupportedCapabilitiesDoNotSendSOAP(t *testing.T) {
+	for _, missing := range []string{"service", "SCPDURL", "GetPortMappingNumberOfEntries", "GetGenericPortMappingEntry"} {
+		t.Run(missing, func(t *testing.T) {
+			script := forwardScript()[:4]
+			switch missing {
+			case "service":
+				script[0].body = wifiDescriptionFixture
+				script = script[:1]
+			case "SCPDURL":
+				script[0].body = strings.Replace(portMappingDescriptionFixture, "<SCPDURL>/ppp1.xml</SCPDURL>", "", 1)
+				script = script[:3]
+			default:
+				script[3].body = strings.Replace(portMappingSCPDFixture, "<action><name>"+missing+"</name></action>", "", 1)
+			}
+			err := assertForwardError(t, forwardFixtureClient(t, script), "unsupported", 0)
+			if !strings.Contains(err.Message, forwardsRemediation) {
+				t.Fatalf("missing remediation: %#v", err)
+			}
+		})
+	}
+}
+
+func TestForwardsChangedCountsAreAtomic(t *testing.T) {
+	for _, count := range []string{"0", "2"} {
+		t.Run(count, func(t *testing.T) {
+			script := forwardScript([]string{portMappingEntryFixture}, []string{portMappingEntryFixture})
+			script[9].body = mappingField(portMappingCountFixture, "NewPortMappingNumberOfEntries", count)
+			err := assertForwardError(t, forwardFixtureClient(t, script[:10]), "protocol", 0)
+			if !strings.Contains(err.Message, "retry") {
+				t.Fatalf("missing retry guidance: %#v", err)
+			}
+		})
+	}
+}
+
+func TestForwardsLateErrorsAreAtomicAndSanitized(t *testing.T) {
+	for _, test := range []struct {
+		name, body, kind string
+		status           int
+	}{
+		{"auth", "private-value", "auth", http.StatusUnauthorized},
+		{"indexed-713", "<Fault><errorCode>713</errorCode><errorDescription>private-value</errorDescription></Fault>", "router", http.StatusInternalServerError},
+		{"unsupported-401", "<Fault><errorCode>401</errorCode><errorDescription>private-value</errorDescription></Fault>", "unsupported", http.StatusInternalServerError},
+		{"fault", "<Fault><errorCode>private-code</errorCode><errorDescription>private-value</errorDescription></Fault>", "router", http.StatusInternalServerError},
+		{"fault-success-status", "<Fault><errorCode>private-code</errorCode><errorDescription>private-value</errorDescription></Fault>", "router", http.StatusOK},
+		{"invalid-xml", "<private-value", "protocol", http.StatusOK},
+		{"invalid-xml-error-status", "<private-value", "protocol", http.StatusBadGateway},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script := forwardScript([]string{portMappingEntryFixture}, []string{portMappingEntryFixture, portMappingEntryFixture})
+			script[9].body, script[9].status = test.body, test.status
+			err := assertForwardError(t, forwardFixtureClient(t, script[:10]), test.kind, test.status)
+			if test.kind == "unsupported" && !strings.Contains(err.Message, forwardsRemediation) {
+				t.Fatalf("missing remediation: %#v", err)
+			}
+		})
+	}
+}
+
+func TestForwardsDescriptionErrorsAreSanitized(t *testing.T) {
+	for _, position := range []int{0, 1} {
+		for _, status := range []int{http.StatusUnauthorized, http.StatusServiceUnavailable, http.StatusOK} {
+			t.Run(fmt.Sprintf("%d/%d", position, status), func(t *testing.T) {
+				script := forwardScript()[:position+1]
+				script[position].body, script[position].status = "<private-value", status
+				kind, wantStatus := "router", status
+				switch status {
+				case http.StatusUnauthorized:
+					kind = "auth"
+				case http.StatusOK:
+					kind, wantStatus = "protocol", 0
+				}
+				_ = assertForwardError(t, forwardFixtureClient(t, script), kind, wantStatus)
+			})
+		}
+	}
+}
+
+func TestForwardsNetworkErrorsAreSanitized(t *testing.T) {
+	for _, discovered := range []bool{false, true} {
+		t.Run(fmt.Sprint(discovered), func(t *testing.T) {
+			var script []forwardExchange
+			if discovered {
+				script = forwardScript()[:1]
+			}
+			client := forwardFixtureClient(t, script)
+			if discovered {
+				if err := client.discover(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			client.http = &http.Client{Transport: wifiFailingTransport{}}
+			_ = assertForwardError(t, client, "network", 0)
+		})
+	}
+}
+
+func TestForwardsRejectsUnsafeServiceURLs(t *testing.T) {
+	var externalRequests atomic.Int64
+	external := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		externalRequests.Add(1)
+	}))
+	defer external.Close()
+	for _, tag := range []string{"controlURL", "SCPDURL"} {
+		for _, address := range []string{external.URL + "/private-endpoint", "//" + strings.TrimPrefix(external.URL, "http://") + "/private-endpoint", "http://private-user:private-password@192.0.2.1/private-endpoint", "__ORIGIN__/private-endpoint#private-fragment", ""} {
+			t.Run(tag+"/"+address, func(t *testing.T) {
+				script := forwardScript()[:1]
+				original := "/ip1"
+				if tag == "SCPDURL" {
+					original += ".xml"
+				}
+				script[0].body = strings.Replace(script[0].body, "<"+tag+">"+original+"</"+tag+">", "<"+tag+">"+address+"</"+tag+">", 1)
+				kind := "protocol"
+				if address == "" && tag == "SCPDURL" {
+					kind = "unsupported"
+				}
+				_ = assertForwardError(t, forwardFixtureClient(t, script), kind, 0)
+			})
+		}
+	}
+	if externalRequests.Load() != 0 {
+		t.Fatal("cross-origin service URL reached external server")
+	}
+}
+
+func TestForwardsAcceptsSameOriginAbsoluteServiceURLs(t *testing.T) {
+	script := forwardScript([]string{portMappingEntryFixture})
+	script[0].body = strings.ReplaceAll(script[0].body, ">/ip1", ">__ORIGIN__/ip1")
+	got, err := forwardFixtureClient(t, script).Forwards(t.Context())
+	if err != nil || len(got) != 1 || got[0].InternalClient != "192.0.2.10" || !got[0].Enabled {
+		t.Fatalf("forwards=%#v error=%v", got, err)
+	}
+}
+
+func TestForwardsRefusesRedirects(t *testing.T) {
+	var externalRequests atomic.Int64
+	external := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		externalRequests.Add(1)
+	}))
+	defer external.Close()
+	for _, position := range []int{0, 1, 4, 5} {
+		for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect} {
+			t.Run(fmt.Sprintf("%d/%d", position, status), func(t *testing.T) {
+				script := forwardScript([]string{portMappingEntryFixture})[:position+1]
+				script[position].status = status
+				script[position].location = external.URL + "/private-endpoint"
+				client := forwardFixtureClient(t, script)
+				_ = assertForwardError(t, client, "network", 0)
+				if client.http.CheckRedirect != nil {
+					t.Fatal("Forwards changed the caller's redirect policy")
+				}
+			})
+		}
+	}
+	if externalRequests.Load() != 0 {
+		t.Fatal("redirect reached external server")
+	}
+}
+
+func TestDoctorAdvertisesForwardsWithoutSCPDOrEnumeration(t *testing.T) {
+	for _, advertised := range []bool{false, true} {
+		t.Run(fmt.Sprint(advertised), func(t *testing.T) {
+			description := wifiDescriptionFixture
+			if advertised {
+				description = strings.ReplaceAll(portMappingDescriptionFixture, "SCPDURL", "unused")
+			}
+			client := forwardFixtureClient(t, []forwardExchange{
+				{path: descriptionPath, body: description},
+				{path: "/device", action: "GetInfo", body: deviceFixture},
+			})
+			report, err := client.Doctor(t.Context())
+			want := DoctorCheck{State: "unsupported", Remediation: forwardsRemediation}
+			if advertised {
+				want = DoctorCheck{State: "advertised"}
+			}
+			if err != nil || report.Capabilities.Forwards != want {
+				t.Fatalf("report=%#v error=%v", report, err)
+			}
+			encoded, err := json.Marshal(report.Capabilities)
+			if err != nil || strings.Index(string(encoded), `"wifi"`) > strings.Index(string(encoded), `"forwards"`) {
+				t.Fatalf("capabilities JSON=%s error=%v", encoded, err)
+			}
+		})
 	}
 }
 

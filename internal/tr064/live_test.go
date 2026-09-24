@@ -92,6 +92,36 @@ func TestLiveWiFi(t *testing.T) {
 	}
 }
 
+func TestLiveForwards(t *testing.T) {
+	settings, enabled := liveTestConfig(os.Getenv)
+	if !enabled {
+		t.Skip("live router tests require explicit local opt-in and complete configuration")
+	}
+	client, err := New(settings.host, settings.username, settings.password, nil)
+	if err != nil {
+		t.Fatal("live router configuration was rejected")
+	}
+	forwards, err := client.Forwards(t.Context())
+	if err != nil {
+		var protocolErr *Error
+		if errors.As(err, &protocolErr) && protocolErr.Kind == "unsupported" && forwards == nil && strings.Contains(protocolErr.Message, forwardsRemediation) {
+			t.Skip("documented port-mapping enumeration is unsupported; hardware mappings were not validated")
+		}
+		t.Fatal("port-forward live inspection failed")
+	}
+	if forwards == nil || len(forwards) > maxPortMappingEntries {
+		t.Fatal("port-forward live read returned an invalid list")
+	}
+	for i, forward := range forwards {
+		if (forward.Protocol != "TCP" && forward.Protocol != "UDP") || forward.ExternalPort == 0 || forward.ExternalPort > 65535 || forward.InternalPort == 0 || forward.InternalPort > 65535 || forward.InternalClient == "" || (forward.LeaseDuration != nil && *forward.LeaseDuration > 4294967295) {
+			t.Fatal("port-forward live read returned invalid fields")
+		}
+		if i > 0 && compareForwards(forwards[i-1], forward) > 0 {
+			t.Fatal("port-forward live read returned an unordered list")
+		}
+	}
+}
+
 func TestLiveReadOnlyCommands(t *testing.T) {
 	settings, enabled := liveTestConfig(os.Getenv)
 	if !enabled {

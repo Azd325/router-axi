@@ -2,6 +2,7 @@ package tr064
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/md5"
 	"crypto/rand"
@@ -79,6 +80,7 @@ type DoctorCapabilities struct {
 	Calls    DoctorCheck `json:"calls"`
 	Devices  DoctorCheck `json:"devices"`
 	WiFi     DoctorCheck `json:"wifi"`
+	Forwards DoctorCheck `json:"forwards"`
 }
 
 type Doctor struct {
@@ -120,10 +122,22 @@ type Radio struct {
 	SecurityMode      string `json:"security_mode"`
 }
 
+type Forward struct {
+	Enabled        bool    `json:"enabled"`
+	Protocol       string  `json:"protocol"`
+	ExternalPort   uint64  `json:"external_port"`
+	InternalClient string  `json:"internal_client"`
+	InternalPort   uint64  `json:"internal_port"`
+	Description    string  `json:"description"`
+	RemoteHost     string  `json:"remote_host"`
+	LeaseDuration  *uint64 `json:"lease_duration,omitempty"`
+}
+
 type service struct {
 	ID         string `xml:"serviceId"`
 	Type       string `xml:"serviceType"`
 	ControlURL string `xml:"controlURL"`
+	SCPDURL    string `xml:"SCPDURL"`
 }
 
 type description struct{ Services []service }
@@ -153,14 +167,17 @@ func (d *description) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement)
 }
 
 type soapValues struct {
-	Status, LastError, ExternalIP                                string
-	Manufacturer, Model, Serial, Software, Hardware              string
-	Uptime, DownloadRate, UploadRate, TotalDownload, TotalUpload string
-	CallListURL, HostNumberOfEntries                             string
-	MACAddress, IPAddress, InterfaceType, Active, HostName       string
-	FaultCode, FaultDescription                                  string
-	Enable, SSID, Standard                                       string
-	Channel, FrequencyBand, TotalAssociations, BeaconType        string
+	Status, LastError, ExternalIP                                            string
+	Manufacturer, Model, Serial, Software, Hardware                          string
+	Uptime, DownloadRate, UploadRate, TotalDownload, TotalUpload             string
+	CallListURL, HostNumberOfEntries                                         string
+	MACAddress, IPAddress, InterfaceType, Active, HostName                   string
+	FaultCode, FaultDescription                                              string
+	Enable, SSID, Standard                                                   string
+	Channel, FrequencyBand, TotalAssociations, BeaconType                    string
+	PortMappingCount, ExternalPort, PortMappingProtocol                      string
+	InternalPort, InternalClient, PortMappingEnabled, PortMappingDescription string
+	RemoteHost, LeaseDuration                                                *string
 }
 
 type soapArgument struct{ Name, Value string }
@@ -234,6 +251,26 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.TotalAssociations
 		case "NewBeaconType":
 			target = &v.BeaconType
+		case "NewPortMappingNumberOfEntries":
+			target = &v.PortMappingCount
+		case "NewRemoteHost":
+			v.RemoteHost = new(string)
+			target = v.RemoteHost
+		case "NewExternalPort":
+			target = &v.ExternalPort
+		case "NewProtocol":
+			target = &v.PortMappingProtocol
+		case "NewInternalPort":
+			target = &v.InternalPort
+		case "NewInternalClient":
+			target = &v.InternalClient
+		case "NewEnabled":
+			target = &v.PortMappingEnabled
+		case "NewPortMappingDescription":
+			target = &v.PortMappingDescription
+		case "NewLeaseDuration":
+			v.LeaseDuration = new(string)
+			target = v.LeaseDuration
 		case "errorCode":
 			target = &v.FaultCode
 		case "errorDescription":
@@ -288,7 +325,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 		Protocol:       unknown,
 		Authentication: unknown,
 		Capabilities: DoctorCapabilities{
-			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Calls: unknown, Devices: unknown, WiFi: unknown,
+			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Calls: unknown, Devices: unknown, WiFi: unknown, Forwards: unknown,
 		},
 	}
 	if err := c.discover(ctx); err != nil {
@@ -314,6 +351,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 	report.Capabilities.Calls = c.advertisedCapability([]string{"urn:dslforum-org:service:X_AVM-DE_OnTel:"}, "enable telephony and its TR-064 service or use supported firmware")
 	report.Capabilities.Devices = c.advertisedCapability([]string{"urn:dslforum-org:service:Hosts:"}, "enable the Hosts TR-064 service or use supported firmware")
 	report.Capabilities.WiFi = c.advertisedCapability([]string{wlanServicePrefix}, wifiRemediation)
+	report.Capabilities.Forwards = c.advertisedCapability(wanMappingPrefixes, forwardsRemediation)
 	if report.Capabilities.Status.State == "advertised" && report.Capabilities.WAN.State == "advertised" && report.Capabilities.Traffic.State == "advertised" {
 		report.Capabilities.Overview = DoctorCheck{State: "advertised"}
 	} else {
@@ -514,6 +552,13 @@ func wifiError(err error) *Error {
 
 const maxHostEntries = 4096
 
+const (
+	maxPortMappingEntries = 4096
+	forwardsRemediation   = "enable a WANIPConnection or WANPPPConnection service with documented port-mapping enumeration actions, or use supported firmware"
+)
+
+var wanMappingPrefixes = []string{"urn:dslforum-org:service:WANIPConnection:", "urn:dslforum-org:service:WANPPPConnection:"}
+
 func (c *Client) Devices(ctx context.Context) ([]Device, error) {
 	countValues, err := c.action(ctx, "urn:dslforum-org:service:Hosts:", "GetHostNumberOfEntries")
 	if err != nil {
@@ -544,6 +589,200 @@ func (c *Client) Devices(ctx context.Context) ([]Device, error) {
 		return left < right
 	})
 	return devices, nil
+}
+
+func (c *Client) Forwards(ctx context.Context) ([]Forward, error) {
+	client := *c
+	httpClient := *c.http
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("port-forward inspection refuses redirects")
+	}
+	client.http = &httpClient
+	c = &client
+	if err := c.discover(ctx); err != nil {
+		return nil, forwardsError(err)
+	}
+	services, err := c.portMappingServices(ctx)
+	if err != nil {
+		return nil, err
+	}
+	forwards := make([]Forward, 0)
+	for _, svc := range services {
+		countValues, err := c.actionOnService(ctx, svc, "GetPortMappingNumberOfEntries")
+		if err != nil {
+			return nil, forwardsError(err)
+		}
+		count, err := portMappingCount(countValues.PortMappingCount)
+		if err != nil {
+			return nil, err
+		}
+		if uint64(len(forwards))+count > maxPortMappingEntries {
+			return nil, &Error{Kind: "protocol", Operation: "forwards", Message: "port-mapping tables exceed the inspection limit"}
+		}
+		for index := uint64(0); index < count; index++ {
+			values, err := c.actionOnService(ctx, svc, "GetGenericPortMappingEntry", soapArgument{Name: "NewPortMappingIndex", Value: strconv.FormatUint(index, 10)})
+			if err != nil {
+				return nil, forwardsError(err)
+			}
+			forward, err := parseForward(values)
+			if err != nil {
+				return nil, err
+			}
+			forwards = append(forwards, forward)
+		}
+		finalCount, err := c.actionOnService(ctx, svc, "GetPortMappingNumberOfEntries")
+		if err != nil {
+			return nil, forwardsError(err)
+		}
+		final, err := portMappingCount(finalCount.PortMappingCount)
+		if err != nil {
+			return nil, err
+		}
+		if final != count {
+			return nil, &Error{Kind: "protocol", Operation: "forwards", Message: "port mappings changed during enumeration; retry the read"}
+		}
+	}
+	sort.SliceStable(forwards, func(i, j int) bool { return compareForwards(forwards[i], forwards[j]) < 0 })
+	return forwards, nil
+}
+
+func compareForwards(left, right Forward) int {
+	order := cmp.Or(cmp.Compare(left.Protocol, right.Protocol), cmp.Compare(left.ExternalPort, right.ExternalPort),
+		cmp.Compare(left.RemoteHost, right.RemoteHost), cmp.Compare(left.InternalClient, right.InternalClient),
+		cmp.Compare(left.InternalPort, right.InternalPort), cmp.Compare(strconv.FormatBool(left.Enabled), strconv.FormatBool(right.Enabled)),
+		cmp.Compare(left.Description, right.Description))
+	if order != 0 {
+		return order
+	}
+	if left.LeaseDuration == nil && right.LeaseDuration != nil {
+		return -1
+	}
+	if left.LeaseDuration != nil && right.LeaseDuration == nil {
+		return 1
+	}
+	if left.LeaseDuration == nil {
+		return 0
+	}
+	return cmp.Compare(*left.LeaseDuration, *right.LeaseDuration)
+}
+
+func (c *Client) portMappingServices(ctx context.Context) ([]service, error) {
+	services := make([]service, 0)
+	for _, svc := range c.allServices {
+		for _, prefix := range wanMappingPrefixes {
+			if strings.HasPrefix(svc.Type, prefix) {
+				services = append(services, svc)
+				break
+			}
+		}
+	}
+	if len(services) == 0 {
+		return nil, &Error{Kind: "unsupported", Operation: "forwards", Message: "router does not advertise a WANIPConnection or WANPPPConnection service; " + forwardsRemediation}
+	}
+	sort.SliceStable(services, func(i, j int) bool {
+		return cmp.Or(cmp.Compare(services[i].Type, services[j].Type), cmp.Compare(services[i].ID, services[j].ID), cmp.Compare(services[i].ControlURL, services[j].ControlURL)) < 0
+	})
+	for i, svc := range services {
+		control, err := c.base.Parse(svc.ControlURL)
+		if err != nil || svc.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.Fragment != "" {
+			return nil, &Error{Kind: "protocol", Operation: "forwards", Message: "router advertised an invalid WAN control URL"}
+		}
+		services[i].ControlURL = control.Path
+		if err := c.advertisesPortMappingActions(ctx, svc); err != nil {
+			return nil, err
+		}
+	}
+	return services, nil
+}
+
+func (c *Client) advertisesPortMappingActions(ctx context.Context, svc service) error {
+	if svc.SCPDURL == "" {
+		return &Error{Kind: "unsupported", Operation: "forwards", Message: "router does not advertise port-mapping enumeration actions; " + forwardsRemediation}
+	}
+	scpdURL, err := c.base.Parse(svc.SCPDURL)
+	if err != nil || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.Fragment != "" {
+		return &Error{Kind: "protocol", Operation: "forwards", Message: "router advertised an invalid WAN service-description URL"}
+	}
+	body, err := c.get(ctx, scpdURL)
+	if err != nil {
+		return forwardsError(err)
+	}
+	var scpd struct {
+		XMLName xml.Name `xml:"scpd"`
+		Actions []struct {
+			Name string `xml:"name"`
+		} `xml:"actionList>action"`
+	}
+	if err := xml.Unmarshal(body, &scpd); err != nil {
+		return &Error{Kind: "protocol", Operation: "forwards", Message: "router returned an invalid WAN service description"}
+	}
+	advertised := map[string]bool{}
+	for _, action := range scpd.Actions {
+		advertised[action.Name] = true
+	}
+	if !advertised["GetPortMappingNumberOfEntries"] || !advertised["GetGenericPortMappingEntry"] {
+		return &Error{Kind: "unsupported", Operation: "forwards", Message: "router does not advertise port-mapping enumeration actions; " + forwardsRemediation}
+	}
+	return nil
+}
+
+func portMappingCount(value string) (uint64, error) {
+	count, err := strconv.ParseUint(strings.TrimSpace(value), 10, 16)
+	if err != nil || count > maxPortMappingEntries {
+		return 0, &Error{Kind: "protocol", Operation: "forwards", Message: "router returned an invalid port-mapping count"}
+	}
+	return count, nil
+}
+
+func parseForward(values soapValues) (Forward, error) {
+	enabled := false
+	switch strings.TrimSpace(values.PortMappingEnabled) {
+	case "0", "false":
+	case "1", "true":
+		enabled = true
+	default:
+		return Forward{}, &Error{Kind: "protocol", Operation: "forwards", Message: "router returned an invalid port-mapping enabled state"}
+	}
+	if values.RemoteHost == nil {
+		return Forward{}, &Error{Kind: "protocol", Operation: "forwards", Message: "router omitted the port-mapping remote-host restriction"}
+	}
+	if strings.TrimSpace(values.InternalClient) == "" {
+		return Forward{}, &Error{Kind: "protocol", Operation: "forwards", Message: "router omitted the port-mapping internal target"}
+	}
+	externalPort, err := strconv.ParseUint(strings.TrimSpace(values.ExternalPort), 10, 16)
+	if err != nil || externalPort == 0 {
+		return Forward{}, &Error{Kind: "protocol", Operation: "forwards", Message: "router returned an invalid external port"}
+	}
+	internalPort, err := strconv.ParseUint(strings.TrimSpace(values.InternalPort), 10, 16)
+	if err != nil || internalPort == 0 {
+		return Forward{}, &Error{Kind: "protocol", Operation: "forwards", Message: "router returned an invalid internal port"}
+	}
+	protocol := strings.TrimSpace(values.PortMappingProtocol)
+	if protocol != "TCP" && protocol != "UDP" {
+		return Forward{}, &Error{Kind: "protocol", Operation: "forwards", Message: "router returned an invalid port-mapping protocol"}
+	}
+	var lease *uint64
+	if values.LeaseDuration != nil {
+		value, err := strconv.ParseUint(strings.TrimSpace(*values.LeaseDuration), 10, 32)
+		if err != nil {
+			return Forward{}, &Error{Kind: "protocol", Operation: "forwards", Message: "router returned an invalid port-mapping lease duration"}
+		}
+		lease = &value
+	}
+	return Forward{enabled, protocol, externalPort, values.InternalClient, internalPort, values.PortMappingDescription, *values.RemoteHost, lease}, nil
+}
+
+func forwardsError(err error) *Error {
+	result := &Error{Kind: "protocol", Operation: "forwards", Message: "port-forward inspection failed"}
+	var protocolErr *Error
+	if errors.As(err, &protocolErr) {
+		result.Kind, result.StatusCode = protocolErr.Kind, protocolErr.StatusCode
+		if protocolErr.Kind == "router" && protocolErr.FaultCode == "401" {
+			result.Kind = "unsupported"
+			result.Message = "router rejected a documented port-mapping enumeration action; " + forwardsRemediation
+		}
+	}
+	return result
 }
 
 func (c *Client) Calls(ctx context.Context) ([]Call, error) {
