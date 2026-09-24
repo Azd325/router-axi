@@ -74,7 +74,8 @@ It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
 `wan`, `traffic`, `calls`, `devices`, `wifi`, and `forwards`. For forwards,
 WANIPConnection or WANPPPConnection service advertisement is only a candidate
-capability: doctor does not fetch SCPDs or verify enumeration actions. It does
+capability: doctor does not invoke Layer3Forwarding, fetch SCPDs, or verify
+enumeration actions. It does
 not invoke those commands, retrieve a WAN
 address or call list, infer support from a model name, or emit serial numbers,
 WAN/phone addresses, call data, or credentials. Unsupported optional
@@ -169,9 +170,21 @@ fixture-backed, not inferred from a model name.
 ### Port-forward inspection
 
 `forwards` requires the current checkout; it is not included in v0.1.0.
-It reads all advertised TR-064 WANIPConnection and WANPPPConnection instances,
-including disabled mappings. Each instance must advertise both
-`GetPortMappingNumberOfEntries` and `GetGenericPortMappingEntry` in its SCPD.
+It reads all mappings, including disabled ones, from the router’s active WAN
+service, resolved through the documented
+`Layer3Forwarding:GetDefaultConnectionService` action, which returns the
+default connection’s service identifier. FRITZ! routers return that identifier
+either as the advertised `serviceId`, the advertised service `type`, or a
+UPnP-style identifier (`urn:upnp-org:serviceId:WANIPConnection1`,
+`uuid:…:WANIPConnection.1`, or the dot-separated `1.WANIPConnection.1`
+that FRITZ!OS returns); `forwards` accepts any of these shapes and
+matches the one advertised WAN service of the same family and instance.
+An empty identifier, or one that names no advertised WAN service or more than
+one (for example a bare service type shared by two `WANIPConnection`
+instances), is unsupported; inactive instances are never contacted.
+That instance, `WANIPConnection` or
+`WANPPPConnection`, must advertise both `GetPortMappingNumberOfEntries` and
+`GetGenericPortMappingEntry` in its SCPD.
 The first returns `NewPortMappingNumberOfEntries` (unsigned 16-bit count);
 the second accepts the zero-based `NewPortMappingIndex` and returns
 `NewEnabled`, `NewProtocol`, `NewExternalPort`, `NewInternalClient`,
@@ -180,7 +193,10 @@ the second accepts the zero-based `NewPortMappingIndex` and returns
 [WAN IP Connection v6, §§1.11–1.12](https://fritz.support/resources/TR-064_WAN_IP_Connection.pdf)
 and [WAN PPP Connection v15, §§1.15–1.16](https://fritz.support/resources/TR-064_WAN_PPP_Connection.pdf)
 references. Zero-based indexing and fault `713` are specified in
-[Broadband Forum TR-064, §2.4.14](https://www.broadband-forum.org/pdfs/tr-064-1-0-1.pdf). Only these two read actions are called; `AddPortMapping`,
+[Broadband Forum TR-064, §2.4.14](https://www.broadband-forum.org/pdfs/tr-064-1-0-1.pdf);
+`GetDefaultConnectionService` is specified in the FRITZ!
+[TR-064 Layer3Forwarding](https://fritz.support/resources/TR-064_Layer_3_Forwarding.pdf)
+reference. Only these documented read actions are called; `AddPortMapping`,
 `DeletePortMapping`, and every other mutating action are never invoked.
 There is no browser scraping, undocumented endpoint, or IGD fallback.
 
@@ -206,8 +222,8 @@ SCPD and control URLs must stay on the router origin; redirects are refused.
 
 Results sort by protocol, numeric external port, remote host, internal target,
 numeric internal port, enabled state (false first), description, then lease
-(absent before present). Identical records from separate services are retained;
-service IDs and transient table indexes are not exposed. Output is limited to
+(absent before present). Identical records are retained; service IDs and
+transient table indexes are not exposed. Output is limited to
 20 entries by default. `--all` returns the complete inspected list; compact
 output reports `omitted` and suggests `forwards --all`, while JSON always
 includes `total` and `omitted`. Empty output is
@@ -217,21 +233,26 @@ required action is **unsupported**, never a successful empty list.
 
 Enumeration is atomic only at the output boundary: all indexes are read before
 any stdout is emitted, including entries beyond the default display limit.
-An indexed fault (including a vanished index), any other service failure, or a
+An indexed fault (including a vanished index), any other read failure, or a
 changed count on the final count read discards the whole result. Reads are
 sequential, with no management lock or router transaction: equal counts cannot detect replacements
-or reordering during the read, and changes after an instance finishes are not
+or reordering during the read, and changes after the final count read are not
 detected. There are no retries or partial-success lists. The safety limit is
-4096 total entries across services, even with `--all`.
+4096 total entries, even with `--all`.
 
 Missing services/SCPDs/actions or an invalid-action SOAP fault exit `5` with
 `unsupported_capability` and firmware/service remediation. Authentication exits
 `3`, network failures `4`, malformed responses and other router faults `6`.
 Doctor reports service advertisement only, not confirmed action support.
-Compatibility is fixture-backed for IP and PPP services, multiple instances,
-empty tables, and absent lease fields; it is not inferred from model names.
-A router advertising inactive WAN instances that reject these reads fails the
-whole command; there is no active-WAN selection or silent fallback.
+Compatibility is fixture-backed for active IP and PPP services, selection by
+service type and identifier, empty tables, and absent lease fields; it is not
+inferred from model names.
+Only the active WAN service is enumerated. Routers commonly advertise both
+`WANIPConnection` and `WANPPPConnection` while only one is active, and an
+inactive instance can reject these documented actions, so advertisement of
+both services does not imply both are readable. If `GetDefaultConnectionService`
+is unavailable or names a service without both actions, `forwards` exits `5`
+with remediation; there is no fallback to another instance.
 This table is not a firewall audit: IPv6 pinholes, exposed-host settings, or
 rules unavailable through these documented actions are outside its scope.
 
@@ -261,7 +282,8 @@ read actions. Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 documented `X_AVM-DE_OnTel:GetCallList`, and the standard
 `Hosts:GetHostNumberOfEntries` plus zero-based `GetGenericHostEntry(NewIndex)`,
 and `WLANConfiguration:GetInfo`, `GetChannelInfo`, `GetTotalAssociations`, and
-`GetBeaconType`, plus `WANIPConnection`/`WANPPPConnection`:
+`GetBeaconType`, plus `Layer3Forwarding:GetDefaultConnectionService` and the
+active `WANIPConnection`/`WANPPPConnection`:
 `GetPortMappingNumberOfEntries` and `GetGenericPortMappingEntry(NewPortMappingIndex)`
 when advertised in their SCPDs. Wi-Fi inspection does not call `GetSecurityKeys` or any other
 key- or client-returning WLAN action.
@@ -294,7 +316,8 @@ unset ROUTER_AXI_PASSWORD ROUTER_AXI_USERNAME ROUTER_AXI_HOST
 Do not add `-v`: the test deliberately reports only command-level failures and
 never logs responses, credentials, serial numbers, phone, device, radio, or
 network data, mapping contents, or router addresses. The forwards live test
-uses only the two enumeration actions and does not create test mappings;
+resolves the active WAN service and uses only the two enumeration actions; it
+does not create test mappings;
 unsupported enumeration is skipped explicitly, not counted as hardware mapping
 validation. Wi-Fi live reads use only the four actions
 above, including `GetInfo`, and never any key-returning action; missing

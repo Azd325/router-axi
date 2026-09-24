@@ -552,17 +552,19 @@ func TestForwardsClientOutputBoundary(t *testing.T) {
 			countReads := 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.Method == http.MethodGet && r.URL.Path == "/tr64desc.xml" {
-					_, _ = io.WriteString(w, `<root><service><serviceType>urn:dslforum-org:service:WANIPConnection:1</serviceType><controlURL>/wan</controlURL><SCPDURL>/wan.xml</SCPDURL></service></root>`)
+					_, _ = io.WriteString(w, `<root><service><serviceType>urn:dslforum-org:service:WANIPConnection:1</serviceType><serviceId>urn:synthetic:wan</serviceId><controlURL>/wan</controlURL><SCPDURL>/wan.xml</SCPDURL></service><service><serviceType>urn:dslforum-org:service:Layer3Forwarding:1</serviceType><controlURL>/layer3</controlURL></service></root>`)
 					return
 				}
 				if r.Method == http.MethodGet && r.URL.Path == "/wan.xml" {
 					_, _ = io.WriteString(w, `<scpd><actionList><action><name>GetPortMappingNumberOfEntries</name></action><action><name>GetGenericPortMappingEntry</name></action></actionList></scpd>`)
 					return
 				}
-				if r.Method != http.MethodPost || r.URL.Path != "/wan" {
+				if r.Method != http.MethodPost || (r.URL.Path != "/wan" && r.URL.Path != "/layer3") {
 					t.Error("unexpected forwards request")
 				}
 				switch r.Header.Get("SOAPAction") {
+				case `"urn:dslforum-org:service:Layer3Forwarding:1#GetDefaultConnectionService"`:
+					_, _ = io.WriteString(w, `<Envelope><NewDefaultConnectionService>urn:synthetic:wan</NewDefaultConnectionService></Envelope>`)
 				case `"urn:dslforum-org:service:WANIPConnection:1#GetPortMappingNumberOfEntries"`:
 					countReads++
 					if fail && countReads == 2 {

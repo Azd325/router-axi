@@ -2,10 +2,11 @@
 <root xmlns="urn:dslforum-org:device-1-0">
   <device><serviceList>
     <service><serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType><controlURL>/device</controlURL></service>
+    <service><serviceType>urn:dslforum-org:service:Layer3Forwarding:1</serviceType><controlURL>/layer3</controlURL></service>
   </serviceList><deviceList><device><serviceList>
-    <service><serviceType>urn:dslforum-org:service:WANPPPConnection:1</serviceType><serviceId>urn:synthetic:ppp1</serviceId><controlURL>/ppp1</controlURL><SCPDURL>/ppp1.xml</SCPDURL></service>
-    <service><serviceType>urn:dslforum-org:service:WANIPConnection:1</serviceType><serviceId>urn:synthetic:ip2</serviceId><controlURL>/ip2</controlURL><SCPDURL>/ip2.xml</SCPDURL></service>
+    <service><serviceType>urn:dslforum-org:service:WANPPPConnection:1</serviceType><serviceId>urn:WANPPPConnection-com:serviceId:WANPPPConnection1</serviceId><controlURL>/ppp1</controlURL><SCPDURL>/ppp1.xml</SCPDURL></service>
+    <service><serviceType>urn:dslforum-org:service:WANIPConnection:1</serviceType><serviceId>urn:WANIPConnection-com:serviceId:WANIPConnection2</serviceId><controlURL>/ip2</controlURL><SCPDURL>/ip2.xml</SCPDURL></service>
   </serviceList><deviceList><device><serviceList>
-    <service><serviceType>urn:dslforum-org:service:WANIPConnection:1</serviceType><serviceId>urn:synthetic:ip1</serviceId><controlURL>/ip1</controlURL><SCPDURL>/ip1.xml</SCPDURL></service>
+    <service><serviceType>urn:dslforum-org:service:WANIPConnection:1</serviceType><serviceId>urn:WANIPConnection-com:serviceId:WANIPConnection1</serviceId><controlURL>/ip1</controlURL><SCPDURL>/ip1.xml</SCPDURL></service>
   </serviceList></device></deviceList></device></deviceList></device>
 </root>

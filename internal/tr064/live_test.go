@@ -104,8 +104,8 @@ func TestLiveForwards(t *testing.T) {
 	forwards, err := client.Forwards(t.Context())
 	if err != nil {
 		var protocolErr *Error
-		if errors.As(err, &protocolErr) && protocolErr.Kind == "unsupported" && forwards == nil && strings.Contains(protocolErr.Message, forwardsRemediation) {
-			t.Skip("documented port-mapping enumeration is unsupported; hardware mappings were not validated")
+		if errors.As(err, &protocolErr) && protocolErr.Kind == "unsupported" && forwards == nil && (strings.Contains(protocolErr.Message, forwardsRemediation) || strings.Contains(protocolErr.Message, "Layer3Forwarding")) {
+			t.Skip("documented port-mapping enumeration is unsupported on this WAN connection; hardware mappings were not validated")
 		}
 		t.Fatal("port-forward live inspection failed")
 	}

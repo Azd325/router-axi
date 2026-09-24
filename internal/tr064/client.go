@@ -170,7 +170,7 @@ type soapValues struct {
 	Status, LastError, ExternalIP                                            string
 	Manufacturer, Model, Serial, Software, Hardware                          string
 	Uptime, DownloadRate, UploadRate, TotalDownload, TotalUpload             string
-	CallListURL, HostNumberOfEntries                                         string
+	CallListURL, HostNumberOfEntries, DefaultConnectionService               string
 	MACAddress, IPAddress, InterfaceType, Active, HostName                   string
 	FaultCode, FaultDescription                                              string
 	Enable, SSID, Standard                                                   string
@@ -225,6 +225,8 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.TotalUpload
 		case "NewCallListURL":
 			target = &v.CallListURL
+		case "NewDefaultConnectionService":
+			target = &v.DefaultConnectionService
 		case "NewHostNumberOfEntries":
 			target = &v.HostNumberOfEntries
 		case "NewMACAddress":
@@ -554,6 +556,8 @@ const maxHostEntries = 4096
 
 const (
 	maxPortMappingEntries = 4096
+	activeWANMessage      = "could not determine the active WAN service"
+	activeWANRemediation  = "enable Layer3Forwarding:GetDefaultConnectionService or use supported firmware"
 	forwardsRemediation   = "enable a WANIPConnection or WANPPPConnection service with documented port-mapping enumeration actions, or use supported firmware"
 )
 
@@ -602,45 +606,40 @@ func (c *Client) Forwards(ctx context.Context) ([]Forward, error) {
 	if err := c.discover(ctx); err != nil {
 		return nil, forwardsError(err)
 	}
-	services, err := c.portMappingServices(ctx)
+	activeService, err := c.activePortMappingService(ctx)
 	if err != nil {
 		return nil, err
 	}
-	forwards := make([]Forward, 0)
-	for _, svc := range services {
-		countValues, err := c.actionOnService(ctx, svc, "GetPortMappingNumberOfEntries")
+	countValues, err := c.actionOnService(ctx, activeService, "GetPortMappingNumberOfEntries")
+	if err != nil {
+		return nil, forwardsError(err)
+	}
+	count, err := portMappingCount(countValues.PortMappingCount)
+	if err != nil {
+		return nil, err
+	}
+	forwards := make([]Forward, 0, count)
+	for index := uint64(0); index < count; index++ {
+		values, err := c.actionOnService(ctx, activeService, "GetGenericPortMappingEntry", soapArgument{Name: "NewPortMappingIndex", Value: strconv.FormatUint(index, 10)})
 		if err != nil {
 			return nil, forwardsError(err)
 		}
-		count, err := portMappingCount(countValues.PortMappingCount)
+		forward, err := parseForward(values)
 		if err != nil {
 			return nil, err
 		}
-		if uint64(len(forwards))+count > maxPortMappingEntries {
-			return nil, &Error{Kind: "protocol", Operation: "forwards", Message: "port-mapping tables exceed the inspection limit"}
-		}
-		for index := uint64(0); index < count; index++ {
-			values, err := c.actionOnService(ctx, svc, "GetGenericPortMappingEntry", soapArgument{Name: "NewPortMappingIndex", Value: strconv.FormatUint(index, 10)})
-			if err != nil {
-				return nil, forwardsError(err)
-			}
-			forward, err := parseForward(values)
-			if err != nil {
-				return nil, err
-			}
-			forwards = append(forwards, forward)
-		}
-		finalCount, err := c.actionOnService(ctx, svc, "GetPortMappingNumberOfEntries")
-		if err != nil {
-			return nil, forwardsError(err)
-		}
-		final, err := portMappingCount(finalCount.PortMappingCount)
-		if err != nil {
-			return nil, err
-		}
-		if final != count {
-			return nil, &Error{Kind: "protocol", Operation: "forwards", Message: "port mappings changed during enumeration; retry the read"}
-		}
+		forwards = append(forwards, forward)
+	}
+	finalCount, err := c.actionOnService(ctx, activeService, "GetPortMappingNumberOfEntries")
+	if err != nil {
+		return nil, forwardsError(err)
+	}
+	final, err := portMappingCount(finalCount.PortMappingCount)
+	if err != nil {
+		return nil, err
+	}
+	if final != count {
+		return nil, &Error{Kind: "protocol", Operation: "forwards", Message: "port mappings changed during enumeration; retry the read"}
 	}
 	sort.SliceStable(forwards, func(i, j int) bool { return compareForwards(forwards[i], forwards[j]) < 0 })
 	return forwards, nil
@@ -666,7 +665,7 @@ func compareForwards(left, right Forward) int {
 	return cmp.Compare(*left.LeaseDuration, *right.LeaseDuration)
 }
 
-func (c *Client) portMappingServices(ctx context.Context) ([]service, error) {
+func (c *Client) activePortMappingService(ctx context.Context) (service, error) {
 	services := make([]service, 0)
 	for _, svc := range c.allServices {
 		for _, prefix := range wanMappingPrefixes {
@@ -677,22 +676,85 @@ func (c *Client) portMappingServices(ctx context.Context) ([]service, error) {
 		}
 	}
 	if len(services) == 0 {
-		return nil, &Error{Kind: "unsupported", Operation: "forwards", Message: "router does not advertise a WANIPConnection or WANPPPConnection service; " + forwardsRemediation}
+		return service{}, &Error{Kind: "unsupported", Operation: "forwards", Message: "router does not advertise a WANIPConnection or WANPPPConnection service; " + forwardsRemediation}
 	}
-	sort.SliceStable(services, func(i, j int) bool {
-		return cmp.Or(cmp.Compare(services[i].Type, services[j].Type), cmp.Compare(services[i].ID, services[j].ID), cmp.Compare(services[i].ControlURL, services[j].ControlURL)) < 0
-	})
-	for i, svc := range services {
-		control, err := c.base.Parse(svc.ControlURL)
-		if err != nil || svc.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.Fragment != "" {
-			return nil, &Error{Kind: "protocol", Operation: "forwards", Message: "router advertised an invalid WAN control URL"}
-		}
-		services[i].ControlURL = control.Path
-		if err := c.advertisesPortMappingActions(ctx, svc); err != nil {
-			return nil, err
+	defaultValues, err := c.action(ctx, "urn:dslforum-org:service:Layer3Forwarding:", "GetDefaultConnectionService")
+	if err != nil {
+		return service{}, activeWANError(err)
+	}
+	defaultService := strings.TrimSpace(defaultValues.DefaultConnectionService)
+	if defaultService == "" {
+		return service{}, &Error{Kind: "unsupported", Operation: "forwards", Message: activeWANMessage + "; " + activeWANRemediation}
+	}
+	var matches []service
+	for _, svc := range services {
+		if defaultService == svc.Type || defaultService == svc.ID || activeWANServiceID(svc.Type, svc.ID, defaultService) {
+			matches = append(matches, svc)
 		}
 	}
-	return services, nil
+	if len(matches) != 1 {
+		return service{}, &Error{Kind: "unsupported", Operation: "forwards", Message: "router default WAN service does not name exactly one advertised WAN service; " + forwardsRemediation}
+	}
+	active := matches[0]
+	control, err := c.base.Parse(active.ControlURL)
+	if err != nil || active.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.Fragment != "" {
+		return service{}, &Error{Kind: "protocol", Operation: "forwards", Message: "router advertised an invalid WAN control URL"}
+	}
+	if err := c.advertisesPortMappingActions(ctx, active); err != nil {
+		return service{}, err
+	}
+	active.ControlURL = control.Path
+	return active, nil
+}
+
+func activeWANError(err error) *Error {
+	result := forwardsError(err)
+	result.Operation = "forwards"
+	result.Message = activeWANMessage
+	if result.Kind == "router" && result.StatusCode == http.StatusInternalServerError {
+		result.Kind = "unsupported"
+	}
+	if result.Kind == "unsupported" {
+		result.Message += "; " + activeWANRemediation
+	}
+	return result
+}
+
+// activeWANServiceID matches a Layer3Forwarding default connection service
+// identifier shaped urn:upnp-org:serviceId:WANIPConnectionN,
+// WANPPPConnectionN, uuid:...:WANIPConnection.N, or the dot-separated
+// N.WANIPConnection.N that FRITZ!OS returns, against the advertised WAN
+// service of that same family and instance.
+func activeWANServiceID(advertisedType, advertisedID, defaultService string) bool {
+	var family, instance string
+	for _, candidate := range []string{"WANIPConnection", "WANPPPConnection"} {
+		index := strings.LastIndex(defaultService, candidate)
+		if index < 0 {
+			continue
+		}
+		head, tail := defaultService[:index], defaultService[index+len(candidate):]
+		if strings.Contains(tail, ":") {
+			return false
+		}
+		if !strings.HasSuffix(head, ":") && !numericDeviceIndex(head) {
+			return false
+		}
+		family, instance = candidate, strings.TrimPrefix(tail, ".")
+		break
+	}
+	if family == "" || instance == "" || !strings.Contains(advertisedType, family) {
+		return false
+	}
+	index := strings.LastIndex(advertisedID, family)
+	if index < 0 {
+		return false
+	}
+	return strings.TrimPrefix(advertisedID[index+len(family):], ":") == instance
+}
+
+func numericDeviceIndex(head string) bool {
+	index, found := strings.CutSuffix(head, ".")
+	return found && index != "" && strings.Trim(index, "0123456789") == ""
 }
 
 func (c *Client) advertisesPortMappingActions(ctx context.Context, svc service) error {
