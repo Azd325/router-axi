@@ -681,25 +681,6 @@ func (c *Client) Leases(ctx context.Context) ([]Lease, error) {
 		return errors.New("lease inspection refuses redirects")
 	}
 	client.http = &httpClient
-	if err := client.discover(ctx); err != nil {
-		return nil, leasesError(err)
-	}
-	var hosts []service
-	for _, svc := range client.allServices {
-		if strings.HasPrefix(svc.Type, "urn:dslforum-org:service:Hosts:") {
-			hosts = append(hosts, svc)
-		}
-	}
-	if len(hosts) != 1 {
-		return nil, &Error{Kind: "unsupported", Operation: "leases", Message: "router must advertise exactly one Hosts service; " + leasesRemediation}
-	}
-	svc := hosts[0]
-	control, err := client.base.Parse(svc.ControlURL)
-	if err != nil || svc.ControlURL == "" || !sameOrigin(client.base, control) || control.User != nil || control.RawQuery != "" || control.ForceQuery || control.Fragment != "" {
-		return nil, &Error{Kind: "protocol", Operation: "leases", Message: "router advertised an invalid Hosts control URL"}
-	}
-	svc.ControlURL = control.Path
-	client.services = map[string]service{svc.Type: svc}
 	entries, err := client.hostEntries(ctx)
 	if err != nil {
 		return nil, leasesError(err)

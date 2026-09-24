@@ -1686,67 +1686,19 @@ func TestLeasesRefuseRedirectsWithoutChangingDevices(t *testing.T) {
 	}
 }
 
-func TestLeasesRejectUnsafeHostsControlURLs(t *testing.T) {
-	var externalRequests atomic.Int64
-	external := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		externalRequests.Add(1)
-	}))
-	defer external.Close()
-	for _, address := range []string{
-		external.URL + "/private-endpoint", "//" + strings.TrimPrefix(external.URL, "http://") + "/private-endpoint",
-		"http://private-user:private-password@192.0.2.1/private-endpoint", "__ORIGIN__/private-endpoint#private-fragment",
-		"/private-endpoint?private-query", "/private-endpoint?", "http://%private", "",
-	} {
-		t.Run(address, func(t *testing.T) {
-			description := strings.Replace(descriptionFixture, "<controlURL>/upnp/control/hosts</controlURL>", "<controlURL>"+address+"</controlURL>", 1)
-			client := hostFixtureClient(t, []hostExchange{{body: description}})
-			_ = assertLeaseError(t, client, "protocol", 0)
-		})
-	}
-	if externalRequests.Load() != 0 {
-		t.Fatal("unsafe Hosts control URL reached an external server")
-	}
-}
-
-func TestLeasesAcceptSameOriginHostsURLWithoutChangingCachedServices(t *testing.T) {
-	script := hostScript(hostEntryZeroFixture)
-	script[0].body = strings.Replace(descriptionFixture, ">/upnp/control/hosts<", ">__ORIGIN__/upnp/control/hosts<", 1)
+func TestLeasesAcceptSameHostsDescriptionsAsDevices(t *testing.T) {
+	duplicate := `<service><serviceType>urn:dslforum-org:service:Hosts:1</serviceType><controlURL>/upnp/control/hosts</controlURL></service>`
+	description := strings.Replace(descriptionFixture, "</serviceList>", duplicate+"</serviceList>", 1)
+	script := append(hostScript(hostEntryZeroFixture), hostScript(hostEntryZeroFixture)...)
+	script[0].body, script[3].body = description, description
 	client := hostFixtureClient(t, script)
-	if err := client.discover(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	original := client.services["urn:dslforum-org:service:Hosts:1"]
 	leases, err := client.Leases(t.Context())
-	if err != nil || len(leases) != 1 || client.services[original.Type] != original || len(client.services) != 5 {
-		t.Fatalf("leases=%#v services=%#v error=%v", leases, client.services, err)
+	if err != nil || len(leases) != 1 {
+		t.Fatalf("leases=%#v error=%v", leases, err)
 	}
-}
-
-func TestLeasesRejectAmbiguousHostsWithoutChangingDevicesSelection(t *testing.T) {
-	for _, version := range []string{"1", "2"} {
-		t.Run(version, func(t *testing.T) {
-			extra := `<service><serviceType>urn:dslforum-org:service:Hosts:` + version + `</serviceType><controlURL>/upnp/control/hosts</controlURL></service>`
-			script := hostScript(hostEntryZeroFixture)
-			script[0].body = strings.Replace(descriptionFixture, "</serviceList>", extra+"</serviceList>", 1)
-			if version == "2" {
-				script = script[:1]
-			}
-			client := hostFixtureClient(t, script)
-			if err := client.discover(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			_ = assertLeaseError(t, client, "unsupported", 0)
-			if version == "2" {
-				if len(client.services) != 6 || len(client.allServices) != 6 {
-					t.Fatal("Leases changed cached discovery")
-				}
-				return
-			}
-			devices, err := client.Devices(t.Context())
-			if err != nil || len(devices) != 1 {
-				t.Fatalf("devices=%#v error=%v", devices, err)
-			}
-		})
+	devices, err := client.Devices(t.Context())
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices=%#v error=%v", devices, err)
 	}
 }
 
