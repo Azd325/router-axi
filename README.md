@@ -80,8 +80,10 @@ description once and, when `DeviceInfo` is advertised, invokes only
 It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
 `wan`, `traffic`, `calls`, `devices`, `leases`, `wifi`, `forwards`, and `reboot`.
-For reboot, DeviceConfig advertisement is only a candidate capability: doctor
-never invokes Reboot or verifies reboot permission. For leases,
+For reboot, doctor applies the same target selection as the command (exactly
+one `DeviceConfig:1` service, plus exactly one `DeviceInfo:1` when credentials
+are set), but the result is only a candidate capability: doctor never invokes
+Reboot or verifies reboot permission. For leases,
 Hosts advertisement is a candidate capability, not proof of meaningful lease
 metadata; doctor does not read the host table. For forwards,
 WANIPConnection or WANPPPConnection service advertisement is only a candidate
