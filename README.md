@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The read-only MVP provides device information, WAN status, traffic statistics, call-list access, connected-device inspection, and Wi-Fi inspection through documented FRITZ!Box TR-064 interfaces.
+The read-only MVP provides device information, WAN status, traffic statistics, call-list access, connected-device, Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces.
 
 ## Design constraints
 
@@ -55,6 +55,9 @@ router-axi devices
 router-axi devices --json
 router-axi wifi
 router-axi wifi --json
+router-axi forwards
+router-axi forwards --json
+router-axi forwards --all
 router-axi wan --json
 ```
 
@@ -69,7 +72,10 @@ description once and, when `DeviceInfo` is advertised, invokes only
 `DeviceInfo:GetInfo` to verify authentication and obtain model and firmware.
 It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
-`wan`, `traffic`, `calls`, `devices`, and `wifi`. It does not invoke those commands, retrieve a WAN
+`wan`, `traffic`, `calls`, `devices`, `wifi`, and `forwards`. For forwards,
+WANIPConnection or WANPPPConnection service advertisement is only a candidate
+capability: doctor does not fetch SCPDs or verify enumeration actions. It does
+not invoke those commands, retrieve a WAN
 address or call list, infer support from a model name, or emit serial numbers,
 WAN/phone addresses, call data, or credentials. Unsupported optional
 capabilities are a successful diagnosis and include remediation.
@@ -160,6 +166,75 @@ documented service identifiers; routers whose `GetInfo` omits the
 frequency-band extension report `band: unknown`. Compatibility is
 fixture-backed, not inferred from a model name.
 
+### Port-forward inspection
+
+`forwards` requires the current checkout; it is not included in v0.1.0.
+It reads all advertised TR-064 WANIPConnection and WANPPPConnection instances,
+including disabled mappings. Each instance must advertise both
+`GetPortMappingNumberOfEntries` and `GetGenericPortMappingEntry` in its SCPD.
+The first returns `NewPortMappingNumberOfEntries` (unsigned 16-bit count);
+the second accepts the zero-based `NewPortMappingIndex` and returns
+`NewEnabled`, `NewProtocol`, `NewExternalPort`, `NewInternalClient`,
+`NewInternalPort`, `NewPortMappingDescription`, `NewRemoteHost`, and
+`NewLeaseDuration`. The documented contracts are in the FRITZ!
+[WAN IP Connection v6, §§1.11–1.12](https://fritz.support/resources/TR-064_WAN_IP_Connection.pdf)
+and [WAN PPP Connection v15, §§1.15–1.16](https://fritz.support/resources/TR-064_WAN_PPP_Connection.pdf)
+references. Zero-based indexing and fault `713` are specified in
+[Broadband Forum TR-064, §2.4.14](https://www.broadband-forum.org/pdfs/tr-064-1-0-1.pdf). Only these two read actions are called; `AddPortMapping`,
+`DeletePortMapping`, and every other mutating action are never invoked.
+There is no browser scraping, undocumented endpoint, or IGD fallback.
+
+Compact columns and JSON fields are ordered as below; the internal target is
+returned verbatim, without DNS resolution or network scanning:
+
+```json
+{"forwards":[{"enabled":true,"protocol":"TCP","external_port":8443,"internal_client":"192.0.2.10","internal_port":443,"description":"synthetic-service","remote_host":"","lease_duration":0}],"total":1,"omitted":0}
+```
+
+Protocols are `TCP` or `UDP`; ports are in `1–65535`. An empty
+`remote_host` means no remote-host restriction. Lease duration is seconds
+(unsigned 32-bit); zero means permanent. If the router omits the lease field,
+JSON omits `lease_duration` and compact output uses `unknown`, not zero.
+Enabled states accept `0`/`1` or `false`/`true`. A missing internal target,
+missing remote-host field, or invalid numeric, enabled, or protocol value fails
+explicitly.
+Descriptions and targets are local operational data, not secrets: they are
+shown to the invoking user, with no reveal flag. Do not paste real output into
+logs, issues, fixtures, or commits. The client does not log mapping contents,
+and errors discard router fault text, fault codes, URLs, and response bodies.
+SCPD and control URLs must stay on the router origin; redirects are refused.
+
+Results sort by protocol, numeric external port, remote host, internal target,
+numeric internal port, enabled state (false first), description, then lease
+(absent before present). Identical records from separate services are retained;
+service IDs and transient table indexes are not exposed. Output is limited to
+20 entries by default. `--all` returns the complete inspected list; compact
+output reports `omitted` and suggests `forwards --all`, while JSON always
+includes `total` and `omitted`. Empty output is
+`forwards[0]: no port forwards found` or
+`{"forwards":[],"total":0,"omitted":0}`. No advertised service or a missing
+required action is **unsupported**, never a successful empty list.
+
+Enumeration is atomic only at the output boundary: all indexes are read before
+any stdout is emitted, including entries beyond the default display limit.
+An indexed fault (including a vanished index), any other service failure, or a
+changed count on the final count read discards the whole result. Reads are
+sequential, with no management lock or router transaction: equal counts cannot detect replacements
+or reordering during the read, and changes after an instance finishes are not
+detected. There are no retries or partial-success lists. The safety limit is
+4096 total entries across services, even with `--all`.
+
+Missing services/SCPDs/actions or an invalid-action SOAP fault exit `5` with
+`unsupported_capability` and firmware/service remediation. Authentication exits
+`3`, network failures `4`, malformed responses and other router faults `6`.
+Doctor reports service advertisement only, not confirmed action support.
+Compatibility is fixture-backed for IP and PPP services, multiple instances,
+empty tables, and absent lease fields; it is not inferred from model names.
+A router advertising inactive WAN instances that reject these reads fails the
+whole command; there is no active-WAN selection or silent fallback.
+This table is not a firewall audit: IPv6 pinholes, exposed-host settings, or
+rules unavailable through these documented actions are outside its scope.
+
 `overview` reads router identity, WAN state, and traffic totals in that fixed
 order. It is atomic: if any read fails, stdout is empty and the command emits
 the failed operation as a structured error on stderr with its normal non-zero
@@ -186,7 +261,9 @@ read actions. Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 documented `X_AVM-DE_OnTel:GetCallList`, and the standard
 `Hosts:GetHostNumberOfEntries` plus zero-based `GetGenericHostEntry(NewIndex)`,
 and `WLANConfiguration:GetInfo`, `GetChannelInfo`, `GetTotalAssociations`, and
-`GetBeaconType`. Wi-Fi inspection does not call `GetSecurityKeys` or any other
+`GetBeaconType`, plus `WANIPConnection`/`WANPPPConnection`:
+`GetPortMappingNumberOfEntries` and `GetGenericPortMappingEntry(NewPortMappingIndex)`
+when advertised in their SCPDs. Wi-Fi inspection does not call `GetSecurityKeys` or any other
 key- or client-returning WLAN action.
 Call-list URLs are accepted only from the same router origin. Device inspection
 does not use AVM host-list URLs, browser scraping, or network scanning.
@@ -210,13 +287,16 @@ command line:
 export ROUTER_AXI_HOST='fritz.box'
 read -rs 'ROUTER_AXI_USERNAME?Router username: '; export ROUTER_AXI_USERNAME; printf '\n'
 read -rs 'ROUTER_AXI_PASSWORD?Router password: '; export ROUTER_AXI_PASSWORD; printf '\n'
-ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^(TestLiveReadOnlyCommands|TestLiveWiFi)$' -count=1
+ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^(TestLiveReadOnlyCommands|TestLiveWiFi|TestLiveForwards)$' -count=1
 unset ROUTER_AXI_PASSWORD ROUTER_AXI_USERNAME ROUTER_AXI_HOST
 ```
 
 Do not add `-v`: the test deliberately reports only command-level failures and
 never logs responses, credentials, serial numbers, phone, device, radio, or
-network data, or router addresses. Wi-Fi live reads use only the four actions
+network data, mapping contents, or router addresses. The forwards live test
+uses only the two enumeration actions and does not create test mappings;
+unsupported enumeration is skipped explicitly, not counted as hardware mapping
+validation. Wi-Fi live reads use only the four actions
 above, including `GetInfo`, and never any key-returning action; missing
 advertisement is checked as unsupported. Ordinary `go test ./...` and all CI environments cannot enable the
 live test.

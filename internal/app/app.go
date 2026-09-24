@@ -32,6 +32,7 @@ type Reader interface {
 	Calls(context.Context) ([]tr064.Call, error)
 	Devices(context.Context) ([]tr064.Device, error)
 	WiFi(context.Context) ([]tr064.Radio, error)
+	Forwards(context.Context) ([]tr064.Forward, error)
 }
 type Factory func(Config) (Reader, error)
 type App struct {
@@ -64,6 +65,12 @@ type deviceResult struct {
 type wifiResult struct {
 	Radios []tr064.Radio `json:"radios"`
 	Total  int           `json:"total"`
+}
+
+type forwardResult struct {
+	Forwards []tr064.Forward `json:"forwards"`
+	Total    int             `json:"total"`
+	Omitted  int             `json:"omitted"`
 }
 
 func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -144,6 +151,19 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			}
 			value = deviceResult{Devices: devices, Total: total, Omitted: total - len(devices)}
 		}
+	case "forwards":
+		var forwards []tr064.Forward
+		forwards, err = reader.Forwards(ctx)
+		if err == nil {
+			if forwards == nil {
+				forwards = []tr064.Forward{}
+			}
+			total := len(forwards)
+			if !opts.all && len(forwards) > 20 {
+				forwards = forwards[:20]
+			}
+			value = forwardResult{Forwards: forwards, Total: total, Omitted: total - len(forwards)}
+		}
 	}
 	if err != nil {
 		if opts.command == "doctor" {
@@ -192,25 +212,25 @@ func parse(args []string) (options, error) {
 			opts.command = args[i]
 		}
 	}
-	if opts.all && opts.command != "calls" && opts.command != "devices" {
-		return opts, errors.New("--all is valid only for calls or devices")
+	if opts.all && opts.command != "calls" && opts.command != "devices" && opts.command != "forwards" {
+		return opts, errors.New("--all is valid only for calls, devices, or forwards")
 	}
 	return opts, nil
 }
 
 func validCommand(command string) bool {
-	return command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "wifi"
+	return command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "wifi" || command == "forwards"
 }
 
 func help(command string) string {
 	if validCommand(command) {
 		extra := ""
-		if command == "calls" || command == "devices" {
+		if command == "calls" || command == "devices" || command == "forwards" {
 			extra = " [--all]"
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + "\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  devices   connected and known LAN clients\n  wifi      read-only Wi-Fi radio inspection\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  devices   connected and known LAN clients\n  wifi      read-only Wi-Fi radio inspection\n  forwards  port-forwarding rules\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -233,7 +253,7 @@ func writeCompact(w io.Writer, command string, value any) error {
 			name  string
 			check tr064.DoctorCheck
 		}{
-			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"calls", v.Capabilities.Calls}, {"devices", v.Capabilities.Devices}, {"wifi", v.Capabilities.WiFi},
+			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"calls", v.Capabilities.Calls}, {"devices", v.Capabilities.Devices}, {"wifi", v.Capabilities.WiFi}, {"forwards", v.Capabilities.Forwards},
 		} {
 			if _, err := fmt.Fprintf(w, "  %s: %s\n", capability.name, check(capability.check)); err != nil {
 				return err
@@ -304,6 +324,28 @@ func writeCompact(w io.Writer, command string, value any) error {
 		}
 		if result.Omitted > 0 {
 			_, err := fmt.Fprintf(w, "omitted: %d\nnext: router-axi devices --all\n", result.Omitted)
+			return err
+		}
+	case "forwards":
+		result := value.(forwardResult)
+		if len(result.Forwards) == 0 {
+			_, err := io.WriteString(w, "forwards[0]: no port forwards found\n")
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "forwards[%d]{enabled,protocol,external_port,internal_client,internal_port,description,remote_host,lease_duration}:\n", len(result.Forwards)); err != nil {
+			return err
+		}
+		for _, forward := range result.Forwards {
+			lease := "unknown"
+			if forward.LeaseDuration != nil {
+				lease = strconv.FormatUint(*forward.LeaseDuration, 10)
+			}
+			if _, err := fmt.Fprintf(w, "  %t,%s,%d,%s,%d,%s,%s,%s\n", forward.Enabled, toon(forward.Protocol), forward.ExternalPort, toon(forward.InternalClient), forward.InternalPort, toon(forward.Description), toon(forward.RemoteHost), lease); err != nil {
+				return err
+			}
+		}
+		if result.Omitted > 0 {
+			_, err := fmt.Fprintf(w, "omitted: %d\nnext: router-axi forwards --all\n", result.Omitted)
 			return err
 		}
 	}

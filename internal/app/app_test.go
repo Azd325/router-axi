@@ -21,6 +21,10 @@ type manyCallsReader struct{ fakeReader }
 type manyDevicesReader struct{ fakeReader }
 type emptyDevicesReader struct{ fakeReader }
 type unsupportedDevicesReader struct{ fakeReader }
+type forwardsReader struct {
+	fakeReader
+	forwards []tr064.Forward
+}
 
 func (partialReader) Overview(context.Context) (tr064.Overview, error) {
 	return tr064.Overview{}, &tr064.Error{Kind: "unsupported", Message: "WAN unavailable"}
@@ -56,7 +60,7 @@ func (f fakeReader) Doctor(context.Context) (tr064.Doctor, error) {
 		Endpoint: "http://router.test:49000", Reachability: tr064.DoctorCheck{State: "reachable"},
 		Protocol: tr064.DoctorCheck{State: "available"}, Authentication: tr064.DoctorCheck{State: "authenticated"},
 		Model: "FRITZ!Box 7590 AX", Firmware: "8.02",
-		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Calls: advertised, Devices: advertised, WiFi: advertised},
+		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Calls: advertised, Devices: advertised, WiFi: advertised, Forwards: advertised},
 	}, f.err
 }
 func (f fakeReader) Status(context.Context) (tr064.Status, error) {
@@ -91,6 +95,14 @@ func (f fakeReader) WiFi(context.Context) ([]tr064.Radio, error) {
 	return []tr064.Radio{{ServiceID: "urn:WLANConfiguration-com:serviceId:WLANConfiguration1", SSID: "synthetic-ap", Enabled: true, Channel: 6, Band: "2400", Standard: "ax", AssociatedDevices: 2, SecurityMode: "11i"}}, f.err
 }
 
+func (f fakeReader) Forwards(context.Context) ([]tr064.Forward, error) {
+	return []tr064.Forward{{Enabled: true, Protocol: "TCP", ExternalPort: 8443, InternalClient: "192.0.2.10", InternalPort: 443, Description: "synthetic service", RemoteHost: "198.51.100.10"}}, f.err
+}
+
+func (f forwardsReader) Forwards(context.Context) ([]tr064.Forward, error) {
+	return f.forwards, f.err
+}
+
 type wifiReader struct {
 	fakeReader
 	radios []tr064.Radio
@@ -110,7 +122,7 @@ func runTest(t *testing.T, args ...string) (int, string, string) {
 
 func TestCompactCommands(t *testing.T) {
 	tests := []struct{ command, contains string }{
-		{"doctor", "authentication: authenticated"},
+		{"doctor", "forwards: advertised"},
 		{"status", "model: FRITZ!Box 7590 AX"},
 		{"overview", "traffic: 12.35 GB downloaded, 0.99 GB uploaded"},
 		{"wan", "ip_family: ipv4"},
@@ -118,6 +130,7 @@ func TestCompactCommands(t *testing.T) {
 		{"calls", "calls[1]{id,direction,remote,name,date,duration}:"},
 		{"devices", "devices[1]{name,ip_address,mac_address,interface_type,active}:"},
 		{"wifi", "radios[1]{service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode}:"},
+		{"forwards", "forwards[1]{enabled,protocol,external_port,internal_client,internal_port,description,remote_host,lease_duration}:"},
 	}
 	for _, test := range tests {
 		t.Run(test.command, func(t *testing.T) {
@@ -138,7 +151,7 @@ func TestNoCommandRunsStatus(t *testing.T) {
 
 func TestDoctorJSONIsDeterministic(t *testing.T) {
 	code, stdout, stderr := runTest(t, "doctor", "--json")
-	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"wifi":{"state":"advertised"}}}` + "\n"
+	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"}}}` + "\n"
 	if code != ExitOK || stdout != want || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -416,6 +429,186 @@ func TestWiFiFlagsAndHelp(t *testing.T) {
 	}
 	code, stdout, stderr := runTest(t, "wifi", "--help")
 	if code != ExitOK || stdout != "usage: router-axi wifi [--host ADDRESS] [--json]\n" || stderr != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestForwardsOutputContract(t *testing.T) {
+	zero := uint64(0)
+	reader := forwardsReader{forwards: []tr064.Forward{
+		{Enabled: true, Protocol: "TCP,UDP", ExternalPort: 8443, InternalClient: "192.0.2.10", InternalPort: 443, Description: "synthetic, \"service\"", RemoteHost: "198.51.100.10"},
+		{Enabled: false, Protocol: "UDP", ExternalPort: 5353, InternalClient: "192.0.2.11", InternalPort: 5353, Description: "synthetic\nservice", RemoteHost: "", LeaseDuration: &zero},
+	}}
+	application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"forwards"}, "forwards[2]{enabled,protocol,external_port,internal_client,internal_port,description,remote_host,lease_duration}:\n  true,\"TCP,UDP\",8443,192.0.2.10,443,\"synthetic, \\\"service\\\"\",198.51.100.10,unknown\n  false,UDP,5353,192.0.2.11,5353,\"synthetic\\nservice\",\"\",0\n"},
+		{[]string{"forwards", "--json"}, `{"forwards":[{"enabled":true,"protocol":"TCP,UDP","external_port":8443,"internal_client":"192.0.2.10","internal_port":443,"description":"synthetic, \"service\"","remote_host":"198.51.100.10"},{"enabled":false,"protocol":"UDP","external_port":5353,"internal_client":"192.0.2.11","internal_port":5353,"description":"synthetic\nservice","remote_host":"","lease_duration":0}],"total":2,"omitted":0}` + "\n"},
+	} {
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), test.args, &stdout, &stderr)
+		if code != ExitOK || stdout.String() != test.want || stderr.Len() != 0 {
+			t.Fatalf("args=%q code=%d stdout=%q stderr=%q", test.args, code, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestForwardsAreBoundedAndEmptyIsExplicit(t *testing.T) {
+	forwards := make([]tr064.Forward, 23)
+	for i := range forwards {
+		forwards[i] = tr064.Forward{Protocol: "TCP", ExternalPort: uint64(8000 + i), InternalClient: fmt.Sprintf("192.0.2.%d", i+1), InternalPort: 80, Description: "synthetic", RemoteHost: "198.51.100.1"}
+	}
+	application := New(func(Config) (Reader, error) { return forwardsReader{forwards: forwards}, nil }, func(string) string { return "" })
+	for _, test := range []struct {
+		args     []string
+		contains []string
+		absent   string
+	}{
+		{[]string{"forwards"}, []string{"forwards[20]", "omitted: 3", "forwards --all"}, "forwards[23]"},
+		{[]string{"forwards", "--all"}, []string{"forwards[23]"}, "omitted:"},
+		{[]string{"forwards", "--json"}, []string{`"total":23,"omitted":3`}, `"external_port":8020`},
+		{[]string{"forwards", "--all", "--json"}, []string{`"total":23,"omitted":0`, `"external_port":8020`}, ""},
+	} {
+		var out, errout bytes.Buffer
+		code := application.Run(t.Context(), test.args, &out, &errout)
+		stdout, stderr := out.String(), errout.String()
+		if code != ExitOK || stderr != "" {
+			t.Fatalf("args=%q code=%d stdout=%q stderr=%q", test.args, code, stdout, stderr)
+		}
+		for _, want := range test.contains {
+			if !strings.Contains(stdout, want) {
+				t.Fatalf("args=%q stdout=%q missing=%q", test.args, stdout, want)
+			}
+		}
+		if test.absent != "" && strings.Contains(stdout, test.absent) {
+			t.Fatalf("args=%q stdout=%q unexpectedly contains=%q", test.args, stdout, test.absent)
+		}
+	}
+
+	empty := New(func(Config) (Reader, error) { return forwardsReader{}, nil }, func(string) string { return "" })
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"forwards"}, "forwards[0]: no port forwards found\n"},
+		{[]string{"forwards", "--json"}, "{\"forwards\":[],\"total\":0,\"omitted\":0}\n"},
+	} {
+		var stdout, stderr bytes.Buffer
+		code := empty.Run(t.Context(), test.args, &stdout, &stderr)
+		if code != ExitOK || stdout.String() != test.want || stderr.Len() != 0 {
+			t.Fatalf("args=%q code=%d stdout=%q stderr=%q", test.args, code, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestForwardsFailuresAreAtomic(t *testing.T) {
+	for _, test := range []struct {
+		err  error
+		exit int
+	}{
+		{&tr064.Error{Kind: "auth", Message: "synthetic failure"}, ExitAuth},
+		{&tr064.Error{Kind: "network", Message: "synthetic failure"}, ExitNetwork},
+		{&tr064.Error{Kind: "unsupported", Message: "synthetic failure"}, ExitUnsupported},
+		{&tr064.Error{Kind: "protocol", Message: "synthetic failure"}, ExitRouter},
+		{&tr064.Error{Kind: "router", Message: "synthetic failure"}, ExitRouter},
+		{errors.New("synthetic failure"), ExitInternal},
+	} {
+		for _, jsonOutput := range []bool{false, true} {
+			reader := forwardsReader{forwards: []tr064.Forward{{Protocol: "TCP"}}}
+			reader.err = test.err
+			application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })
+			args := []string{"forwards"}
+			if jsonOutput {
+				args = append(args, "--json")
+			}
+			var stdout, stderr bytes.Buffer
+			code := application.Run(t.Context(), args, &stdout, &stderr)
+			if code != test.exit || stdout.Len() != 0 || stderr.Len() == 0 {
+				t.Fatalf("json=%t code=%d stdout=%q stderr=%q", jsonOutput, code, stdout.String(), stderr.String())
+			}
+		}
+	}
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("synthetic write failure") }
+
+func TestForwardsOutputWriteFailure(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
+	for _, args := range [][]string{{"forwards"}, {"forwards", "--json"}} {
+		var stderr bytes.Buffer
+		if code := application.Run(t.Context(), args, failingWriter{}, &stderr); code != ExitInternal || stderr.Len() != 0 {
+			t.Fatalf("args=%q code=%d stderr=%q", args, code, stderr.String())
+		}
+	}
+}
+
+func TestForwardsClientOutputBoundary(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		for _, jsonOutput := range []bool{false, true} {
+			countReads := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/tr64desc.xml" {
+					_, _ = io.WriteString(w, `<root><service><serviceType>urn:dslforum-org:service:WANIPConnection:1</serviceType><controlURL>/wan</controlURL><SCPDURL>/wan.xml</SCPDURL></service></root>`)
+					return
+				}
+				if r.Method == http.MethodGet && r.URL.Path == "/wan.xml" {
+					_, _ = io.WriteString(w, `<scpd><actionList><action><name>GetPortMappingNumberOfEntries</name></action><action><name>GetGenericPortMappingEntry</name></action></actionList></scpd>`)
+					return
+				}
+				if r.Method != http.MethodPost || r.URL.Path != "/wan" {
+					t.Error("unexpected forwards request")
+				}
+				switch r.Header.Get("SOAPAction") {
+				case `"urn:dslforum-org:service:WANIPConnection:1#GetPortMappingNumberOfEntries"`:
+					countReads++
+					if fail && countReads == 2 {
+						w.WriteHeader(http.StatusInternalServerError)
+						_, _ = io.WriteString(w, `<Fault><errorCode>501</errorCode><errorDescription>synthetic-sensitive-fault</errorDescription></Fault>`)
+						return
+					}
+					_, _ = io.WriteString(w, `<Envelope><NewPortMappingNumberOfEntries>1</NewPortMappingNumberOfEntries></Envelope>`)
+				case `"urn:dslforum-org:service:WANIPConnection:1#GetGenericPortMappingEntry"`:
+					_, _ = io.WriteString(w, `<Envelope><NewEnabled>1</NewEnabled><NewProtocol>TCP</NewProtocol><NewExternalPort>8443</NewExternalPort><NewInternalClient>192.0.2.10</NewInternalClient><NewInternalPort>443</NewInternalPort><NewPortMappingDescription>synthetic-service</NewPortMappingDescription><NewRemoteHost></NewRemoteHost><NewSerialNumber>synthetic-sensitive-serial</NewSerialNumber></Envelope>`)
+				default:
+					t.Error("forbidden forwards action")
+					w.WriteHeader(http.StatusBadRequest)
+				}
+			}))
+			application := New(func(Config) (Reader, error) { return tr064.New(server.URL, "", "", server.Client()) }, func(string) string { return "" })
+			args := []string{"forwards"}
+			if jsonOutput {
+				args = append(args, "--json")
+			}
+			var stdout, stderr bytes.Buffer
+			code := application.Run(t.Context(), args, &stdout, &stderr)
+			server.Close()
+			if strings.Contains(stdout.String()+stderr.String(), "synthetic-sensitive") || strings.Contains(stdout.String()+stderr.String(), server.URL) {
+				t.Fatal("forwards output leaked discarded response data")
+			}
+			if fail {
+				if code != ExitRouter || stdout.Len() != 0 || stderr.Len() == 0 {
+					t.Fatal("failed enumeration produced partial success")
+				}
+			} else if code != ExitOK || stderr.Len() != 0 || !strings.Contains(stdout.String(), "192.0.2.10") || !strings.Contains(stdout.String(), "synthetic-service") {
+				t.Fatal("successful enumeration did not expose operational fields")
+			}
+		}
+	}
+}
+
+func TestForwardsFlagsAndHelp(t *testing.T) {
+	for _, flag := range []string{"--reveal", "--ssid"} {
+		code, stdout, _ := runTest(t, "forwards", flag)
+		if code != ExitUsage || stdout != "" {
+			t.Fatalf("flag=%s code=%d stdout=%q", flag, code, stdout)
+		}
+	}
+	code, stdout, stderr := runTest(t, "forwards", "--help")
+	if code != ExitOK || stdout != "usage: router-axi forwards [--host ADDRESS] [--json] [--all]\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }

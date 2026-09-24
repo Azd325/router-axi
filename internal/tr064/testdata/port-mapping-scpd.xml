@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<scpd xmlns="urn:dslforum-org:service-1-0">
+  <actionList>
+    <action><name>GetPortMappingNumberOfEntries</name></action>
+    <action><name>GetGenericPortMappingEntry</name></action>
+    <action><name>AddPortMapping</name></action>
+    <action><name>DeletePortMapping</name></action>
+  </actionList>
+</scpd>
