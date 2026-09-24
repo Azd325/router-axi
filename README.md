@@ -153,6 +153,7 @@ permanent reservation, or countdown. Other malformed or out-of-range values
 fail explicitly. Firmware returning no useful lease metadata still yields
 honest host observations rather than fabricated leases.
 
+Entries are sorted by MAC address (case-insensitive), then IP address and name.
 Both formats show 20 entries by default, with `--all` for the complete inspected
 list. JSON always includes `total` and `omitted`; compact output reports omitted
 entries and suggests `leases --all`. Empty output is
