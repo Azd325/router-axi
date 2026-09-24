@@ -1,6 +1,7 @@
 package tr064
 
 import (
+	"context"
 	"errors"
 	"os"
 	"strconv"
@@ -195,11 +196,12 @@ func TestLiveWiFiMutation(t *testing.T) {
 	}
 	original := result.Current
 	// Restore the original state even when the toggle-verification itself
-	// fails, so the live test can never leave the radio toggled.
+	// fails, so the live test can never leave the radio toggled. t.Context
+	// is canceled before Cleanup runs, so the restore uses its own context.
 	restored := false
 	t.Cleanup(func() {
 		if !restored {
-			cleanup, err := client.WiFiMutation(ctx, instance, original, true)
+			cleanup, err := client.WiFiMutation(context.Background(), instance, original, true)
 			if err != nil || cleanup.Preview || cleanup.Current != original {
 				t.Error("live Wi-Fi mutation cleanup could not restore the original radio state")
 			}
@@ -207,7 +209,14 @@ func TestLiveWiFiMutation(t *testing.T) {
 	})
 	// Toggle, then restore, and require the router to confirm both changes.
 	toggled, err := client.WiFiMutation(ctx, instance, !original, true)
-	if err != nil || toggled.Preview || !toggled.Changed || toggled.Current != !original {
+	if err != nil {
+		var protocolErr *Error
+		if errors.As(err, &protocolErr) && protocolErr.Kind == "unsupported" {
+			t.Skip("WLANConfiguration:SetEnable is unsupported; hardware mutation was not validated")
+		}
+		t.Fatal("live Wi-Fi mutation was not confirmed by the router")
+	}
+	if toggled.Preview || !toggled.Changed || toggled.Current != !original {
 		t.Fatal("live Wi-Fi mutation was not confirmed by the router")
 	}
 	cleanup, err := client.WiFiMutation(ctx, instance, original, true)
@@ -215,7 +224,6 @@ func TestLiveWiFiMutation(t *testing.T) {
 	if !restored {
 		t.Fatal("live Wi-Fi mutation did not restore the original radio state")
 	}
-	_ = toggled.Instance
 }
 
 func TestLiveReadOnlyCommands(t *testing.T) {
