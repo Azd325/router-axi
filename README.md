@@ -351,7 +351,8 @@ Missing or duplicate `DeviceConfig` services, an unsafe control URL, and an
 invalid-action fault exit `5` with service/firmware remediation; rejected
 credentials exit `3`; transport failures `4`; malformed responses, refused
 HTTPS URLs, and other router faults `6`; unusable destinations, a plaintext
-router origin, and a missing passphrase exit `2`. An untrusted router
+router origin, and a missing passphrase exit `2`; local write failures,
+including `backup_link_unsupported`, exit `1`. An untrusted router
 certificate exits `4` with the code `tls_untrusted`. The export is bounded at 64 MiB; larger downloads are a
 protocol error. Compatibility is fixture-backed with synthetic servers only;
 the FRITZ!Box export flow is **not hardware-validated**, and `backup` does not
