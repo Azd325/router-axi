@@ -170,7 +170,7 @@ type soapValues struct {
 	Status, LastError, ExternalIP                                            string
 	Manufacturer, Model, Serial, Software, Hardware                          string
 	Uptime, DownloadRate, UploadRate, TotalDownload, TotalUpload             string
-	CallListURL, HostNumberOfEntries                                         string
+	CallListURL, HostNumberOfEntries, DefaultConnectionService               string
 	MACAddress, IPAddress, InterfaceType, Active, HostName                   string
 	FaultCode, FaultDescription                                              string
 	Enable, SSID, Standard                                                   string
@@ -225,6 +225,8 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.TotalUpload
 		case "NewCallListURL":
 			target = &v.CallListURL
+		case "NewDefaultConnectionService":
+			target = &v.DefaultConnectionService
 		case "NewHostNumberOfEntries":
 			target = &v.HostNumberOfEntries
 		case "NewMACAddress":
@@ -602,12 +604,12 @@ func (c *Client) Forwards(ctx context.Context) ([]Forward, error) {
 	if err := c.discover(ctx); err != nil {
 		return nil, forwardsError(err)
 	}
-	services, err := c.portMappingServices(ctx)
+	activeService, err := c.activePortMappingService(ctx)
 	if err != nil {
 		return nil, err
 	}
 	forwards := make([]Forward, 0)
-	for _, svc := range services {
+	for _, svc := range []service{activeService} {
 		countValues, err := c.actionOnService(ctx, svc, "GetPortMappingNumberOfEntries")
 		if err != nil {
 			return nil, forwardsError(err)
@@ -664,6 +666,68 @@ func compareForwards(left, right Forward) int {
 		return 0
 	}
 	return cmp.Compare(*left.LeaseDuration, *right.LeaseDuration)
+}
+
+func (c *Client) activePortMappingService(ctx context.Context) (service, error) {
+	services, err := c.portMappingServices(ctx)
+	if err != nil {
+		return service{}, err
+	}
+	defaultService, err := c.action(ctx, "urn:dslforum-org:service:Layer3Forwarding:", "GetDefaultConnectionService")
+	if err != nil {
+		return service{}, activeWANError(err)
+	}
+	for _, svc := range services {
+		if defaultService.DefaultConnectionService == svc.Type || defaultService.DefaultConnectionService == svc.ID || activeWANServiceID(svc.Type, svc.ID, defaultService.DefaultConnectionService) {
+			return svc, nil
+		}
+	}
+	return service{}, &Error{Kind: "unsupported", Operation: "forwards", Message: "router default WAN service does not support documented port-mapping enumeration; " + forwardsRemediation}
+}
+
+func activeWANError(err error) *Error {
+	result := forwardsError(err)
+	result.Operation = "forwards"
+	result.Message = "could not determine the active WAN service; enable Layer3Forwarding:GetDefaultConnectionService or use supported firmware"
+	if result.Kind == "router" && result.StatusCode == http.StatusInternalServerError {
+		result.Kind = "unsupported"
+	}
+	return result
+}
+
+// activeWANServiceID matches a Layer3Forwarding default connection service
+// identifier shaped urn:upnp-org:serviceId:WANIPConnectionN,
+// WANPPPConnectionN, or uuid:...:WANIPConnection:1 against an advertised WAN
+// service of that same family.
+func activeWANServiceID(advertisedType, advertisedID, defaultService string) bool {
+	var family, instance string
+	for _, candidate := range []string{"WANIPConnection", "WANPPPConnection"} {
+		index := strings.LastIndex(defaultService, candidate)
+		if index < 0 {
+			continue
+		}
+		head, tail := defaultService[:index], defaultService[index+len(candidate):]
+		if strings.Contains(tail, ":") {
+			return false
+		}
+		if !strings.HasSuffix(head, ":") && !strings.HasSuffix(head, ".") {
+			return false
+		}
+		family, instance = candidate, strings.TrimPrefix(tail, ".")
+		break
+	}
+	if family == "" || !strings.Contains(advertisedType, family) {
+		return false
+	}
+	index := strings.LastIndex(advertisedID, family)
+	if index < 0 {
+		return false
+	}
+	documentedInstance := strings.TrimPrefix(advertisedID[index+len(family):], ":")
+	if instance != "" && documentedInstance != instance {
+		return false
+	}
+	return true
 }
 
 func (c *Client) portMappingServices(ctx context.Context) ([]service, error) {
