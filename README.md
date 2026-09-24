@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The read-only MVP provides device information, WAN status, traffic statistics, call-list access, and connected-device inspection through documented FRITZ!Box TR-064 interfaces.
+The read-only MVP provides device information, WAN status, traffic statistics, call-list access, connected-device inspection, and Wi-Fi inspection through documented FRITZ!Box TR-064 interfaces.
 
 ## Design constraints
 
@@ -53,6 +53,8 @@ router-axi traffic
 router-axi calls
 router-axi devices
 router-axi devices --json
+router-axi wifi
+router-axi wifi --json
 router-axi wan --json
 ```
 
@@ -67,7 +69,7 @@ description once and, when `DeviceInfo` is advertised, invokes only
 `DeviceInfo:GetInfo` to verify authentication and obtain model and firmware.
 It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
-`wan`, `traffic`, `calls`, and `devices`. It does not invoke those commands, retrieve a WAN
+`wan`, `traffic`, `calls`, `devices`, and `wifi`. It does not invoke those commands, retrieve a WAN
 address or call list, infer support from a model name, or emit serial numbers,
 WAN/phone addresses, call data, or credentials. Unsupported optional
 capabilities are a successful diagnosis and include remediation.
@@ -97,6 +99,67 @@ remain protocol errors with exit `6`. Names, addresses, and interface types can 
 does not know them. `interface_type` is the service's documented interface
 classification, not a physical switch port or inferred connection detail.
 
+### Wi-Fi inspection
+
+Wi-Fi inspection requires the current checkout; it is not included in v0.1.0.
+
+`wifi` enumerates every advertised WLANConfiguration service instance, including
+logical guest access points; an instance is not necessarily a physical radio.
+It returns all instances, sorted by the numeric suffix of their advertised
+`service_id`. Identifiers are stable while the router's service description
+remains unchanged, not hardware identities. Missing, invalid, or duplicate
+identifiers fail explicitly rather than risk misidentifying an instance.
+
+Four documented read actions are invoked per instance, in this order:
+`GetInfo` (`NewEnable`, `NewSSID`, `NewStandard`, optional
+`NewX_AVM-DE_FrequencyBand`), `GetChannelInfo` (`NewChannel`),
+`GetTotalAssociations` (`NewTotalAssociations`), and `GetBeaconType`
+(`NewBeaconType`). These actions and response fields are documented in
+[FRITZ! TR-064 WLANConfiguration, version 48](https://fritz.support/resources/TR-064_WLAN_Configuration.pdf),
+sections 2.2, 2.15, 2.19, 2.13 and 3.
+
+The SSID is public beacon data, broadcast to every nearby device, and is
+reported in normal output; there is deliberately no reveal flag because
+nothing in the output is a secret. The BSSID that `GetInfo` also returns is
+discarded and never emitted, and keys and passphrases are never retrieved:
+`GetSecurityKeys`, `X_AVM-DE_GetWLANHybridMode`, associated-device actions,
+and every other key- or client-returning action are never called. No browser
+or undocumented endpoint is used.
+
+Compact output has the ordered columns
+`radios[N]{service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode}`.
+JSON uses the same ordered fields:
+
+```json
+{"radios":[{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration1","ssid":"synthetic-ap","enabled":true,"channel":6,"band":"2400","standard":"ax","associated_devices":2,"security_mode":"11i"}],"total":1}
+```
+
+`enabled` is the protocol's enable state from `GetInfo` (`0`/`1`, strictly
+parsed), `channel` is the protocol's unsigned byte from `GetChannelInfo`
+(0 means auto-channel), and `associated_devices` is its unsigned 16-bit
+association count, not a client list. `band` is `2400`, `5000`, `6000`, or
+`unknown` from the `GetInfo` frequency-band extension; absent extensions and
+unrecognized values remain `unknown`, never inferred from channel or model.
+`standard` is the highest active mode from `GetInfo` (`b`, `g`, `n`, `ac`,
+`ax`, `be`), or `unknown`. `security_mode` preserves documented beacon values
+(`None`, `Basic`, `WPA`, `11i`, `WPAand11i`, `WPA3`, `11iandWPA3`, `OWE`,
+`OWETrans`); unrecognized values become `unknown`. It is not a security audit
+or a passphrase check.
+
+Reads are atomic at the command boundary: any instance or action failure leaves
+stdout empty and emits a sanitized structured error with a nonzero exit code.
+Missing WLANConfiguration support exits `5` with remediation; invalid required
+values and router faults exit `6`, authentication failure `3`, and network
+failure `4`. No partial list is reported as success. Reads are sequential, not
+a simultaneous snapshot. The empty result schema is
+`radios[0]: no Wi-Fi services found` or `{"radios":[],"total":0}`; absent
+service advertisement is unsupported, **not** a successful empty result.
+Doctor reports advertisement only, with explicit unsupported remediation; it
+does not probe these actions. Firmware must support all four reads and the
+documented service identifiers; routers whose `GetInfo` omits the
+frequency-band extension report `band: unknown`. Compatibility is
+fixture-backed, not inferred from a model name.
+
 `overview` reads router identity, WAN state, and traffic totals in that fixed
 order. It is atomic: if any read fails, stdout is empty and the command emits
 the failed operation as a structured error on stderr with its normal non-zero
@@ -121,7 +184,10 @@ read actions. Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 `WANPPPConnection:GetStatusInfo` and `GetExternalIPAddress`,
 `WANCommonInterfaceConfig:GetTotalBytesReceived` and `GetTotalBytesSent`, AVM's
 documented `X_AVM-DE_OnTel:GetCallList`, and the standard
-`Hosts:GetHostNumberOfEntries` plus zero-based `GetGenericHostEntry(NewIndex)`.
+`Hosts:GetHostNumberOfEntries` plus zero-based `GetGenericHostEntry(NewIndex)`,
+and `WLANConfiguration:GetInfo`, `GetChannelInfo`, `GetTotalAssociations`, and
+`GetBeaconType`. Wi-Fi inspection does not call `GetSecurityKeys` or any other
+key- or client-returning WLAN action.
 Call-list URLs are accepted only from the same router origin. Device inspection
 does not use AVM host-list URLs, browser scraping, or network scanning.
 
@@ -144,13 +210,15 @@ command line:
 export ROUTER_AXI_HOST='fritz.box'
 read -rs 'ROUTER_AXI_USERNAME?Router username: '; export ROUTER_AXI_USERNAME; printf '\n'
 read -rs 'ROUTER_AXI_PASSWORD?Router password: '; export ROUTER_AXI_PASSWORD; printf '\n'
-ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^TestLiveReadOnlyCommands$' -count=1
+ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^(TestLiveReadOnlyCommands|TestLiveWiFi)$' -count=1
 unset ROUTER_AXI_PASSWORD ROUTER_AXI_USERNAME ROUTER_AXI_HOST
 ```
 
 Do not add `-v`: the test deliberately reports only command-level failures and
-never logs responses, credentials, serial numbers, phone or device data, or
-router addresses. Ordinary `go test ./...` and all CI environments cannot enable the
+never logs responses, credentials, serial numbers, phone, device, radio, or
+network data, or router addresses. Wi-Fi live reads use only the four actions
+above, including `GetInfo`, and never any key-returning action; missing
+advertisement is checked as unsupported. Ordinary `go test ./...` and all CI environments cannot enable the
 live test.
 
 ## License

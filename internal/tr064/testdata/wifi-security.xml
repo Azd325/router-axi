@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:GetBeaconTypeResponse xmlns:u="urn:dslforum-org:service:WLANConfiguration:1"><NewBeaconType>11iandWPA3</NewBeaconType></u:GetBeaconTypeResponse></s:Body></s:Envelope>

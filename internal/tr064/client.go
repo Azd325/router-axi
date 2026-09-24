@@ -78,6 +78,7 @@ type DoctorCapabilities struct {
 	Traffic  DoctorCheck `json:"traffic"`
 	Calls    DoctorCheck `json:"calls"`
 	Devices  DoctorCheck `json:"devices"`
+	WiFi     DoctorCheck `json:"wifi"`
 }
 
 type Doctor struct {
@@ -108,7 +109,19 @@ type Device struct {
 	Active        bool   `json:"active"`
 }
 
+type Radio struct {
+	ServiceID         string `json:"service_id"`
+	SSID              string `json:"ssid"`
+	Enabled           bool   `json:"enabled"`
+	Channel           uint64 `json:"channel"`
+	Band              string `json:"band"`
+	Standard          string `json:"standard"`
+	AssociatedDevices uint64 `json:"associated_devices"`
+	SecurityMode      string `json:"security_mode"`
+}
+
 type service struct {
+	ID         string `xml:"serviceId"`
 	Type       string `xml:"serviceType"`
 	ControlURL string `xml:"controlURL"`
 }
@@ -146,6 +159,8 @@ type soapValues struct {
 	CallListURL, HostNumberOfEntries                             string
 	MACAddress, IPAddress, InterfaceType, Active, HostName       string
 	FaultCode, FaultDescription                                  string
+	Enable, SSID, Standard                                       string
+	Channel, FrequencyBand, TotalAssociations, BeaconType        string
 }
 
 type soapArgument struct{ Name, Value string }
@@ -205,6 +220,20 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.Active
 		case "NewHostName":
 			target = &v.HostName
+		case "NewEnable":
+			target = &v.Enable
+		case "NewSSID":
+			target = &v.SSID
+		case "NewStandard":
+			target = &v.Standard
+		case "NewChannel":
+			target = &v.Channel
+		case "NewX_AVM-DE_FrequencyBand":
+			target = &v.FrequencyBand
+		case "NewTotalAssociations":
+			target = &v.TotalAssociations
+		case "NewBeaconType":
+			target = &v.BeaconType
 		case "errorCode":
 			target = &v.FaultCode
 		case "errorDescription":
@@ -223,6 +252,7 @@ type Client struct {
 	username, password string
 	http               *http.Client
 	services           map[string]service
+	allServices        []service
 	now                func() time.Time
 }
 
@@ -258,7 +288,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 		Protocol:       unknown,
 		Authentication: unknown,
 		Capabilities: DoctorCapabilities{
-			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Calls: unknown, Devices: unknown,
+			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Calls: unknown, Devices: unknown, WiFi: unknown,
 		},
 	}
 	if err := c.discover(ctx); err != nil {
@@ -283,6 +313,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 	report.Capabilities.Traffic = c.advertisedCapability([]string{"urn:dslforum-org:service:WANCommonInterfaceConfig:"}, "enable the WAN common-interface TR-064 service or use supported firmware")
 	report.Capabilities.Calls = c.advertisedCapability([]string{"urn:dslforum-org:service:X_AVM-DE_OnTel:"}, "enable telephony and its TR-064 service or use supported firmware")
 	report.Capabilities.Devices = c.advertisedCapability([]string{"urn:dslforum-org:service:Hosts:"}, "enable the Hosts TR-064 service or use supported firmware")
+	report.Capabilities.WiFi = c.advertisedCapability([]string{wlanServicePrefix}, wifiRemediation)
 	if report.Capabilities.Status.State == "advertised" && report.Capabilities.WAN.State == "advertised" && report.Capabilities.Traffic.State == "advertised" {
 		report.Capabilities.Overview = DoctorCheck{State: "advertised"}
 	} else {
@@ -377,6 +408,110 @@ func (c *Client) Traffic(ctx context.Context) (Traffic, error) {
 	}, nil
 }
 
+const (
+	wlanServicePrefix = "urn:dslforum-org:service:WLANConfiguration:"
+	wlanIDPrefix      = "urn:WLANConfiguration-com:serviceId:WLANConfiguration"
+	wifiRemediation   = "enable the WLANConfiguration TR-064 service or use supported firmware"
+)
+
+func (c *Client) WiFi(ctx context.Context) ([]Radio, error) {
+	if err := c.discover(ctx); err != nil {
+		return nil, wifiError(err)
+	}
+	services := make([]service, 0)
+	ids := make(map[uint64]bool)
+	for _, svc := range c.allServices {
+		if !strings.HasPrefix(svc.Type, wlanServicePrefix) {
+			continue
+		}
+		suffix := strings.TrimPrefix(svc.ID, wlanIDPrefix)
+		id, err := strconv.ParseUint(suffix, 10, 64)
+		if !strings.HasPrefix(svc.ID, wlanIDPrefix) || err != nil || strconv.FormatUint(id, 10) != suffix || ids[id] {
+			return nil, &Error{Kind: "protocol", Operation: "wifi", Message: "router advertised an invalid or duplicate WLAN service identifier"}
+		}
+		ids[id] = true
+		services = append(services, svc)
+	}
+	if len(services) == 0 {
+		return nil, &Error{Kind: "unsupported", Operation: "wifi", Message: "router does not advertise WLANConfiguration; " + wifiRemediation}
+	}
+	sort.Slice(services, func(i, j int) bool {
+		// The identifier suffix is a validated canonical number, so its numeric
+		// value can be recovered here.
+		left, _ := strconv.ParseUint(strings.TrimPrefix(services[i].ID, wlanIDPrefix), 10, 64)
+		right, _ := strconv.ParseUint(strings.TrimPrefix(services[j].ID, wlanIDPrefix), 10, 64)
+		return left < right
+	})
+	radios := make([]Radio, 0, len(services))
+	for _, svc := range services {
+		// GetInfo returns the SSID and the BSSID of the beacon. The SSID is
+		// public beacon data and is reported; the BSSID and every other
+		// returned field are discarded here and never leave the client.
+		info, err := c.actionOnService(ctx, svc, "GetInfo")
+		if err != nil {
+			return nil, wifiError(err)
+		}
+		enabled := false
+		switch strings.TrimSpace(info.Enable) {
+		case "0":
+		case "1":
+			enabled = true
+		default:
+			return nil, &Error{Kind: "protocol", Operation: "wifi", Message: "router returned an invalid Wi-Fi enable state"}
+		}
+		band := "unknown"
+		switch info.FrequencyBand {
+		case "2400", "5000", "6000":
+			band = info.FrequencyBand
+		}
+		standard := "unknown"
+		switch info.Standard {
+		case "b", "g", "n", "ac", "ax", "be":
+			standard = info.Standard
+		}
+		channel, err := c.actionOnService(ctx, svc, "GetChannelInfo")
+		if err != nil {
+			return nil, wifiError(err)
+		}
+		number, err := strconv.ParseUint(strings.TrimSpace(channel.Channel), 10, 8)
+		if err != nil {
+			return nil, &Error{Kind: "protocol", Operation: "wifi", Message: "router returned an invalid Wi-Fi channel"}
+		}
+		associations, err := c.actionOnService(ctx, svc, "GetTotalAssociations")
+		if err != nil {
+			return nil, wifiError(err)
+		}
+		count, err := strconv.ParseUint(strings.TrimSpace(associations.TotalAssociations), 10, 16)
+		if err != nil {
+			return nil, &Error{Kind: "protocol", Operation: "wifi", Message: "router returned an invalid Wi-Fi association count"}
+		}
+		security, err := c.actionOnService(ctx, svc, "GetBeaconType")
+		if err != nil {
+			return nil, wifiError(err)
+		}
+		if security.BeaconType == "" {
+			return nil, &Error{Kind: "protocol", Operation: "wifi", Message: "router omitted the Wi-Fi security mode"}
+		}
+		mode := "unknown"
+		switch security.BeaconType {
+		case "None", "Basic", "WPA", "11i", "WPAand11i", "WPA3", "11iandWPA3", "OWE", "OWETrans":
+			mode = security.BeaconType
+		}
+		radios = append(radios, Radio{svc.ID, info.SSID, enabled, number, band, standard, count, mode})
+	}
+	return radios, nil
+}
+
+func wifiError(err error) *Error {
+	result := &Error{Kind: "protocol", Operation: "wifi", Message: "Wi-Fi inspection failed"}
+	var protocolErr *Error
+	if errors.As(err, &protocolErr) {
+		result.Kind = protocolErr.Kind
+		result.StatusCode = protocolErr.StatusCode
+	}
+	return result
+}
+
 const maxHostEntries = 4096
 
 func (c *Client) Devices(ctx context.Context) ([]Device, error) {
@@ -457,6 +592,7 @@ func (c *Client) discover(ctx context.Context) error {
 	if err := xml.Unmarshal(body, &desc); err != nil {
 		return &Error{Kind: "protocol", Operation: "discover", Message: "invalid TR-064 device description"}
 	}
+	c.allServices = desc.Services
 	c.services = make(map[string]service, len(desc.Services))
 	for _, svc := range desc.Services {
 		c.services[svc.Type] = svc
@@ -492,6 +628,10 @@ func (c *Client) action(ctx context.Context, prefix, action string, arguments ..
 	if svc.Type == "" {
 		return soapValues{}, &Error{Kind: "unsupported", Operation: action, Message: "router does not advertise the required TR-064 service"}
 	}
+	return c.actionOnService(ctx, svc, action, arguments...)
+}
+
+func (c *Client) actionOnService(ctx context.Context, svc service, action string, arguments ...soapArgument) (soapValues, error) {
 	var argumentXML strings.Builder
 	for _, argument := range arguments {
 		argumentXML.WriteString("<" + argument.Name + ">")
@@ -509,7 +649,7 @@ func (c *Client) action(ctx context.Context, prefix, action string, arguments ..
 	}
 	var values soapValues
 	if err := xml.Unmarshal(body, &values); err != nil {
-		return values, &Error{Kind: "protocol", Operation: action, Message: "invalid SOAP response"}
+		return values, &Error{Kind: "protocol", Operation: action, StatusCode: status, Message: "invalid SOAP response"}
 	}
 	if status >= 400 || values.FaultCode != "" {
 		message := values.FaultDescription

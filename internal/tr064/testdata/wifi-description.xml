@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<root xmlns="urn:dslforum-org:device-1-0">
+  <device><serviceList>
+    <service><serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType><controlURL>/device</controlURL></service>
+    <service><serviceType>urn:dslforum-org:service:WLANConfiguration:1</serviceType><serviceId>urn:WLANConfiguration-com:serviceId:WLANConfiguration10</serviceId><controlURL>/wifi10</controlURL></service>
+  </serviceList><deviceList><device><serviceList>
+    <service><serviceType>urn:dslforum-org:service:WLANConfiguration:1</serviceType><serviceId>urn:WLANConfiguration-com:serviceId:WLANConfiguration2</serviceId><controlURL>/wifi2</controlURL></service>
+    <service><serviceType>urn:dslforum-org:service:WLANConfiguration:1</serviceType><serviceId>urn:WLANConfiguration-com:serviceId:WLANConfiguration1</serviceId><controlURL>/wifi1</controlURL></service>
+  </serviceList></device></deviceList></device>
+</root>
