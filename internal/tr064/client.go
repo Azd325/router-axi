@@ -376,7 +376,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 	report.Capabilities.Leases = hostsCapability
 	report.Capabilities.WiFi = c.advertisedCapability([]string{wlanServicePrefix}, wifiRemediation)
 	report.Capabilities.Forwards = c.advertisedCapability(wanMappingPrefixes, forwardsRemediation)
-	report.Capabilities.Reboot = c.advertisedCapability([]string{deviceConfigPrefix}, rebootRemediation)
+	report.Capabilities.Reboot = c.rebootCapability()
 	if report.Capabilities.Status.State == "advertised" && report.Capabilities.WAN.State == "advertised" && report.Capabilities.Traffic.State == "advertised" {
 		report.Capabilities.Overview = DoctorCheck{State: "advertised"}
 	} else {
@@ -771,7 +771,7 @@ func (c *Client) Reboot(ctx context.Context, confirm bool) (RebootResult, error)
 	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
 	req.Header.Set("SOAPAction", `"`+target.Type+`#Reboot"`)
 	if challenge != "" {
-		auth, err := digestAuthorization(challenge, http.MethodPost, control.RequestURI(), client.username, client.password)
+		auth, err := digestAuthorization(challenge, http.MethodPost, control.RequestURI(), client.username, client.password, 2)
 		if err != nil {
 			return RebootResult{}, rebootPreflightError(&Error{Kind: "auth"})
 		}
@@ -794,6 +794,18 @@ func (c *Client) Reboot(ctx context.Context, confirm bool) (RebootResult, error)
 	}
 	result.Accepted = true
 	return result, nil
+}
+
+func (c *Client) rebootCapability() DoctorCheck {
+	if _, err := c.rebootService(deviceConfigPrefix); err != nil {
+		return DoctorCheck{State: "unsupported", Remediation: rebootRemediation}
+	}
+	if c.username != "" {
+		if _, err := c.rebootService("urn:dslforum-org:service:DeviceInfo:"); err != nil {
+			return DoctorCheck{State: "unsupported", Remediation: rebootRemediation}
+		}
+	}
+	return DoctorCheck{State: "advertised"}
 }
 
 func (c *Client) rebootService(prefix string) (service, error) {
@@ -1459,7 +1471,7 @@ func (c *Client) request(ctx context.Context, method string, u *url.URL, body []
 	if resp.StatusCode == http.StatusUnauthorized && c.username != "" {
 		challenge := resp.Header.Get("WWW-Authenticate")
 		_ = resp.Body.Close()
-		auth, authErr := digestAuthorization(challenge, method, u.RequestURI(), c.username, c.password)
+		auth, authErr := digestAuthorization(challenge, method, u.RequestURI(), c.username, c.password, 1)
 		if authErr != nil {
 			return nil, 0, &Error{Kind: "auth", Operation: method + " " + u.Path, Message: authErr.Error()}
 		}
@@ -1514,7 +1526,7 @@ func callDirection(kind string) string {
 	}
 }
 
-func digestAuthorization(challenge, method, uri, username, password string) (string, error) {
+func digestAuthorization(challenge, method, uri, username, password string, nonceCount int) (string, error) {
 	if !strings.HasPrefix(strings.ToLower(challenge), "digest ") {
 		return "", errors.New("router did not offer HTTP Digest authentication")
 	}
@@ -1536,8 +1548,9 @@ func digestAuthorization(challenge, method, uri, username, password string) (str
 	cnonce := hex.EncodeToString(cnonceBytes)
 	ha1 := md5hex(username + ":" + realm + ":" + password)
 	ha2 := md5hex(method + ":" + uri)
-	response := md5hex(ha1 + ":" + nonce + ":00000001:" + cnonce + ":auth:" + ha2)
-	return fmt.Sprintf(`Digest username=%q, realm=%q, nonce=%q, uri=%q, response=%q, algorithm=MD5, qop=auth, nc=00000001, cnonce=%q`, username, realm, nonce, uri, response, cnonce), nil
+	nc := fmt.Sprintf("%08x", nonceCount)
+	response := md5hex(ha1 + ":" + nonce + ":" + nc + ":" + cnonce + ":auth:" + ha2)
+	return fmt.Sprintf(`Digest username=%q, realm=%q, nonce=%q, uri=%q, response=%q, algorithm=MD5, qop=auth, nc=%s, cnonce=%q`, username, realm, nonce, uri, response, nc, cnonce), nil
 }
 
 func md5hex(value string) string { sum := md5.Sum([]byte(value)); return hex.EncodeToString(sum[:]) }

@@ -1969,8 +1969,12 @@ func rebootFixtureClient(t *testing.T, script []rebootExchange, credentials bool
 				key, value, _ := strings.Cut(strings.TrimSpace(part), "=")
 				params[key] = strings.Trim(value, `"`)
 			}
-			want := md5hex(md5hex("private-user:synthetic:private-password") + ":synthetic-nonce:00000001:" + params["cnonce"] + ":auth:" + md5hex(method+":"+exchange.path))
-			if !strings.HasPrefix(auth, "Digest ") || params["uri"] != exchange.path || params["response"] != want || params["cnonce"] == "" {
+			nc := "00000001"
+			if exchange.action == "Reboot" {
+				nc = "00000002"
+			}
+			want := md5hex(md5hex("private-user:synthetic:private-password") + ":synthetic-nonce:" + nc + ":" + params["cnonce"] + ":auth:" + md5hex(method+":"+exchange.path))
+			if !strings.HasPrefix(auth, "Digest ") || params["uri"] != exchange.path || params["nc"] != nc || params["response"] != want || params["cnonce"] == "" {
 				t.Error("invalid digest authorization for request URI")
 			}
 		} else if auth != "" {
@@ -2257,13 +2261,17 @@ func TestRebootDigestRejectionNeverRetriesMutation(t *testing.T) {
 }
 
 func TestDoctorAdvertisesRebootWithoutExtraReads(t *testing.T) {
-	for _, advertised := range []bool{false, true} {
-		description := rebootDescriptionFixture
-		want := DoctorCheck{State: "advertised"}
-		if !advertised {
-			description = strings.Replace(description, rebootServiceFixture, "", 1)
-			want = DoctorCheck{State: "unsupported", Remediation: rebootRemediation}
-		}
+	unsupported := DoctorCheck{State: "unsupported", Remediation: rebootRemediation}
+	for _, tc := range []struct {
+		description string
+		want        DoctorCheck
+	}{
+		{rebootDescriptionFixture, DoctorCheck{State: "advertised"}},
+		{strings.Replace(rebootDescriptionFixture, rebootServiceFixture, "", 1), unsupported},
+		{strings.Replace(rebootDescriptionFixture, "DeviceConfig:1", "DeviceConfig:2", 1), unsupported},
+		{strings.Replace(rebootDescriptionFixture, rebootServiceFixture, rebootServiceFixture+rebootServiceFixture, 1), unsupported},
+	} {
+		description, want := tc.description, tc.want
 		client, posts := rebootFixtureClient(t, []rebootExchange{{path: descriptionPath, body: description}, {path: "/device", action: "GetInfo", body: deviceFixture}}, false)
 		report, err := client.Doctor(t.Context())
 		if err != nil || report.Capabilities.Reboot != want || posts.Load() != 0 {
