@@ -21,6 +21,27 @@ type manyCallsReader struct{ fakeReader }
 type manyDevicesReader struct{ fakeReader }
 type emptyDevicesReader struct{ fakeReader }
 type unsupportedDevicesReader struct{ fakeReader }
+type manyLeasesReader struct{ fakeReader }
+type emptyLeasesReader struct{ fakeReader }
+type unsupportedLeasesReader struct{ fakeReader }
+
+func (manyLeasesReader) Leases(context.Context) ([]tr064.Lease, error) {
+	leases := make([]tr064.Lease, 23)
+	for i := range leases {
+		remaining := int64(3600)
+		leases[i] = tr064.Lease{IPAddress: fmt.Sprintf("192.0.2.%d", i+1), MACAddress: fmt.Sprintf("02:00:00:00:00:%02x", i+1), AddressSource: "DHCP", LeaseTimeRemaining: &remaining, InterfaceType: "802.11", Active: i == 0}
+	}
+	return leases, nil
+}
+
+func (emptyLeasesReader) Leases(context.Context) ([]tr064.Lease, error) {
+	return nil, nil
+}
+
+func (unsupportedLeasesReader) Leases(context.Context) ([]tr064.Lease, error) {
+	return nil, &tr064.Error{Kind: "unsupported", Operation: "GetHostNumberOfEntries", Message: "router does not advertise the required TR-064 service"}
+}
+
 type forwardsReader struct {
 	fakeReader
 	forwards []tr064.Forward
@@ -60,7 +81,7 @@ func (f fakeReader) Doctor(context.Context) (tr064.Doctor, error) {
 		Endpoint: "http://router.test:49000", Reachability: tr064.DoctorCheck{State: "reachable"},
 		Protocol: tr064.DoctorCheck{State: "available"}, Authentication: tr064.DoctorCheck{State: "authenticated"},
 		Model: "FRITZ!Box 7590 AX", Firmware: "8.02",
-		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Calls: advertised, Devices: advertised, WiFi: advertised, Forwards: advertised},
+		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Calls: advertised, Devices: advertised, Leases: advertised, WiFi: advertised, Forwards: advertised},
 	}, f.err
 }
 func (f fakeReader) Status(context.Context) (tr064.Status, error) {
@@ -89,6 +110,11 @@ func (f fakeReader) Calls(context.Context) ([]tr064.Call, error) {
 }
 func (f fakeReader) Devices(context.Context) ([]tr064.Device, error) {
 	return []tr064.Device{{Name: "sanitized-device", IPAddress: "192.0.2.10", MACAddress: "02:00:00:00:00:10", InterfaceType: "Ethernet", Active: true}}, f.err
+}
+
+func (f fakeReader) Leases(context.Context) ([]tr064.Lease, error) {
+	remaining := int64(3600)
+	return []tr064.Lease{{Name: "sanitized-static-device", IPAddress: "192.0.2.10", MACAddress: "02:00:00:00:00:10", AddressSource: "Static", InterfaceType: "Ethernet", Active: true}, {IPAddress: "192.0.2.20", MACAddress: "02:00:00:00:00:20", AddressSource: "DHCP", LeaseTimeRemaining: &remaining, InterfaceType: "802.11"}}, f.err
 }
 
 func (f fakeReader) WiFi(context.Context) ([]tr064.Radio, error) {
@@ -129,6 +155,7 @@ func TestCompactCommands(t *testing.T) {
 		{"traffic", "observed_at: 2025-03-08T09:11:12Z"},
 		{"calls", "calls[1]{id,direction,remote,name,date,duration}:"},
 		{"devices", "devices[1]{name,ip_address,mac_address,interface_type,active}:"},
+		{"leases", "leases[2]{name,ip_address,mac_address,address_source,lease_time_remaining,interface_type,active}:"},
 		{"wifi", "radios[1]{service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode}:"},
 		{"forwards", "forwards[1]{enabled,protocol,external_port,internal_client,internal_port,description,remote_host,lease_duration}:"},
 	}
@@ -151,7 +178,7 @@ func TestNoCommandRunsStatus(t *testing.T) {
 
 func TestDoctorJSONIsDeterministic(t *testing.T) {
 	code, stdout, stderr := runTest(t, "doctor", "--json")
-	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"}}}` + "\n"
+	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"leases":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"}}}` + "\n"
 	if code != ExitOK || stdout != want || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -623,5 +650,172 @@ func TestFactoryFailureIsConfigurationError(t *testing.T) {
 		if code != ExitUsage || !strings.Contains(stderr.String(), "invalid_configuration") || !strings.Contains(stderr.String(), "bad address") {
 			t.Fatalf("command=%s code=%d stderr=%q", command, code, stderr.String())
 		}
+	}
+}
+
+func TestLeasesOutputContract(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"leases"}, "leases[2]{name,ip_address,mac_address,address_source,lease_time_remaining,interface_type,active}:\n  sanitized-static-device,192.0.2.10,02:00:00:00:00:10,Static,unknown,Ethernet,true\n  \"\",192.0.2.20,02:00:00:00:00:20,DHCP,3600,802.11,false\n"},
+		{[]string{"leases", "--json"}, `{"leases":[{"name":"sanitized-static-device","ip_address":"192.0.2.10","mac_address":"02:00:00:00:00:10","address_source":"Static","interface_type":"Ethernet","active":true},{"ip_address":"192.0.2.20","mac_address":"02:00:00:00:00:20","address_source":"DHCP","lease_time_remaining":3600,"interface_type":"802.11","active":false}],"total":2,"omitted":0}` + "\n"},
+	} {
+		var stdout, stderr bytes.Buffer
+		code := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" }).Run(t.Context(), test.args, &stdout, &stderr)
+		if code != ExitOK || stdout.String() != test.want || stderr.Len() != 0 {
+			t.Fatalf("args=%q code=%d stdout=%q stderr=%q", test.args, code, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestLeasesAreBounded(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return manyLeasesReader{}, nil }, func(string) string { return "" })
+	for _, test := range []struct {
+		args     []string
+		contains []string
+		absent   string
+	}{
+		{[]string{"leases"}, []string{"leases[20]", "omitted: 3", "leases --all"}, "leases[23]"},
+		{[]string{"leases", "--all"}, []string{"leases[23]"}, "omitted:"},
+	} {
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), test.args, &stdout, &stderr)
+		for _, want := range test.contains {
+			if code != ExitOK || !strings.Contains(stdout.String(), want) {
+				t.Fatalf("args=%q want=%q stdout=%q", test.args, want, stdout.String())
+			}
+		}
+		if strings.Contains(stdout.String(), test.absent) {
+			t.Fatalf("args=%q found %q", test.args, test.absent)
+		}
+	}
+}
+
+func TestLeasesJSONBounds(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return manyLeasesReader{}, nil }, func(string) string { return "" })
+	for _, all := range []bool{false, true} {
+		args := []string{"leases", "--json"}
+		count := 20
+		if all {
+			args = append(args, "--all")
+			count = 23
+		}
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), args, &stdout, &stderr)
+		var result leaseResult
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if code != ExitOK || stderr.Len() != 0 || len(result.Leases) != count || result.Total != 23 || result.Omitted != 23-count {
+			t.Fatal("JSON list bound or aggregate mismatch")
+		}
+	}
+}
+
+func TestLeasesErrorsDiscardPartialResults(t *testing.T) {
+	for _, jsonOutput := range []bool{false, true} {
+		for _, test := range []struct {
+			kind string
+			exit int
+		}{{"unsupported", ExitUnsupported}, {"auth", ExitAuth}, {"network", ExitNetwork}, {"protocol", ExitRouter}, {"router", ExitRouter}} {
+			application := New(func(Config) (Reader, error) {
+				return fakeReader{err: &tr064.Error{Kind: test.kind, Message: "lease observation failed"}}, nil
+			}, func(string) string { return "" })
+			args := []string{"leases"}
+			if jsonOutput {
+				args = append(args, "--json")
+			}
+			var stdout, stderr bytes.Buffer
+			code := application.Run(t.Context(), args, &stdout, &stderr)
+			if code != test.exit || stdout.Len() != 0 || stderr.Len() == 0 {
+				t.Fatalf("kind=%s code=%d partial output=%q", test.kind, code, stdout.String())
+			}
+		}
+	}
+}
+
+func TestLeasesEmptyOutputIsDefinitive(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return emptyLeasesReader{}, nil }, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"leases"}, &stdout, &stderr)
+	if code != ExitOK || stdout.String() != "leases[0]: no host observations found\n" || stderr.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	code = application.Run(t.Context(), []string{"leases", "--json"}, &stdout, &stderr)
+	if code != ExitOK || stdout.String() != "{\"leases\":[],\"total\":0,\"omitted\":0}\n" || stderr.Len() != 0 {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestLeasesCapabilityAbsenceIsExplicit(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return unsupportedLeasesReader{}, nil }, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"leases"}, &stdout, &stderr)
+	if code != ExitUnsupported || stdout.Len() != 0 || !strings.Contains(stderr.String(), "code: unsupported_capability") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestLeasesClientOutputBoundary(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		for _, jsonOutput := range []bool{false, true} {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/tr64desc.xml" {
+					_, _ = io.WriteString(w, `<root><device><serviceList><service><serviceType>urn:dslforum-org:service:Hosts:1</serviceType><controlURL>/hosts</controlURL></service></serviceList></device></root>`)
+					return
+				}
+				if r.Method != http.MethodPost || r.URL.Path != "/hosts" {
+					t.Error("unexpected lease observation request")
+				}
+				switch r.Header.Get("SOAPAction") {
+				case `"urn:dslforum-org:service:Hosts:1#GetHostNumberOfEntries"`:
+					_, _ = io.WriteString(w, `<Envelope><NewHostNumberOfEntries>2</NewHostNumberOfEntries></Envelope>`)
+				case `"urn:dslforum-org:service:Hosts:1#GetGenericHostEntry"`:
+					body, _ := io.ReadAll(r.Body)
+					if fail && strings.Contains(string(body), "<NewIndex>1</NewIndex>") {
+						w.WriteHeader(http.StatusInternalServerError)
+						_, _ = io.WriteString(w, `<Fault><errorCode>501</errorCode><errorDescription>synthetic-sensitive-fault</errorDescription></Fault>`)
+						return
+					}
+					_, _ = io.WriteString(w, `<Envelope><NewHostName>synthetic, "client"</NewHostName><NewIPAddress>192.0.2.10</NewIPAddress><NewMACAddress>02:00:00:00:00:10</NewMACAddress><NewAddressSource>DHCP</NewAddressSource><NewLeaseTimeRemaining>60</NewLeaseTimeRemaining><NewInterfaceType>Ethernet</NewInterfaceType><NewActive>1</NewActive><NewSerialNumber>synthetic-sensitive-serial</NewSerialNumber></Envelope>`)
+				default:
+					t.Error("forbidden lease observation action")
+					w.WriteHeader(http.StatusBadRequest)
+				}
+			}))
+			application := New(func(Config) (Reader, error) { return tr064.New(server.URL, "", "", server.Client()) }, func(string) string { return "" })
+			args := []string{"leases"}
+			if jsonOutput {
+				args = append(args, "--json")
+			}
+			var stdout, stderr bytes.Buffer
+			code := application.Run(t.Context(), args, &stdout, &stderr)
+			server.Close()
+			if strings.Contains(stdout.String()+stderr.String(), "synthetic-sensitive") || strings.Contains(stdout.String()+stderr.String(), server.URL) {
+				t.Fatal("lease diagnostics leaked discarded response data")
+			}
+			if fail {
+				if code != ExitRouter || stdout.Len() != 0 || stderr.Len() == 0 {
+					t.Fatal("failed host enumeration produced partial success")
+				}
+			} else if code != ExitOK || stderr.Len() != 0 || !strings.Contains(stdout.String(), "synthetic, \\\"client\\\"") || !strings.Contains(stdout.String(), "192.0.2.10") || !strings.Contains(stdout.String(), "02:00:00:00:00:10") {
+				t.Fatalf("successful observation did not expose escaped operational fields: %s", stdout.String())
+			}
+		}
+	}
+}
+
+func TestLeasesFlagsAndHelp(t *testing.T) {
+	for _, flag := range []string{"--reveal", "--ssid"} {
+		code, stdout, _ := runTest(t, "leases", flag)
+		if code != ExitUsage || stdout != "" {
+			t.Fatalf("flag=%s code=%d stdout=%q", flag, code, stdout)
+		}
+	}
+	code, stdout, stderr := runTest(t, "leases", "--help")
+	if code != ExitOK || stdout != "usage: router-axi leases [--host ADDRESS] [--json] [--all]\n" || stderr != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }

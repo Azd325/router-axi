@@ -122,6 +122,36 @@ func TestLiveForwards(t *testing.T) {
 	}
 }
 
+func TestLiveLeases(t *testing.T) {
+	settings, enabled := liveTestConfig(os.Getenv)
+	if !enabled {
+		t.Skip("live router tests require explicit local opt-in and complete configuration")
+	}
+	client, err := New(settings.host, settings.username, settings.password, nil)
+	if err != nil {
+		t.Fatal("live router configuration was rejected")
+	}
+	leases, err := client.Leases(t.Context())
+	if err != nil {
+		var protocolErr *Error
+		if errors.As(err, &protocolErr) && protocolErr.Kind == "unsupported" && leases == nil {
+			t.Skip("documented Hosts observation is unsupported; hardware lease metadata was not validated")
+		}
+		t.Fatal("lease observation live read failed")
+	}
+	if leases == nil || len(leases) > maxHostEntries {
+		t.Fatal("lease observation returned an invalid list")
+	}
+	for _, lease := range leases {
+		if lease.AddressSource != "DHCP" && lease.AddressSource != "Static" && lease.AddressSource != "unknown" {
+			t.Fatal("lease observation returned an invalid address source")
+		}
+		if lease.LeaseTimeRemaining != nil && (*lease.LeaseTimeRemaining <= 0 || *lease.LeaseTimeRemaining >= 2147483647) {
+			t.Fatal("lease observation returned a non-finite or invalid remaining time")
+		}
+	}
+}
+
 func TestLiveReadOnlyCommands(t *testing.T) {
 	settings, enabled := liveTestConfig(os.Getenv)
 	if !enabled {
@@ -139,7 +169,7 @@ func TestLiveReadOnlyCommands(t *testing.T) {
 	if doctor.Reachability.State != "reachable" || doctor.Protocol.State != "available" || doctor.Authentication.State != "authenticated" || doctor.Model == "" || doctor.Firmware == "" {
 		t.Fatal("doctor live read returned incomplete checks")
 	}
-	if doctor.Capabilities.Status.State != "advertised" || doctor.Capabilities.Overview.State != "advertised" || doctor.Capabilities.WAN.State != "advertised" || doctor.Capabilities.Traffic.State != "advertised" || doctor.Capabilities.Calls.State != "advertised" || doctor.Capabilities.Devices.State != "advertised" {
+	if doctor.Capabilities.Status.State != "advertised" || doctor.Capabilities.Overview.State != "advertised" || doctor.Capabilities.WAN.State != "advertised" || doctor.Capabilities.Traffic.State != "advertised" || doctor.Capabilities.Calls.State != "advertised" || doctor.Capabilities.Devices.State != "advertised" || doctor.Capabilities.Leases.State != "advertised" {
 		t.Fatal("doctor live read returned an unexpected capability state")
 	}
 	if _, err := client.Status(t.Context()); err != nil {

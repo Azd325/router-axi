@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The read-only MVP provides device information, WAN status, traffic statistics, call-list access, connected-device, Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces.
+The read-only MVP provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces.
 
 ## Design constraints
 
@@ -53,6 +53,9 @@ router-axi traffic
 router-axi calls
 router-axi devices
 router-axi devices --json
+router-axi leases
+router-axi leases --json
+router-axi leases --all
 router-axi wifi
 router-axi wifi --json
 router-axi forwards
@@ -72,7 +75,9 @@ description once and, when `DeviceInfo` is advertised, invokes only
 `DeviceInfo:GetInfo` to verify authentication and obtain model and firmware.
 It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
-`wan`, `traffic`, `calls`, `devices`, `wifi`, and `forwards`. For forwards,
+`wan`, `traffic`, `calls`, `devices`, `leases`, `wifi`, and `forwards`. For leases,
+Hosts advertisement is a candidate capability, not proof of meaningful lease
+metadata; doctor does not read the host table. For forwards,
 WANIPConnection or WANPPPConnection service advertisement is only a candidate
 capability: doctor does not invoke Layer3Forwarding, fetch SCPDs, or verify
 enumeration actions. It does
@@ -105,6 +110,72 @@ faults, malformed or implausibly large host counts, and malformed active states
 remain protocol errors with exit `6`. Names, addresses, and interface types can be empty when the router
 does not know them. `interface_type` is the service's documented interface
 classification, not a physical switch port or inferred connection detail.
+
+### Observed lease metadata
+
+`leases` requires the current checkout; it is not included in v0.1.0.
+It reports **observations from the Hosts table**, including inactive remembered
+hosts, not configured DHCP reservations or a DNS record inventory. It shares
+`devices`' table reader without changing that command's behavior.
+
+Only documented `Hosts:GetHostNumberOfEntries` and zero-based
+`GetGenericHostEntry(NewIndex)` are called. The entry action returns
+`NewHostName`, `NewIPAddress`, `NewMACAddress`, `NewAddressSource`,
+`NewLeaseTimeRemaining`, `NewInterfaceType`, and `NewActive`:
+[FRITZ! Hosts v31, §§2.1, 2.3, 3](https://fritz.support/resources/TR-064_Hosts.pdf).
+[LANHostConfigManagement v9](https://fritz.support/resources/TR-064_LAN_Host_Config_Management.pdf)
+provides DHCP server configuration, not a per-client reservation table.
+Neither that service nor AVM host-list URLs are needed here. No browser
+scraping, undocumented endpoints, DNS lookups, scanning, or mutations occur.
+
+Compact columns are
+`leases[N]{name,ip_address,mac_address,address_source,lease_time_remaining,interface_type,active}`.
+JSON fields follow the same order, omitting absent names and remaining times:
+
+```json
+{"leases":[{"name":"synthetic-client","ip_address":"192.0.2.10","mac_address":"02:00:00:00:00:10","address_source":"DHCP","lease_time_remaining":3600,"interface_type":"Ethernet","active":true}],"total":1,"omitted":0}
+```
+
+`address_source` preserves `DHCP` and `Static`; absent or unrecognized sources
+become `unknown`. **Static is the host entry's address source, not evidence of a
+configured static DHCP reservation.** DHCP does not prove that an assignment
+is unreserved. `active` is host connectivity, not lease validity. Names,
+addresses, and interface types may be empty; the interface is the protocol's
+classification, not a physical port.
+
+`lease_time_remaining` is seconds only when the router supplies a meaningful
+positive finite value. The documented type is signed 32-bit (`i4`). The CLI
+conservatively exposes only `1–2147483646`; absent/empty values, zero, -1,
+and the maximum-value forms `2147483647` and `4294967295` are omitted in JSON
+and shown as `unknown` in compact output. This normalization does not assign
+vendor-specific meaning to those values: none proves an expired lease,
+permanent reservation, or countdown. Other malformed or out-of-range values
+fail explicitly. Firmware returning no useful lease metadata still yields
+honest host observations rather than fabricated leases.
+
+Both formats show 20 entries by default, with `--all` for the complete inspected
+list. JSON always includes `total` and `omitted`; compact output reports omitted
+entries and suggests `leases --all`. Empty output is
+`leases[0]: no host observations found` or
+`{"leases":[],"total":0,"omitted":0}`. Missing Hosts support is unsupported,
+never a successful empty result. The safety limit is 4096 host entries even
+with `--all`.
+
+Reads are atomic only at the output boundary: all indexed reads finish before
+stdout is emitted, including those beyond the display bound. Any read or
+validation failure discards the entire list. There are no partial-success
+lists or retries. Reads are sequential, using one initial count; this is not a
+router transaction. Concurrent additions, replacements, or reordering may go
+undetected, and remembered data may already be stale.
+
+Missing services or invalid-action faults exit `5` with service/firmware
+remediation; authentication exits `3`, network failures `4`, malformed values
+and other router faults `6`. Errors discard router fault text, codes, URLs,
+and response bodies. Lease contents are local operational data shown only to
+the invoking user, without a reveal flag: never paste real mappings, hostnames,
+MACs, private addresses, or live responses into logs, issues, fixtures, or
+commits. Tests use synthetic data only. Compatibility is fixture-backed, not
+inferred from model names; these actions cannot establish reservation semantics.
 
 ### Wi-Fi inspection
 
@@ -287,8 +358,8 @@ active `WANIPConnection`/`WANPPPConnection`:
 `GetPortMappingNumberOfEntries` and `GetGenericPortMappingEntry(NewPortMappingIndex)`
 when advertised in their SCPDs. Wi-Fi inspection does not call `GetSecurityKeys` or any other
 key- or client-returning WLAN action.
-Call-list URLs are accepted only from the same router origin. Device inspection
-does not use AVM host-list URLs, browser scraping, or network scanning.
+Call-list URLs are accepted only from the same router origin. Device and lease inspection
+do not use AVM host-list URLs, browser scraping, or network scanning.
 
 ## Development
 
@@ -309,13 +380,16 @@ command line:
 export ROUTER_AXI_HOST='fritz.box'
 read -rs 'ROUTER_AXI_USERNAME?Router username: '; export ROUTER_AXI_USERNAME; printf '\n'
 read -rs 'ROUTER_AXI_PASSWORD?Router password: '; export ROUTER_AXI_PASSWORD; printf '\n'
-ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^(TestLiveReadOnlyCommands|TestLiveWiFi|TestLiveForwards)$' -count=1
+ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^(TestLiveReadOnlyCommands|TestLiveWiFi|TestLiveForwards|TestLiveLeases)$' -count=1
 unset ROUTER_AXI_PASSWORD ROUTER_AXI_USERNAME ROUTER_AXI_HOST
 ```
 
 Do not add `-v`: the test deliberately reports only command-level failures and
 never logs responses, credentials, serial numbers, phone, device, radio, or
-network data, mapping contents, or router addresses. The forwards live test
+network data, mapping contents, lease observations, or router addresses.
+`TestLiveLeases` checks only the observation schema and finite-time bounds;
+missing capability is skipped explicitly. It neither creates reservations nor
+claims to validate reservation semantics or countdown accuracy. The forwards live test
 resolves the active WAN service and uses only the two enumeration actions; it
 does not create test mappings;
 unsupported enumeration is skipped explicitly, not counted as hardware mapping
