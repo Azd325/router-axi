@@ -170,8 +170,8 @@ undetected, and remembered data may already be stale.
 
 Missing services or invalid-action faults exit `5` with service/firmware
 remediation; authentication exits `3`, network failures `4`, malformed values
-and other router faults `6`. Errors discard router fault text, codes, URLs,
-and response bodies. Lease contents are local operational data shown only to
+and other router faults `6`. Redirects are refused. Errors discard router
+fault text, codes, URLs, and response bodies. Lease contents are local operational data shown only to
 the invoking user, without a reveal flag: never paste real mappings, hostnames,
 MACs, private addresses, or live responses into logs, issues, fixtures, or
 commits. Tests use synthetic data only. Compatibility is fixture-backed, not
