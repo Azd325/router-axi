@@ -1838,3 +1838,231 @@ func TestCallsRejectsCrossOriginURL(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+type mutationExchange struct {
+	action  string
+	body    string
+	status  int
+	payload string
+}
+
+// mutationFixtureClient serves a two-instance WLAN description plus scripted
+// GetInfo/SetEnable exchanges. Exchanges are consumed in order per control
+// path; the returned channel records every SOAP action that was invoked.
+func mutationFixtureClient(t *testing.T, exchanges map[string][]mutationExchange) (*Client, <-chan string) {
+	t.Helper()
+	requests := make(chan string, 100)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == descriptionPath {
+			_, _ = w.Write([]byte(wifiDescriptionFixture))
+			return
+		}
+		action := strings.Trim(r.Header.Get("SOAPAction"), `"`)
+		if index := strings.LastIndex(action, "#"); index >= 0 {
+			action = action[index+1:]
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		select {
+		case requests <- r.URL.Path + "#" + action:
+		default:
+		}
+		queue := exchanges[r.URL.Path]
+		if len(queue) == 0 {
+			t.Errorf("unexpected request %s#%s", r.URL.Path, action)
+			http.Error(w, "forbidden action", http.StatusBadRequest)
+			return
+		}
+		next := queue[0]
+		exchanges[r.URL.Path] = queue[1:]
+		if next.action != action {
+			t.Errorf("expected action %s on %s, got %s", next.action, r.URL.Path, action)
+			http.Error(w, "unexpected action", http.StatusBadRequest)
+			return
+		}
+		if next.body != "" && !strings.Contains(string(body), next.body) {
+			t.Errorf("expected %s request body to contain %s, got %s", next.action, next.body, body)
+		}
+		w.Header().Set("Content-Type", "text/xml")
+		if next.status != 0 {
+			w.WriteHeader(next.status)
+		}
+		_, _ = w.Write([]byte(next.payload))
+	}))
+	t.Cleanup(server.Close)
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, requests
+}
+
+func enabledInfo(enable string) string {
+	return `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:GetInfoResponse xmlns:u="urn:dslforum-org:service:WLANConfiguration:1"><NewEnable>` + enable + `</NewEnable></u:GetInfoResponse></s:Body></s:Envelope>`
+}
+
+func mutationRequestCount(requests <-chan string) int {
+	count := 0
+	for {
+		select {
+		case <-requests:
+			count++
+		default:
+			return count
+		}
+	}
+}
+
+func TestWiFiMutationPreviewSendsOnlyGetInfo(t *testing.T) {
+	client, requests := mutationFixtureClient(t, map[string][]mutationExchange{
+		"/wifi1": {{action: "GetInfo", payload: enabledInfo("1")}},
+	})
+	result, err := client.WiFiMutation(t.Context(), 1, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Preview || result.Instance != "urn:WLANConfiguration-com:serviceId:WLANConfiguration1" || !result.Current || result.Intended {
+		t.Fatalf("preview = %#v", result)
+	}
+	if request := <-requests; request != "/wifi1#GetInfo" || mutationRequestCount(requests) != 0 {
+		t.Fatal("preview invoked an action other than GetInfo")
+	}
+}
+
+func TestWiFiMutationIsIdempotentWithoutSetEnable(t *testing.T) {
+	client, requests := mutationFixtureClient(t, map[string][]mutationExchange{
+		"/wifi1": {{action: "GetInfo", payload: enabledInfo("1")}},
+	})
+	result, err := client.WiFiMutation(t.Context(), 1, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Changed || !result.Previous || !result.Current || result.Instance == "" {
+		t.Fatalf("no-change result = %#v", result)
+	}
+	if request := <-requests; request != "/wifi1#GetInfo" || mutationRequestCount(requests) != 0 {
+		t.Fatal("idempotent change still sent SetEnable")
+	}
+}
+
+func TestWiFiMutationSendsSetEnableAndConfirms(t *testing.T) {
+	client, requests := mutationFixtureClient(t, map[string][]mutationExchange{
+		"/wifi1": {
+			{action: "GetInfo", payload: enabledInfo("0")},
+			{action: "SetEnable", body: "<NewEnable>1</NewEnable>", payload: `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:SetEnableResponse xmlns:u="urn:dslforum-org:service:WLANConfiguration:1"></u:SetEnableResponse></s:Body></s:Envelope>`},
+			{action: "GetInfo", payload: enabledInfo("1")},
+		},
+	})
+	result, err := client.WiFiMutation(t.Context(), 1, true, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Changed || result.Previous || !result.Current {
+		t.Fatalf("result = %#v", result)
+	}
+	actions := []string{<-requests, <-requests, <-requests}
+	if actions[0] != "/wifi1#GetInfo" || actions[1] != "/wifi1#SetEnable" || actions[2] != "/wifi1#GetInfo" {
+		t.Fatalf("actions = %v", actions)
+	}
+}
+
+func TestWiFiMutationRefusesUnconfirmedState(t *testing.T) {
+	client, _ := mutationFixtureClient(t, map[string][]mutationExchange{
+		"/wifi1": {
+			{action: "GetInfo", payload: enabledInfo("1")},
+			{action: "SetEnable", body: "<NewEnable>0</NewEnable>", payload: `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:SetEnableResponse xmlns:u="urn:dslforum-org:service:WLANConfiguration:1"></u:SetEnableResponse></s:Body></s:Envelope>`},
+			{action: "GetInfo", payload: enabledInfo("1")},
+		},
+	})
+	result, err := client.WiFiMutation(t.Context(), 1, false, true)
+	var protocolErr *Error
+	if result.Instance != "" || !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || !strings.Contains(protocolErr.Message, "did not confirm") {
+		t.Fatalf("result=%#v error=%#v", result, err)
+	}
+}
+
+func TestWiFiMutationSetEnableFaultIsUnsupported(t *testing.T) {
+	client, _ := mutationFixtureClient(t, map[string][]mutationExchange{
+		"/wifi1": {
+			{action: "GetInfo", payload: enabledInfo("1")},
+			{action: "SetEnable", status: http.StatusInternalServerError, payload: `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><errorCode>401</errorCode><errorDescription>Invalid Action</errorDescription></s:Fault></s:Body></s:Envelope>`},
+		},
+	})
+	result, err := client.WiFiMutation(t.Context(), 1, false, true)
+	var protocolErr *Error
+	if result.Instance != "" || !errors.As(err, &protocolErr) || protocolErr.Kind != "unsupported" || !strings.Contains(protocolErr.Message, "SetEnable") {
+		t.Fatalf("result=%#v error=%#v", result, err)
+	}
+}
+
+func TestWiFiMutationAuthAndRouterFaultsArePreserved(t *testing.T) {
+	for _, test := range []struct {
+		status int
+		kind   string
+	}{
+		{http.StatusUnauthorized, "auth"},
+		{http.StatusInternalServerError, "router"},
+	} {
+		client, _ := mutationFixtureClient(t, map[string][]mutationExchange{
+			"/wifi1": {{action: "GetInfo", status: test.status, payload: `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><errorCode>501</errorCode><errorDescription>private-fault</errorDescription></s:Fault></s:Body></s:Envelope>`}},
+		})
+		result, err := client.WiFiMutation(t.Context(), 1, true, true)
+		var protocolErr *Error
+		if result.Instance != "" || !errors.As(err, &protocolErr) || protocolErr.Kind != test.kind || strings.Contains(fmt.Sprintf("%#v", err), "private") {
+			t.Fatalf("status=%d result=%#v error=%#v", test.status, result, err)
+		}
+	}
+}
+
+func TestWiFiMutationRequiresExplicitInstance(t *testing.T) {
+	for _, test := range []struct {
+		instance uint64
+		code     string
+	}{
+		{0, "ambiguous_instance"},
+		{7, "unknown_instance"},
+	} {
+		client, requests := mutationFixtureClient(t, map[string][]mutationExchange{})
+		result, err := client.WiFiMutation(t.Context(), test.instance, true, false)
+		var protocolErr *Error
+		if result.Instance != "" || !errors.As(err, &protocolErr) || protocolErr.Kind != "usage" || protocolErr.Code != test.code || mutationRequestCount(requests) != 0 {
+			t.Fatalf("instance=%d result=%#v error=%#v", test.instance, result, err)
+		}
+	}
+}
+
+func TestWiFiMutationSelectsExplicitInstance(t *testing.T) {
+	client, requests := mutationFixtureClient(t, map[string][]mutationExchange{
+		"/wifi2": {{action: "GetInfo", payload: enabledInfo("0")}},
+	})
+	result, err := client.WiFiMutation(t.Context(), 2, false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Instance != "urn:WLANConfiguration-com:serviceId:WLANConfiguration2" || result.Intended {
+		t.Fatalf("result = %#v", result)
+	}
+	if request := <-requests; request != "/wifi2#GetInfo" {
+		t.Fatalf("request = %s", request)
+	}
+}
+
+// Regression for observed FRITZ!Box 6591 Cable / FRITZ!OS 8.25 guest-instance
+// behavior: SetEnable is accepted without a fault, but the verification read
+// still returns the old state. The command must refuse to report success.
+func TestWiFiMutationReportsUnappliedSetEnable(t *testing.T) {
+	client, _ := mutationFixtureClient(t, map[string][]mutationExchange{
+		"/wifi2": {
+			{action: "GetInfo", payload: enabledInfo("0")},
+			{action: "SetEnable", body: "<NewEnable>1</NewEnable>", payload: `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:SetEnableResponse xmlns:u="urn:dslforum-org:service:WLANConfiguration:1"></u:SetEnableResponse></s:Body></s:Envelope>`},
+			{action: "GetInfo", payload: enabledInfo("0")},
+		},
+	})
+	result, err := client.WiFiMutation(t.Context(), 2, true, true)
+	var protocolErr *Error
+	if result.Instance != "" || !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || !strings.Contains(protocolErr.Message, "did not confirm") {
+		t.Fatalf("result=%#v error=%#v", result, err)
+	}
+}

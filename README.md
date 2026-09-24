@@ -58,6 +58,9 @@ router-axi leases --json
 router-axi leases --all
 router-axi wifi
 router-axi wifi --json
+router-axi wifi enable
+router-axi wifi disable
+router-axi wifi disable --instance 1 --confirm
 router-axi forwards
 router-axi forwards --json
 router-axi forwards --all
@@ -177,6 +180,47 @@ the invoking user, without a reveal flag: never paste real mappings, hostnames,
 MACs, private addresses, or live responses into logs, issues, fixtures, or
 commits. Tests use synthetic data only. Compatibility is fixture-backed, not
 inferred from model names; these actions cannot establish reservation semantics.
+
+### Wi-Fi radio mutation
+
+`wifi enable|disable` is the first state-changing command. It uses only the documented
+FRITZ! TR-064 [WLANConfiguration v48](https://fritz.support/resources/TR-064_WLAN_Configuration.pdf)
+actions `GetInfo` (to read `NewEnable`) and `SetEnable` (to change it); no other mutating action,
+undocumented endpoint, or browser scraping is used.
+
+The mutation contract:
+
+- Without `--confirm` the command reads the current state, prints a preview with the target
+  instance and intended new state, changes nothing, and exits `0` with a `next:` suggestion.
+  That suggestion repeats an explicit `--host`, so the confirmed run reaches the previewed router.
+  It never relies on an interactive prompt.
+- With `--confirm` the command re-reads the current state first, sends `SetEnable` only when the
+  state differs, and re-reads `GetInfo` afterwards: success is reported only when the router
+  confirms the new state. Already-enabled/already-disabled targets are successful results with
+  `changed: false` (idempotent, no SOAP mutation sent).
+- The target must be unambiguous. When the router advertises more than one WLANConfiguration
+  instance, `--instance N` (the numeric suffix of `service_id`) is required and an
+  `ambiguous_instance` usage error exits `2`; an unadvertised instance is `unknown_instance`.
+- Result (machine-readable): compact `wifi:` block with `action`, `instance`, `previous`,
+  `current`, `changed`, and a `next:` suggestion; JSON is
+  `{"wifi":{"instance":...,"action":...,"previous":...,"current":...,"changed":...}}`.
+  The preview JSON is
+  `{"wifi":{"instance":...,"action":...,"current":...,"intended":...,"preview":true}}`
+  and does not include `previous` or `changed`.
+- Errors are structured on stderr with the standard exit codes (`2` usage, `3` auth, `4`
+  network, `5` unsupported — including a router fault 401 on `SetEnable`, `6` protocol when
+  the router did not confirm the state). A network failure after `SetEnable` was sent is
+  reported as possibly-applied: the change may have reached the router without a response,
+  and re-running the idempotent command is safe. Router fault text, codes, and URLs are discarded.
+- A router may accept `SetEnable` without applying it (observed on a FRITZ!Box 6591
+  Cable / FRITZ!OS 8.25 guest instance): the confirmation read then still reports the old
+  state and the command exits `6` with the unconfirmed-state error. That is an honest
+  capability boundary of the firmware, not a CLI success, and re-running is safe.
+- SSIDs, BSSIDs, keys, and radio secrets are never requested or printed by the mutation path;
+  it reads only the enable state.
+
+`doctor` continues to report WLANConfiguration advertisement only; it does not invoke `SetEnable`
+or verify mutation support.
 
 ### Wi-Fi inspection
 
@@ -347,7 +391,9 @@ router is unreachable, `5` for unsupported router capabilities, and `6` for a
 router or protocol error.
 
 The implementation discovers services through `/tr64desc.xml` and invokes only
-read actions. Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
+read actions, plus the confirmed `wifi enable|disable` mutation described
+above, which additionally invokes the documented `WLANConfiguration:SetEnable`.
+Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 `DeviceInfo:GetInfo`, `WANIPConnection` or
 `WANPPPConnection:GetStatusInfo` and `GetExternalIPAddress`,
 `WANCommonInterfaceConfig:GetTotalBytesReceived` and `GetTotalBytesSent`, AVM's
@@ -372,7 +418,7 @@ a feature branch and opens the pull request after the configured checks pass.
 
 ### Opt-in live router tests
 
-The live suite invokes only the read actions listed above. It is skipped unless
+The default live suite invokes only the read actions listed above. It is skipped unless
 `ROUTER_AXI_LIVE_TEST` is exactly `1`, an explicit host and both credentials are
 set, and `CI` is empty. Run it locally without placing credentials on the
 command line:
@@ -398,6 +444,25 @@ validation. Wi-Fi live reads use only the four actions
 above, including `GetInfo`, and never any key-returning action; missing
 advertisement is checked as unsupported. Ordinary `go test ./...` and all CI environments cannot enable the
 live test.
+
+Live mutation coverage is additionally opt-in and skipped by default: it requires the
+complete live gate above plus `ROUTER_AXI_LIVE_MUTATION_TEST=1`. It targets the only
+WLANConfiguration instance, or the instance named in `ROUTER_AXI_WIFI_INSTANCE`; with
+several instances and no explicit instance it is skipped. The test reads the current
+enable state, toggles the radio with `SetEnable`, restores the original state, and
+requires the router to confirm both changes. It never logs SSIDs or radio data and
+skips explicitly when `SetEnable` is unsupported.
+
+```sh
+ROUTER_AXI_LIVE_TEST=1 ROUTER_AXI_LIVE_MUTATION_TEST=1 \
+  go test ./internal/tr064 -run 'TestLiveWiFiMutation$' -count=1
+```
+
+Warning: `TestLiveWiFiMutation` briefly toggles the selected radio off and on. Run it only
+from a host connected to the router over wired LAN — if the test host reaches the router
+through the radio being toggled, the connection drops mid-test and neither verification nor
+restore can reach the router. The test reports only pass/fail; hardware validation of the
+change direction is only meaningful when the router confirms both changes.
 
 ## License
 

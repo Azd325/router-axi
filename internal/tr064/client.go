@@ -25,6 +25,7 @@ const descriptionPath = "/tr64desc.xml"
 
 type Error struct {
 	Kind       string
+	Code       string
 	Operation  string
 	StatusCode int
 	FaultCode  string
@@ -473,7 +474,10 @@ const (
 	wifiRemediation   = "enable the WLANConfiguration TR-064 service or use supported firmware"
 )
 
-func (c *Client) WiFi(ctx context.Context) ([]Radio, error) {
+// wlanServices returns every advertised WLANConfiguration instance, sorted by
+// the validated numeric suffix of its service identifier. Identifiers are
+// validated before any action is invoked so a radio can never be misidentified.
+func (c *Client) wlanServices(ctx context.Context) ([]service, error) {
 	if err := c.discover(ctx); err != nil {
 		return nil, wifiError(err)
 	}
@@ -501,6 +505,14 @@ func (c *Client) WiFi(ctx context.Context) ([]Radio, error) {
 		right, _ := strconv.ParseUint(strings.TrimPrefix(services[j].ID, wlanIDPrefix), 10, 64)
 		return left < right
 	})
+	return services, nil
+}
+
+func (c *Client) WiFi(ctx context.Context) ([]Radio, error) {
+	services, err := c.wlanServices(ctx)
+	if err != nil {
+		return nil, err
+	}
 	radios := make([]Radio, 0, len(services))
 	for _, svc := range services {
 		// GetInfo returns the SSID and the BSSID of the beacon. The SSID is
@@ -510,13 +522,9 @@ func (c *Client) WiFi(ctx context.Context) ([]Radio, error) {
 		if err != nil {
 			return nil, wifiError(err)
 		}
-		enabled := false
-		switch strings.TrimSpace(info.Enable) {
-		case "0":
-		case "1":
-			enabled = true
-		default:
-			return nil, &Error{Kind: "protocol", Operation: "wifi", Message: "router returned an invalid Wi-Fi enable state"}
+		enabled, err := parseEnable(info.Enable)
+		if err != nil {
+			return nil, err
 		}
 		band := "unknown"
 		switch info.FrequencyBand {
@@ -567,6 +575,137 @@ func wifiError(err error) *Error {
 	if errors.As(err, &protocolErr) {
 		result.Kind = protocolErr.Kind
 		result.StatusCode = protocolErr.StatusCode
+	}
+	return result
+}
+
+// parseEnable strictly converts the documented 0/1 enable state.
+func parseEnable(value string) (bool, error) {
+	switch strings.TrimSpace(value) {
+	case "0":
+		return false, nil
+	case "1":
+		return true, nil
+	default:
+		return false, &Error{Kind: "protocol", Operation: "wifi", Message: "router returned an invalid Wi-Fi enable state"}
+	}
+}
+
+// WiFiMutation describes one WLANConfiguration radio state change or its
+// pre-confirmation preview. Only the documented GetInfo and SetEnable actions
+// are used; the router's current state is always read first, and a mutation is
+// only sent when the state actually differs from the requested state.
+type WiFiMutation struct {
+	Instance string
+	Action   string
+	Current  bool
+	Intended bool
+	Preview  bool
+	Previous bool
+	Changed  bool
+}
+
+const wifiMutationRemediation = "use firmware that implements WLANConfiguration:SetEnable, or use supported firmware"
+
+// WiFiMutation reads the current enable state of the identified radio. Without
+// confirmation it returns a preview without any state change. With
+// confirmation it sends SetEnable only when the state differs, then re-reads
+// GetInfo and refuses to report success unless the router confirmed the new
+// state. Already-enabled and already-disabled targets are successful no-change
+// results.
+func (c *Client) WiFiMutation(ctx context.Context, instance uint64, enable, confirm bool) (WiFiMutation, error) {
+	services, err := c.wlanServices(ctx)
+	if err != nil {
+		return WiFiMutation{}, err
+	}
+	var target service
+	if instance == 0 {
+		if len(services) != 1 {
+			return WiFiMutation{}, &Error{Kind: "usage", Code: "ambiguous_instance", Operation: "wifi", Message: fmt.Sprintf("router advertises %d WLAN instances; specify the target with --instance", len(services))}
+		}
+		target = services[0]
+	} else {
+		wanted := wlanIDPrefix + strconv.FormatUint(instance, 10)
+		for _, svc := range services {
+			if svc.ID == wanted {
+				target = svc
+				break
+			}
+		}
+		if target.ID == "" {
+			return WiFiMutation{}, &Error{Kind: "usage", Code: "unknown_instance", Operation: "wifi", Message: "router does not advertise WLANConfiguration" + strconv.FormatUint(instance, 10)}
+		}
+	}
+	action := "disable"
+	if enable {
+		action = "enable"
+	}
+	info, err := c.actionOnService(ctx, target, "GetInfo")
+	if err != nil {
+		return WiFiMutation{}, wifiError(err)
+	}
+	current, err := parseEnable(info.Enable)
+	if err != nil {
+		return WiFiMutation{}, err
+	}
+	result := WiFiMutation{Instance: target.ID, Action: action, Current: current, Intended: enable}
+	if !confirm {
+		result.Preview = true
+		return result, nil
+	}
+	if current == enable {
+		result.Previous, result.Changed = current, false
+		return result, nil
+	}
+	result.Previous = current
+	state := "0"
+	if enable {
+		state = "1"
+	}
+	if _, err := c.actionOnService(ctx, target, "SetEnable", soapArgument{Name: "NewEnable", Value: state}); err != nil {
+		return WiFiMutation{}, wifiMutationError(err)
+	}
+	verified, err := c.actionOnService(ctx, target, "GetInfo")
+	if err != nil {
+		return WiFiMutation{}, wifiVerifyError(err)
+	}
+	confirmed, err := parseEnable(verified.Enable)
+	if err != nil {
+		return WiFiMutation{}, err
+	}
+	if confirmed != enable {
+		return WiFiMutation{}, &Error{Kind: "protocol", Operation: "wifi", Message: "router did not confirm the requested Wi-Fi radio state"}
+	}
+	result.Current, result.Changed = confirmed, true
+	return result, nil
+}
+
+// wifiVerifyError reports a failure of the state-verification read after a
+// SetEnable was already sent, so the caller knows a change may have been
+// applied and that re-running the idempotent command is safe.
+func wifiVerifyError(err error) *Error {
+	result := &Error{Kind: "protocol", Operation: "wifi", Message: "Wi-Fi radio change sent but the new state could not be verified"}
+	var protocolErr *Error
+	if errors.As(err, &protocolErr) {
+		result.Kind, result.StatusCode, result.FaultCode = protocolErr.Kind, protocolErr.StatusCode, protocolErr.FaultCode
+	}
+	return result
+}
+
+func wifiMutationError(err error) *Error {
+	result := &Error{Kind: "protocol", Operation: "SetEnable", Message: "Wi-Fi radio change failed"}
+	var protocolErr *Error
+	if errors.As(err, &protocolErr) {
+		result.Kind, result.StatusCode, result.FaultCode = protocolErr.Kind, protocolErr.StatusCode, protocolErr.FaultCode
+		if result.Kind == "network" {
+			result.Message = "router did not respond to the Wi-Fi radio change; the change may have been applied, and re-running the idempotent command is safe"
+		}
+		if result.Kind == "router" && result.FaultCode == "401" {
+			result.Kind = "unsupported"
+		}
+		if result.Kind == "unsupported" {
+			result.Message = "router does not support WLANConfiguration:SetEnable; " + wifiMutationRemediation
+		}
 	}
 	return result
 }

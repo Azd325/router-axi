@@ -33,6 +33,7 @@ type Reader interface {
 	Devices(context.Context) ([]tr064.Device, error)
 	Leases(context.Context) ([]tr064.Lease, error)
 	WiFi(context.Context) ([]tr064.Radio, error)
+	WiFiMutation(context.Context, uint64, bool, bool) (tr064.WiFiMutation, error)
 	Forwards(context.Context) ([]tr064.Forward, error)
 }
 type Factory func(Config) (Reader, error)
@@ -47,8 +48,10 @@ func New(factory Factory, getenv func(string) string) *App {
 }
 
 type options struct {
-	command, host   string
-	json, help, all bool
+	command, host, action    string
+	json, help, all, confirm bool
+	instance                 uint64
+	instanceSet              bool
 }
 
 type callResult struct {
@@ -74,6 +77,38 @@ type wifiResult struct {
 	Total  int           `json:"total"`
 }
 
+type wifiMutationResult struct {
+	WiFi wifiMutationState `json:"wifi"`
+}
+
+type wifiPreviewResult struct {
+	WiFi wifiPreviewState `json:"wifi"`
+}
+
+type wifiMutationState struct {
+	Instance string `json:"instance"`
+	Action   string `json:"action"`
+	Previous bool   `json:"previous"`
+	Current  bool   `json:"current"`
+	Changed  bool   `json:"changed"`
+}
+
+type wifiPreviewState struct {
+	Instance string `json:"instance"`
+	Action   string `json:"action"`
+	Current  bool   `json:"current"`
+	Intended bool   `json:"intended"`
+	Preview  bool   `json:"preview"`
+}
+
+func wifiMutationJSON(result tr064.WiFiMutation) wifiMutationResult {
+	return wifiMutationResult{WiFi: wifiMutationState{result.Instance, result.Action, result.Previous, result.Current, result.Changed}}
+}
+
+func wifiPreviewJSON(result tr064.WiFiMutation) wifiPreviewResult {
+	return wifiPreviewResult{WiFi: wifiPreviewState{result.Instance, result.Action, result.Current, result.Intended, true}}
+}
+
 type forwardResult struct {
 	Forwards []tr064.Forward `json:"forwards"`
 	Total    int             `json:"total"`
@@ -86,7 +121,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return writeError(stderr, false, ExitUsage, "invalid_arguments", err.Error(), "router-axi help")
 	}
 	if opts.help || opts.command == "help" {
-		if _, err := io.WriteString(stdout, help(opts.command)); err != nil {
+		if _, err := io.WriteString(stdout, help(opts.command, opts.action)); err != nil {
 			return ExitInternal
 		}
 		return ExitOK
@@ -120,69 +155,86 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 
 	var value any
-	switch opts.command {
-	case "doctor":
-		value, err = reader.Doctor(ctx)
-	case "status":
-		value, err = reader.Status(ctx)
-	case "overview":
-		value, err = reader.Overview(ctx)
-	case "wan":
-		value, err = reader.WAN(ctx)
-	case "traffic":
-		value, err = reader.Traffic(ctx)
-	case "calls":
-		var calls []tr064.Call
-		calls, err = reader.Calls(ctx)
-		if err == nil {
-			total := len(calls)
-			if !opts.all && len(calls) > 20 {
-				calls = calls[:20]
+	mutation := opts.command == "wifi" && opts.action != ""
+	if mutation {
+		var result tr064.WiFiMutation
+		result, err = reader.WiFiMutation(ctx, opts.instance, opts.action == "enable", opts.confirm)
+		if err == nil && result.Preview {
+			if opts.json {
+				if writeJSON(stdout, wifiPreviewJSON(result)) != ExitOK {
+					return ExitInternal
+				}
+			} else if err := writeWiFiPreview(stdout, result, opts.host); err != nil {
+				return ExitInternal
 			}
-			value = callResult{Calls: calls, Total: total, Omitted: total - len(calls)}
+			return ExitOK
 		}
-	case "wifi":
-		var radios []tr064.Radio
-		radios, err = reader.WiFi(ctx)
-		if radios == nil {
-			radios = []tr064.Radio{}
-		}
-		value = wifiResult{Radios: radios, Total: len(radios)}
-	case "devices":
-		var devices []tr064.Device
-		devices, err = reader.Devices(ctx)
-		if err == nil {
-			total := len(devices)
-			if !opts.all && len(devices) > 20 {
-				devices = devices[:20]
+		value = wifiMutationJSON(result)
+	} else {
+		switch opts.command {
+		case "doctor":
+			value, err = reader.Doctor(ctx)
+		case "status":
+			value, err = reader.Status(ctx)
+		case "overview":
+			value, err = reader.Overview(ctx)
+		case "wan":
+			value, err = reader.WAN(ctx)
+		case "traffic":
+			value, err = reader.Traffic(ctx)
+		case "calls":
+			var calls []tr064.Call
+			calls, err = reader.Calls(ctx)
+			if err == nil {
+				total := len(calls)
+				if !opts.all && len(calls) > 20 {
+					calls = calls[:20]
+				}
+				value = callResult{Calls: calls, Total: total, Omitted: total - len(calls)}
 			}
-			value = deviceResult{Devices: devices, Total: total, Omitted: total - len(devices)}
-		}
-	case "leases":
-		var leases []tr064.Lease
-		leases, err = reader.Leases(ctx)
-		if err == nil {
-			if leases == nil {
-				leases = []tr064.Lease{}
+		case "wifi":
+			var radios []tr064.Radio
+			radios, err = reader.WiFi(ctx)
+			if radios == nil {
+				radios = []tr064.Radio{}
 			}
-			total := len(leases)
-			if !opts.all && len(leases) > 20 {
-				leases = leases[:20]
+			value = wifiResult{Radios: radios, Total: len(radios)}
+		case "devices":
+			var devices []tr064.Device
+			devices, err = reader.Devices(ctx)
+			if err == nil {
+				total := len(devices)
+				if !opts.all && len(devices) > 20 {
+					devices = devices[:20]
+				}
+				value = deviceResult{Devices: devices, Total: total, Omitted: total - len(devices)}
 			}
-			value = leaseResult{Leases: leases, Total: total, Omitted: total - len(leases)}
-		}
-	case "forwards":
-		var forwards []tr064.Forward
-		forwards, err = reader.Forwards(ctx)
-		if err == nil {
-			if forwards == nil {
-				forwards = []tr064.Forward{}
+		case "leases":
+			var leases []tr064.Lease
+			leases, err = reader.Leases(ctx)
+			if err == nil {
+				if leases == nil {
+					leases = []tr064.Lease{}
+				}
+				total := len(leases)
+				if !opts.all && len(leases) > 20 {
+					leases = leases[:20]
+				}
+				value = leaseResult{Leases: leases, Total: total, Omitted: total - len(leases)}
 			}
-			total := len(forwards)
-			if !opts.all && len(forwards) > 20 {
-				forwards = forwards[:20]
+		case "forwards":
+			var forwards []tr064.Forward
+			forwards, err = reader.Forwards(ctx)
+			if err == nil {
+				if forwards == nil {
+					forwards = []tr064.Forward{}
+				}
+				total := len(forwards)
+				if !opts.all && len(forwards) > 20 {
+					forwards = forwards[:20]
+				}
+				value = forwardResult{Forwards: forwards, Total: total, Omitted: total - len(forwards)}
 			}
-			value = forwardResult{Forwards: forwards, Total: total, Omitted: total - len(forwards)}
 		}
 	}
 	if err != nil {
@@ -200,6 +252,12 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if opts.json {
 		return writeJSON(stdout, value)
 	}
+	if mutation {
+		if err := writeWiFiMutation(stdout, value.(wifiMutationResult).WiFi); err != nil {
+			return ExitInternal
+		}
+		return ExitOK
+	}
 	if err := writeCompact(stdout, opts.command, value); err != nil {
 		return ExitInternal
 	}
@@ -216,6 +274,18 @@ func parse(args []string) (options, error) {
 			opts.help = true
 		case "--all":
 			opts.all = true
+		case "--confirm":
+			opts.confirm = true
+		case "--instance":
+			i++
+			if i >= len(args) || strings.HasPrefix(args[i], "-") {
+				return opts, errors.New("--instance requires a value")
+			}
+			instance, err := strconv.ParseUint(args[i], 10, 64)
+			if err != nil || instance == 0 {
+				return opts, errors.New("--instance requires a WLANConfiguration number of 1 or greater")
+			}
+			opts.instance, opts.instanceSet = instance, true
 		case "--host":
 			i++
 			if i >= len(args) || strings.HasPrefix(args[i], "-") {
@@ -226,10 +296,23 @@ func parse(args []string) (options, error) {
 			if strings.HasPrefix(args[i], "-") {
 				return opts, fmt.Errorf("unknown option: %s", args[i])
 			}
-			if opts.command != "" {
-				return opts, errors.New("exactly one command is required")
+			if opts.command == "" {
+				opts.command = args[i]
+				continue
 			}
-			opts.command = args[i]
+			if opts.command == "wifi" && opts.action == "" && (args[i] == "enable" || args[i] == "disable") {
+				opts.action = args[i]
+				continue
+			}
+			if opts.command == "wifi" && opts.action != "" {
+				return opts, errors.New("wifi accepts one action: enable or disable")
+			}
+			return opts, errors.New("exactly one command is required")
+		}
+	}
+	if opts.confirm || opts.instanceSet {
+		if opts.command != "wifi" || opts.action == "" {
+			return opts, errors.New("--confirm and --instance are valid only with wifi enable or wifi disable")
 		}
 	}
 	if opts.all && opts.command != "calls" && opts.command != "devices" && opts.command != "leases" && opts.command != "forwards" {
@@ -242,15 +325,21 @@ func validCommand(command string) bool {
 	return command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "forwards"
 }
 
-func help(command string) string {
+func help(command, action string) string {
+	if action != "" && command == "wifi" {
+		return "usage: router-axi wifi " + action + " [--instance N] --confirm [--host ADDRESS] [--json]\n"
+	}
 	if validCommand(command) {
 		extra := ""
 		if command == "calls" || command == "devices" || command == "leases" || command == "forwards" {
 			extra = " [--all]"
 		}
+		if command == "wifi" {
+			extra = " [enable|disable [--instance N] --confirm]"
+		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + "\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      read-only Wi-Fi radio inspection\n  forwards  port-forwarding rules\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  forwards  port-forwarding rules\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -400,6 +489,8 @@ func renderProtocolError(w io.Writer, jsonOutput bool, err error) int {
 		return writeError(w, jsonOutput, ExitInternal, "internal_error", err.Error(), "")
 	}
 	switch protocolErr.Kind {
+	case "usage":
+		return writeError(w, jsonOutput, ExitUsage, protocolErr.Code, protocolErr.Message, "router-axi wifi enable|disable --instance N")
 	case "auth":
 		return writeError(w, jsonOutput, ExitAuth, "authentication_failed", protocolErr.Message, "set ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD")
 	case "network":
@@ -433,6 +524,38 @@ func writeError(w io.Writer, jsonOutput bool, exit int, code, message, hint stri
 		}
 	}
 	return exit
+}
+
+func writeWiFiPreview(w io.Writer, result tr064.WiFiMutation, host string) error {
+	hostFlag := ""
+	if host != "" {
+		hostFlag = " --host " + shellWord(host)
+	}
+	_, err := fmt.Fprintf(w, "wifi:\n  action: %s\n  instance: %s\n  current: %s\n  intended: %s\n  changed: false\nnext: router-axi wifi %s --instance %s --confirm%s\n", result.Action, scalar(result.Instance), state(result.Current), state(result.Intended), result.Action, instanceSuffix(result.Instance), hostFlag)
+	return err
+}
+
+func shellWord(value string) string {
+	if value != "" && strings.Trim(value, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:/_-") == "" {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+func writeWiFiMutation(w io.Writer, result wifiMutationState) error {
+	_, err := fmt.Fprintf(w, "wifi:\n  action: %s\n  instance: %s\n  previous: %s\n  current: %s\n  changed: %t\nnext: router-axi wifi\n", result.Action, scalar(result.Instance), state(result.Previous), state(result.Current), result.Changed)
+	return err
+}
+
+func state(enabled bool) string {
+	if enabled {
+		return "enabled"
+	}
+	return "disabled"
+}
+
+func instanceSuffix(serviceID string) string {
+	return strings.TrimPrefix(serviceID, "urn:WLANConfiguration-com:serviceId:WLANConfiguration")
 }
 
 func check(value tr064.DoctorCheck) string {
