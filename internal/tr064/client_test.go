@@ -764,9 +764,10 @@ func TestActiveWANServiceIDMatchesAdvertisedFamily(t *testing.T) {
 		{"additional-colon", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "urn:upnp-org:serviceId:WANIPConnection:1", false},
 		{"malformed-family", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "urn:upnp-org:serviceId:WANConnection", false},
 		{"family-without-instance", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "urn:upnp-org:serviceId:WANIPConnection", false},
-		{"uuid-ip-family", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f.WANIPConnection.1", true},
-		{"uuid-ppp-family", "urn:dslforum-org:service:WANPPPConnection:1", "urn:WANPPPConnection-com:serviceId:WANPPPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f.WANPPPConnection.1", true},
-		{"uuid-family-mismatch", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f.WANPPPConnection.1", false},
+		{"uuid-ip-family", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f:WANIPConnection.1", true},
+		{"uuid-dot-before-family", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f.WANIPConnection.1", false},
+		{"uuid-ppp-family", "urn:dslforum-org:service:WANPPPConnection:1", "urn:WANPPPConnection-com:serviceId:WANPPPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f:WANPPPConnection.1", true},
+		{"uuid-family-mismatch", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f:WANPPPConnection.1", false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if got := activeWANServiceID(test.advertisedType, test.advertisedID, test.defaultService); got != test.want {
@@ -825,8 +826,8 @@ func TestForwardsLayer3ErrorsAreSanitized(t *testing.T) {
 			script := activeIPScript()
 			script[1].body, script[1].status = test.body, test.status
 			err := assertForwardError(t, forwardFixtureClient(t, script[:2]), test.kind, test.status)
-			if test.kind == "unsupported" && !strings.Contains(err.Message, "Layer3Forwarding:GetDefaultConnectionService") {
-				t.Fatalf("missing remediation: %#v", err)
+			if (test.kind == "unsupported") != strings.Contains(err.Message, "Layer3Forwarding:GetDefaultConnectionService") {
+				t.Fatalf("remediation mismatch: %#v", err)
 			}
 		})
 	}
@@ -840,7 +841,7 @@ func TestForwardsLayer3NetworkErrorsAreSanitized(t *testing.T) {
 	client := forwardFixtureClient(t, script)
 	client.http = &http.Client{Transport: layer3FailingTransport{next: client.http.Transport}}
 	err := assertForwardError(t, client, "network", 0)
-	if !strings.Contains(err.Message, "active WAN service") {
+	if !strings.Contains(err.Message, "active WAN service") || strings.Contains(err.Message, "Layer3Forwarding") {
 		t.Fatalf("missing remediation: %#v", err)
 	}
 }

@@ -556,7 +556,8 @@ const maxHostEntries = 4096
 
 const (
 	maxPortMappingEntries = 4096
-	activeWANMessage      = "could not determine the active WAN service; enable Layer3Forwarding:GetDefaultConnectionService or use supported firmware"
+	activeWANMessage      = "could not determine the active WAN service"
+	activeWANRemediation  = "enable Layer3Forwarding:GetDefaultConnectionService or use supported firmware"
 	forwardsRemediation   = "enable a WANIPConnection or WANPPPConnection service with documented port-mapping enumeration actions, or use supported firmware"
 )
 
@@ -683,7 +684,7 @@ func (c *Client) activePortMappingService(ctx context.Context) (service, error) 
 	}
 	defaultService := strings.TrimSpace(defaultValues.DefaultConnectionService)
 	if defaultService == "" {
-		return service{}, &Error{Kind: "unsupported", Operation: "forwards", Message: activeWANMessage}
+		return service{}, &Error{Kind: "unsupported", Operation: "forwards", Message: activeWANMessage + "; " + activeWANRemediation}
 	}
 	var matches []service
 	for _, svc := range services {
@@ -713,6 +714,9 @@ func activeWANError(err error) *Error {
 	if result.Kind == "router" && result.StatusCode == http.StatusInternalServerError {
 		result.Kind = "unsupported"
 	}
+	if result.Kind == "unsupported" {
+		result.Message += "; " + activeWANRemediation
+	}
 	return result
 }
 
@@ -731,7 +735,7 @@ func activeWANServiceID(advertisedType, advertisedID, defaultService string) boo
 		if strings.Contains(tail, ":") {
 			return false
 		}
-		if !strings.HasSuffix(head, ":") && !strings.HasSuffix(head, ".") {
+		if !strings.HasSuffix(head, ":") {
 			return false
 		}
 		family, instance = candidate, strings.TrimPrefix(tail, ".")
