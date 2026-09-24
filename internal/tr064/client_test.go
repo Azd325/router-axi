@@ -1356,6 +1356,422 @@ func TestWANSupportsPPPConnectionService(t *testing.T) {
 	}
 }
 
+type hostExchange struct {
+	action, index, body string
+	status              int
+	location            string
+}
+
+func hostScript(entries ...string) []hostExchange {
+	script := []hostExchange{
+		{body: descriptionFixture},
+		{action: "GetHostNumberOfEntries", body: mappingField(hostCountFixture, "NewHostNumberOfEntries", fmt.Sprint(len(entries)))},
+	}
+	for i, entry := range entries {
+		script = append(script, hostExchange{action: "GetGenericHostEntry", index: fmt.Sprint(i), body: entry})
+	}
+	return script
+}
+
+func hostFixtureClient(t *testing.T, script []hostExchange) *Client {
+	t.Helper()
+	pending := make(chan hostExchange, len(script))
+	for _, exchange := range script {
+		pending <- exchange
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var exchange hostExchange
+		select {
+		case exchange = <-pending:
+		default:
+			t.Error("unexpected host request")
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		method, path, action, body := http.MethodGet, descriptionPath, "", ""
+		if exchange.action != "" {
+			method, path = http.MethodPost, "/upnp/control/hosts"
+			argument := ""
+			switch exchange.action {
+			case "GetHostNumberOfEntries":
+			case "GetGenericHostEntry":
+				argument = "<NewIndex>" + exchange.index + "</NewIndex>"
+			default:
+				t.Errorf("forbidden Hosts action: %s", exchange.action)
+			}
+			action = `"urn:dslforum-org:service:Hosts:1#` + exchange.action + `"`
+			body = `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` + exchange.action + ` xmlns:u="urn:dslforum-org:service:Hosts:1">` + argument + `</u:` + exchange.action + `></s:Body></s:Envelope>`
+		}
+		gotBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		if r.Method != method || r.URL.RequestURI() != path || r.Header.Get("SOAPAction") != action || string(gotBody) != body {
+			t.Errorf("unexpected Hosts request: %s %s %q %s", r.Method, r.URL.RequestURI(), r.Header.Get("SOAPAction"), gotBody)
+		}
+		if exchange.location != "" {
+			w.Header().Set("Location", exchange.location)
+		}
+		if exchange.status != 0 {
+			w.WriteHeader(exchange.status)
+		}
+		_, _ = w.Write([]byte(strings.ReplaceAll(exchange.body, "__ORIGIN__", "http://"+r.Host)))
+	}))
+	t.Cleanup(func() {
+		server.Close()
+		if len(pending) != 0 {
+			t.Errorf("%d expected Hosts requests were not made", len(pending))
+		}
+	})
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+func assertLeaseError(t *testing.T, client *Client, kind string, status int) *Error {
+	t.Helper()
+	leases, err := client.Leases(t.Context())
+	var protocolErr *Error
+	if leases != nil || !errors.As(err, &protocolErr) || protocolErr.Kind != kind || protocolErr.Operation != "leases" || protocolErr.StatusCode != status || protocolErr.FaultCode != "" {
+		t.Fatalf("leases=%#v error=%#v", leases, err)
+	}
+	for _, secret := range []string{"private", client.base.Host, "/upnp/control/hosts"} {
+		if strings.Contains(fmt.Sprintf("%#v %s", protocolErr, err), secret) {
+			t.Fatalf("unsanitized error: %#v", protocolErr)
+		}
+	}
+	if kind == "unsupported" && !strings.Contains(protocolErr.Message, leasesRemediation) {
+		t.Fatalf("missing remediation: %#v", protocolErr)
+	}
+	return protocolErr
+}
+
+func TestLeasesObserveAddressSourceAndRemainder(t *testing.T) {
+	client := hostFixtureClient(t, hostScript(hostEntryZeroFixture, hostEntryOneFixture))
+	leases, err := client.Leases(t.Context())
+	remaining := int64(3600)
+	want := []Lease{
+		{"sanitized-device", "192.0.2.10", "02:00:00:00:00:10", "Static", nil, "Ethernet", true},
+		{"", "192.0.2.20", "02:00:00:00:00:20", "DHCP", &remaining, "802.11", false},
+	}
+	if err != nil || !reflect.DeepEqual(leases, want) {
+		t.Fatalf("leases=%#v want=%#v error=%v", leases, want, err)
+	}
+	encoded, err := json.Marshal(leases[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"ip_address":"192.0.2.20","mac_address":"02:00:00:00:00:20","address_source":"DHCP","lease_time_remaining":3600,"interface_type":"802.11","active":false}` {
+		t.Fatalf("lease JSON = %s", encoded)
+	}
+}
+
+func TestLeasesPreserveOnlyDocumentedAddressSources(t *testing.T) {
+	for _, source := range []string{"DHCP", "Static", "", "missing", "AutoIP", "dhcp", "static", "private-value"} {
+		t.Run(source, func(t *testing.T) {
+			entry := mappingField(hostEntryZeroFixture, "NewAddressSource", source)
+			client := hostFixtureClient(t, hostScript(entry))
+			leases, err := client.Leases(t.Context())
+			want := "unknown"
+			if source == "DHCP" || source == "Static" {
+				want = source
+			}
+			if err != nil || len(leases) != 1 || leases[0].AddressSource != want || leases[0].LeaseTimeRemaining == nil || *leases[0].LeaseTimeRemaining != 3600 {
+				t.Fatalf("leases=%#v error=%v", leases, err)
+			}
+		})
+	}
+}
+
+func TestLeasesValidateLeaseTimeRemaining(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  int64
+		valid bool
+	}{
+		{"missing", 0, true}, {"", 0, true}, {" \n ", 0, true}, {"0", 0, true}, {"-1", 0, true},
+		{"2147483647", 0, true}, {"4294967295", 0, true}, {" 4294967295 ", 0, true},
+		{"1", 1, true}, {"+1", 1, true}, {" 3600 ", 3600, true}, {"2147483646", 2147483646, true},
+		{"-2", 0, false}, {"-2147483648", 0, false}, {"-2147483649", 0, false},
+		{"1.5", 0, false}, {"private-value", 0, false}, {"2147483648", 0, false},
+		{"4294967294", 0, false}, {"4294967296", 0, false}, {"18446744073709551616", 0, false},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			entry := mappingField(hostEntryZeroFixture, "NewLeaseTimeRemaining", test.value)
+			client := hostFixtureClient(t, hostScript(hostEntryOneFixture, entry))
+			if !test.valid {
+				_ = assertLeaseError(t, client, "protocol", 0)
+				return
+			}
+			leases, err := client.Leases(t.Context())
+			if err != nil || len(leases) != 2 {
+				t.Fatalf("leases=%#v error=%v", leases, err)
+			}
+			got := leases[1].LeaseTimeRemaining
+			if test.want == 0 {
+				if got != nil {
+					t.Fatalf("remaining=%d, want nil", *got)
+				}
+				encoded, err := json.Marshal(leases[1])
+				if err != nil || strings.Contains(string(encoded), "lease_time_remaining") {
+					t.Fatalf("JSON=%s error=%v", encoded, err)
+				}
+			} else if got == nil || *got != test.want {
+				t.Fatalf("remaining=%v, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestLeasesLateErrorsAreAtomicAndSanitized(t *testing.T) {
+	for _, test := range []struct {
+		name, body, kind string
+		status           int
+	}{
+		{"auth", "private-value", "auth", http.StatusUnauthorized},
+		{"fault", "<Fault><errorCode>private-code</errorCode><errorDescription>private-value</errorDescription></Fault>", "router", http.StatusInternalServerError},
+		{"fault-success-status", "<Fault><errorCode>private-code</errorCode><errorDescription>private-value</errorDescription></Fault>", "router", http.StatusOK},
+		{"unsupported", "<Fault><errorCode>401</errorCode><errorDescription>private-value</errorDescription></Fault>", "unsupported", http.StatusInternalServerError},
+		{"unsupported-success-status", "<Fault><errorCode>401</errorCode><errorDescription>private-value</errorDescription></Fault>", "unsupported", http.StatusOK},
+		{"invalid-xml", "<private-value", "protocol", http.StatusOK},
+		{"invalid-xml-error-status", "<private-value", "protocol", http.StatusBadGateway},
+	} {
+		for _, position := range []int{1, 3} {
+			t.Run(fmt.Sprintf("%s/%d", test.name, position), func(t *testing.T) {
+				script := hostScript(hostEntryZeroFixture, hostEntryOneFixture)[:position+1]
+				script[position].body, script[position].status = test.body, test.status
+				_ = assertLeaseError(t, hostFixtureClient(t, script), test.kind, test.status)
+			})
+		}
+	}
+}
+
+func TestLeasesMissingHostsCapability(t *testing.T) {
+	client := hostFixtureClient(t, []hostExchange{{body: wifiDescriptionFixture}})
+	_ = assertLeaseError(t, client, "unsupported", 0)
+}
+
+func TestLeasesEmptyTable(t *testing.T) {
+	leases, err := hostFixtureClient(t, hostScript()).Leases(t.Context())
+	if err != nil || leases == nil || len(leases) != 0 {
+		t.Fatalf("leases=%#v error=%v", leases, err)
+	}
+}
+
+func TestLeasesRejectMalformedHostTable(t *testing.T) {
+	for _, value := range []string{"missing", "", "private-value", "-1", "1.5", "4097", "4294967296"} {
+		t.Run("count/"+value, func(t *testing.T) {
+			script := hostScript()
+			script[1].body = mappingField(hostCountFixture, "NewHostNumberOfEntries", value)
+			_ = assertLeaseError(t, hostFixtureClient(t, script), "protocol", 0)
+		})
+	}
+	for _, value := range []string{"missing", "", "private-value", "-1", "2"} {
+		t.Run("active/"+value, func(t *testing.T) {
+			entry := mappingField(hostEntryOneFixture, "NewActive", value)
+			_ = assertLeaseError(t, hostFixtureClient(t, hostScript(hostEntryZeroFixture, entry)), "protocol", 0)
+		})
+	}
+}
+
+func TestLeasesSortFullTuple(t *testing.T) {
+	two, ten := int64(2), int64(10)
+	want := []Lease{
+		{"a", "192.0.2.10", "02:00:00:00:00:AA", "DHCP", nil, "802.11", false},
+		{"a", "192.0.2.10", "02:00:00:00:00:AA", "DHCP", &two, "802.11", false},
+		{"a", "192.0.2.10", "02:00:00:00:00:AA", "DHCP", &ten, "802.11", false},
+		{"a", "192.0.2.10", "02:00:00:00:00:AA", "DHCP", nil, "802.11", true},
+		{"a", "192.0.2.10", "02:00:00:00:00:AA", "DHCP", nil, "Ethernet", false},
+		{"a", "192.0.2.10", "02:00:00:00:00:AA", "Static", nil, "802.11", false},
+		{"a", "192.0.2.10", "02:00:00:00:00:AA", "unknown", nil, "802.11", false},
+		{"a", "192.0.2.10", "02:00:00:00:00:aa", "DHCP", nil, "802.11", false},
+		{"b", "192.0.2.10", "02:00:00:00:00:aa", "DHCP", nil, "802.11", false},
+		{"a", "192.0.2.20", "02:00:00:00:00:aa", "DHCP", nil, "802.11", false},
+		{"a", "192.0.2.10", "02:00:00:00:00:bb", "DHCP", nil, "802.11", false},
+	}
+	for _, shift := range []int{0, 3, 7} {
+		t.Run(fmt.Sprint(shift), func(t *testing.T) {
+			entries := make([]string, len(want))
+			for i := range entries {
+				lease := want[(len(want)-1-i+shift)%len(want)]
+				body := hostEntryZeroFixture
+				for tag, value := range map[string]string{
+					"NewHostName": lease.Name, "NewIPAddress": lease.IPAddress, "NewMACAddress": lease.MACAddress,
+					"NewAddressSource": lease.AddressSource, "NewInterfaceType": lease.InterfaceType, "NewActive": fmt.Sprint(lease.Active),
+				} {
+					body = mappingField(body, tag, value)
+				}
+				remaining := "missing"
+				if lease.LeaseTimeRemaining != nil {
+					remaining = fmt.Sprint(*lease.LeaseTimeRemaining)
+				}
+				entries[i] = mappingField(body, "NewLeaseTimeRemaining", remaining)
+			}
+			leases, err := hostFixtureClient(t, hostScript(entries...)).Leases(t.Context())
+			if err != nil || !reflect.DeepEqual(leases, want) {
+				t.Fatalf("leases=%#v want=%#v error=%v", leases, want, err)
+			}
+		})
+	}
+}
+
+func TestDevicesPreserveRequestsAndIgnoreLeaseMetadata(t *testing.T) {
+	entry := mappingField(hostEntryZeroFixture, "NewLeaseTimeRemaining", "private-value")
+	entry = mappingField(entry, "NewAddressSource", "private-value")
+	client := hostFixtureClient(t, hostScript(entry, hostEntryOneFixture))
+	devices, err := client.Devices(t.Context())
+	want := []Device{
+		{"sanitized-device", "192.0.2.10", "02:00:00:00:00:10", "Ethernet", true},
+		{"", "192.0.2.20", "02:00:00:00:00:20", "802.11", false},
+	}
+	if err != nil || !reflect.DeepEqual(devices, want) {
+		t.Fatalf("devices=%#v want=%#v error=%v", devices, want, err)
+	}
+	encoded, err := json.Marshal(devices)
+	if err != nil || string(encoded) != `[{"name":"sanitized-device","ip_address":"192.0.2.10","mac_address":"02:00:00:00:00:10","interface_type":"Ethernet","active":true},{"ip_address":"192.0.2.20","mac_address":"02:00:00:00:00:20","interface_type":"802.11","active":false}]` {
+		t.Fatalf("devices JSON=%s error=%v", encoded, err)
+	}
+}
+
+func TestDevicesPreserveOriginalHostFaults(t *testing.T) {
+	for _, position := range []int{1, 3} {
+		t.Run(fmt.Sprint(position), func(t *testing.T) {
+			script := hostScript(hostEntryZeroFixture, hostEntryOneFixture)[:position+1]
+			script[position].body = "<Fault><errorCode>401</errorCode><errorDescription>synthetic-original-message</errorDescription></Fault>"
+			script[position].status = http.StatusInternalServerError
+			devices, err := hostFixtureClient(t, script).Devices(t.Context())
+			var protocolErr *Error
+			want := Error{Kind: "router", Operation: script[position].action, StatusCode: http.StatusInternalServerError, FaultCode: "401", Message: "synthetic-original-message"}
+			if devices != nil || !errors.As(err, &protocolErr) || *protocolErr != want {
+				t.Fatalf("devices=%#v error=%#v want=%#v", devices, err, want)
+			}
+		})
+	}
+}
+
+func TestLeasesRefuseRedirectsWithoutChangingDevices(t *testing.T) {
+	var externalRequests atomic.Int64
+	external := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		externalRequests.Add(1)
+		_, _ = w.Write([]byte(descriptionFixture))
+	}))
+	defer external.Close()
+	for _, position := range []int{0, 1, 3} {
+		for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect} {
+			t.Run(fmt.Sprintf("%d/%d", position, status), func(t *testing.T) {
+				script := hostScript(hostEntryZeroFixture, hostEntryOneFixture)[:position+1]
+				script[position].status, script[position].location = status, external.URL+"/private-endpoint"
+				devicesScript := hostScript(hostEntryZeroFixture, hostEntryOneFixture)
+				devicesScript[0].status, devicesScript[0].location = status, external.URL+"/description"
+				client := hostFixtureClient(t, append(script, devicesScript...))
+				originalHTTP := client.http
+				var redirects int
+				originalHTTP.CheckRedirect = func(*http.Request, []*http.Request) error {
+					redirects++
+					return nil
+				}
+				before := externalRequests.Load()
+				_ = assertLeaseError(t, client, "network", 0)
+				if externalRequests.Load() != before || redirects != 0 || client.http != originalHTTP {
+					t.Fatal("Leases followed a redirect or changed the shared HTTP client")
+				}
+				devices, err := client.Devices(t.Context())
+				if err != nil || len(devices) != 2 || redirects != 1 || externalRequests.Load() != before+1 {
+					t.Fatalf("devices=%#v redirects=%d error=%v", devices, redirects, err)
+				}
+			})
+		}
+	}
+}
+
+func TestLeasesAcceptSameHostsDescriptionsAsDevices(t *testing.T) {
+	duplicate := `<service><serviceType>urn:dslforum-org:service:Hosts:1</serviceType><controlURL>/upnp/control/hosts</controlURL></service>`
+	description := strings.Replace(descriptionFixture, "</serviceList>", duplicate+"</serviceList>", 1)
+	script := append(hostScript(hostEntryZeroFixture), hostScript(hostEntryZeroFixture)...)
+	script[0].body, script[3].body = description, description
+	client := hostFixtureClient(t, script)
+	leases, err := client.Leases(t.Context())
+	if err != nil || len(leases) != 1 {
+		t.Fatalf("leases=%#v error=%v", leases, err)
+	}
+	devices, err := client.Devices(t.Context())
+	if err != nil || len(devices) != 1 {
+		t.Fatalf("devices=%#v error=%v", devices, err)
+	}
+}
+
+type hostFailingTransport struct {
+	next      http.RoundTripper
+	remaining int
+}
+
+func (t *hostFailingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if t.remaining == 0 {
+		return nil, errors.New("private-network-error")
+	}
+	t.remaining--
+	return t.next.RoundTrip(r)
+}
+
+func TestLeasesNetworkErrorsAreSanitized(t *testing.T) {
+	for _, position := range []int{0, 1, 3} {
+		t.Run(fmt.Sprint(position), func(t *testing.T) {
+			client := hostFixtureClient(t, hostScript(hostEntryZeroFixture, hostEntryOneFixture)[:position])
+			client.http.Transport = &hostFailingTransport{next: client.http.Transport, remaining: position}
+			_ = assertLeaseError(t, client, "network", 0)
+		})
+	}
+}
+
+func TestLeasesDiscoveryErrorsAreSanitized(t *testing.T) {
+	for _, test := range []struct {
+		status, wantStatus int
+		kind               string
+	}{
+		{http.StatusUnauthorized, http.StatusUnauthorized, "auth"},
+		{http.StatusServiceUnavailable, http.StatusServiceUnavailable, "router"},
+		{http.StatusOK, 0, "protocol"},
+	} {
+		t.Run(fmt.Sprint(test.status), func(t *testing.T) {
+			client := hostFixtureClient(t, []hostExchange{{body: "<private-value", status: test.status}})
+			_ = assertLeaseError(t, client, test.kind, test.wantStatus)
+		})
+	}
+}
+
+func TestDevicesPreserveOriginalNetworkErrors(t *testing.T) {
+	client := hostFixtureClient(t, nil)
+	client.http.Transport = wifiFailingTransport{}
+	devices, err := client.Devices(t.Context())
+	var protocolErr *Error
+	if devices != nil || !errors.As(err, &protocolErr) || protocolErr.Kind != "network" || protocolErr.Operation != "GET "+descriptionPath || !strings.Contains(protocolErr.Message, "private-network-error") {
+		t.Fatalf("devices=%#v error=%#v", devices, err)
+	}
+}
+
+func TestDoctorReportsLeasesCapabilityAlongsideDevices(t *testing.T) {
+	server := fixtureServer(t)
+	defer server.Close()
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	report, err := client.Doctor(t.Context())
+	if err != nil || report.Capabilities.Leases != (DoctorCheck{State: "advertised"}) {
+		t.Fatalf("report=%#v error=%v", report, err)
+	}
+	encoded, err := json.Marshal(report.Capabilities)
+	if err != nil {
+		t.Fatal(err)
+	}
+	devicesIndex, leasesIndex := strings.Index(string(encoded), `"devices"`), strings.Index(string(encoded), `"leases"`)
+	if leasesIndex < devicesIndex || leasesIndex > strings.Index(string(encoded), `"wifi"`) {
+		t.Fatalf("capabilities JSON = %s", encoded)
+	}
+}
+
 func TestDevicesReportMissingHostsCapability(t *testing.T) {
 	const description = `<root><device><serviceList><service><serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType><controlURL>/device</controlURL></service></serviceList></device></root>`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

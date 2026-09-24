@@ -79,6 +79,7 @@ type DoctorCapabilities struct {
 	Traffic  DoctorCheck `json:"traffic"`
 	Calls    DoctorCheck `json:"calls"`
 	Devices  DoctorCheck `json:"devices"`
+	Leases   DoctorCheck `json:"leases"`
 	WiFi     DoctorCheck `json:"wifi"`
 	Forwards DoctorCheck `json:"forwards"`
 }
@@ -109,6 +110,16 @@ type Device struct {
 	MACAddress    string `json:"mac_address"`
 	InterfaceType string `json:"interface_type"`
 	Active        bool   `json:"active"`
+}
+
+type Lease struct {
+	Name               string `json:"name,omitempty"`
+	IPAddress          string `json:"ip_address"`
+	MACAddress         string `json:"mac_address"`
+	AddressSource      string `json:"address_source"`
+	LeaseTimeRemaining *int64 `json:"lease_time_remaining,omitempty"`
+	InterfaceType      string `json:"interface_type"`
+	Active             bool   `json:"active"`
 }
 
 type Radio struct {
@@ -171,7 +182,8 @@ type soapValues struct {
 	Manufacturer, Model, Serial, Software, Hardware                          string
 	Uptime, DownloadRate, UploadRate, TotalDownload, TotalUpload             string
 	CallListURL, HostNumberOfEntries, DefaultConnectionService               string
-	MACAddress, IPAddress, InterfaceType, Active, HostName                   string
+	MACAddress, IPAddress, InterfaceType, Active, HostName, AddressSource    string
+	LeaseTimeRemaining                                                       *string
 	FaultCode, FaultDescription                                              string
 	Enable, SSID, Standard                                                   string
 	Channel, FrequencyBand, TotalAssociations, BeaconType                    string
@@ -239,6 +251,11 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.Active
 		case "NewHostName":
 			target = &v.HostName
+		case "NewAddressSource":
+			target = &v.AddressSource
+		case "NewLeaseTimeRemaining":
+			v.LeaseTimeRemaining = new(string)
+			target = v.LeaseTimeRemaining
 		case "NewEnable":
 			target = &v.Enable
 		case "NewSSID":
@@ -327,7 +344,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 		Protocol:       unknown,
 		Authentication: unknown,
 		Capabilities: DoctorCapabilities{
-			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Calls: unknown, Devices: unknown, WiFi: unknown, Forwards: unknown,
+			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Calls: unknown, Devices: unknown, Leases: unknown, WiFi: unknown, Forwards: unknown,
 		},
 	}
 	if err := c.discover(ctx); err != nil {
@@ -351,7 +368,9 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 	report.Capabilities.WAN = c.advertisedCapability([]string{"urn:dslforum-org:service:WANIPConnection:", "urn:dslforum-org:service:WANPPPConnection:"}, "enable a WAN connection TR-064 service or use supported firmware")
 	report.Capabilities.Traffic = c.advertisedCapability([]string{"urn:dslforum-org:service:WANCommonInterfaceConfig:"}, "enable the WAN common-interface TR-064 service or use supported firmware")
 	report.Capabilities.Calls = c.advertisedCapability([]string{"urn:dslforum-org:service:X_AVM-DE_OnTel:"}, "enable telephony and its TR-064 service or use supported firmware")
-	report.Capabilities.Devices = c.advertisedCapability([]string{"urn:dslforum-org:service:Hosts:"}, "enable the Hosts TR-064 service or use supported firmware")
+	hostsCapability := c.advertisedCapability([]string{"urn:dslforum-org:service:Hosts:"}, "enable the Hosts TR-064 service or use supported firmware")
+	report.Capabilities.Devices = hostsCapability
+	report.Capabilities.Leases = hostsCapability
 	report.Capabilities.WiFi = c.advertisedCapability([]string{wlanServicePrefix}, wifiRemediation)
 	report.Capabilities.Forwards = c.advertisedCapability(wanMappingPrefixes, forwardsRemediation)
 	if report.Capabilities.Status.State == "advertised" && report.Capabilities.WAN.State == "advertised" && report.Capabilities.Traffic.State == "advertised" {
@@ -564,6 +583,28 @@ const (
 var wanMappingPrefixes = []string{"urn:dslforum-org:service:WANIPConnection:", "urn:dslforum-org:service:WANPPPConnection:"}
 
 func (c *Client) Devices(ctx context.Context) ([]Device, error) {
+	entries, err := c.hostEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	devices := make([]Device, 0, len(entries))
+	for _, entry := range entries {
+		devices = append(devices, Device{
+			Name: entry.HostName, IPAddress: entry.IPAddress, MACAddress: entry.MACAddress,
+			InterfaceType: entry.InterfaceType, Active: entry.Active,
+		})
+	}
+	sortDeviceEntries(devices)
+	return devices, nil
+}
+
+type hostEntry struct {
+	HostName, IPAddress, MACAddress, InterfaceType, AddressSource string
+	LeaseTimeRemaining                                            *string
+	Active                                                        bool
+}
+
+func (c *Client) hostEntries(ctx context.Context) ([]hostEntry, error) {
 	countValues, err := c.action(ctx, "urn:dslforum-org:service:Hosts:", "GetHostNumberOfEntries")
 	if err != nil {
 		return nil, err
@@ -572,7 +613,7 @@ func (c *Client) Devices(ctx context.Context) ([]Device, error) {
 	if err != nil || count > maxHostEntries {
 		return nil, &Error{Kind: "protocol", Operation: "GetHostNumberOfEntries", Message: "router returned an invalid host count"}
 	}
-	devices := make([]Device, 0, count)
+	entries := make([]hostEntry, 0, count)
 	for index := uint64(0); index < count; index++ {
 		values, err := c.action(ctx, "urn:dslforum-org:service:Hosts:", "GetGenericHostEntry", soapArgument{Name: "NewIndex", Value: strconv.FormatUint(index, 10)})
 		if err != nil {
@@ -582,17 +623,110 @@ func (c *Client) Devices(ctx context.Context) ([]Device, error) {
 		if err != nil {
 			return nil, &Error{Kind: "protocol", Operation: "GetGenericHostEntry", Message: "router returned an invalid active state"}
 		}
-		devices = append(devices, Device{
-			Name: values.HostName, IPAddress: values.IPAddress, MACAddress: values.MACAddress,
-			InterfaceType: values.InterfaceType, Active: active,
+		entries = append(entries, hostEntry{values.HostName, values.IPAddress, values.MACAddress, values.InterfaceType, values.AddressSource, values.LeaseTimeRemaining, active})
+	}
+	return entries, nil
+}
+
+const leasesRemediation = "enable the Hosts TR-064 service with GetHostNumberOfEntries and GetGenericHostEntry, or use supported firmware"
+
+func leasesError(err error) *Error {
+	result := &Error{Kind: "protocol", Operation: "leases", Message: "host table inspection failed"}
+	var protocolErr *Error
+	if errors.As(err, &protocolErr) {
+		result.Kind, result.StatusCode = protocolErr.Kind, protocolErr.StatusCode
+		if protocolErr.Kind == "router" && protocolErr.FaultCode == "401" {
+			result.Kind = "unsupported"
+		}
+	}
+	if result.Kind == "unsupported" {
+		result.Message = "router does not support host table enumeration; " + leasesRemediation
+	}
+	return result
+}
+
+func addressSource(value string) string {
+	switch strings.TrimSpace(value) {
+	case "DHCP":
+		return "DHCP"
+	case "Static":
+		return "Static"
+	default:
+		return "unknown"
+	}
+}
+
+func leaseTimeRemaining(raw *string) (*int64, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	text := strings.TrimSpace(*raw)
+	if text == "" || text == "4294967295" {
+		return nil, nil
+	}
+	value, err := strconv.ParseInt(text, 10, 32)
+	if err != nil || value < -1 {
+		return nil, &Error{Kind: "protocol", Operation: "leases", Message: "router returned an invalid lease time remaining"}
+	}
+	if value <= 0 || value == 2147483647 {
+		return nil, nil
+	}
+	return &value, nil
+}
+
+func (c *Client) Leases(ctx context.Context) ([]Lease, error) {
+	client := *c
+	httpClient := *c.http
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("lease inspection refuses redirects")
+	}
+	client.http = &httpClient
+	entries, err := client.hostEntries(ctx)
+	if err != nil {
+		return nil, leasesError(err)
+	}
+	leases := make([]Lease, 0, len(entries))
+	for _, entry := range entries {
+		remaining, err := leaseTimeRemaining(entry.LeaseTimeRemaining)
+		if err != nil {
+			return nil, err
+		}
+		leases = append(leases, Lease{
+			Name: entry.HostName, IPAddress: entry.IPAddress, MACAddress: entry.MACAddress,
+			AddressSource: addressSource(entry.AddressSource), LeaseTimeRemaining: remaining,
+			InterfaceType: entry.InterfaceType, Active: entry.Active,
 		})
 	}
+	sort.Slice(leases, func(i, j int) bool { return compareLeases(leases[i], leases[j]) < 0 })
+	return leases, nil
+}
+
+func compareLeases(left, right Lease) int {
+	order := cmp.Or(cmp.Compare(strings.ToLower(left.MACAddress), strings.ToLower(right.MACAddress)),
+		cmp.Compare(left.IPAddress, right.IPAddress), cmp.Compare(left.Name, right.Name),
+		cmp.Compare(left.MACAddress, right.MACAddress), cmp.Compare(left.AddressSource, right.AddressSource),
+		cmp.Compare(left.InterfaceType, right.InterfaceType), cmp.Compare(strconv.FormatBool(left.Active), strconv.FormatBool(right.Active)))
+	if order != 0 {
+		return order
+	}
+	if left.LeaseTimeRemaining == nil && right.LeaseTimeRemaining != nil {
+		return -1
+	}
+	if left.LeaseTimeRemaining != nil && right.LeaseTimeRemaining == nil {
+		return 1
+	}
+	if left.LeaseTimeRemaining == nil {
+		return 0
+	}
+	return cmp.Compare(*left.LeaseTimeRemaining, *right.LeaseTimeRemaining)
+}
+
+func sortDeviceEntries(devices []Device) {
 	sort.SliceStable(devices, func(i, j int) bool {
 		left := strings.ToLower(devices[i].MACAddress) + "\x00" + devices[i].IPAddress + "\x00" + devices[i].Name
 		right := strings.ToLower(devices[j].MACAddress) + "\x00" + devices[j].IPAddress + "\x00" + devices[j].Name
 		return left < right
 	})
-	return devices, nil
 }
 
 func (c *Client) Forwards(ctx context.Context) ([]Forward, error) {
