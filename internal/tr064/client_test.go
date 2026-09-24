@@ -710,16 +710,19 @@ func TestForwardsSelectsDefaultConnectionService(t *testing.T) {
 }
 
 func TestForwardsSelectsUpnpStyleDefaultConnectionService(t *testing.T) {
-	// Live FRITZ routers report urn:upnp-org:serviceId:WANIPConnectionN even
-	// when the device description advertises dslforum-style service
-	// identifiers. The default's upnp-org family selects the advertised WAN
-	// service of that same family.
+	// Live FRITZ routers report default identifiers that do not literally
+	// equal the advertised dslforum-style service identifiers: upnp-org
+	// families, uuid-shaped identifiers, and the dot-separated
+	// N.WANIPConnection.N that FRITZ!OS returns. Each selects the one
+	// advertised WAN service of the same family and instance.
 	for _, test := range []struct {
 		name, defaultService, activePath string
 	}{
 		{"ip-family", "urn:upnp-org:serviceId:WANIPConnection1", "/ip1"},
 		{"ppp-family", "urn:upnp-org:serviceId:WANPPPConnection1", "/ppp1"},
 		{"uuid-ip-family", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f:WANIPConnection.2", "/ip2"},
+		{"avm-live-shape", "1.WANIPConnection.1", "/ip1"},
+		{"avm-live-shape-ppp", "1.WANPPPConnection.1", "/ppp1"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			script := forwardScript(test.defaultService, test.activePath, []string{portMappingEntryFixture})
@@ -765,7 +768,9 @@ func TestActiveWANServiceIDMatchesAdvertisedFamily(t *testing.T) {
 		{"malformed-family", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "urn:upnp-org:serviceId:WANConnection", false},
 		{"family-without-instance", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "urn:upnp-org:serviceId:WANIPConnection", false},
 		{"uuid-ip-family", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f:WANIPConnection.1", true},
-		{"uuid-dot-before-family", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f.WANIPConnection.1", false},
+		{"uuid-dot-before-family", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f.WANIPConnection.1", true},
+		{"avm-live-shape", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "1.WANIPConnection.1", true},
+		{"avm-live-shape-instance-mismatch", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection2", "1.WANIPConnection.1", false},
 		{"uuid-ppp-family", "urn:dslforum-org:service:WANPPPConnection:1", "urn:WANPPPConnection-com:serviceId:WANPPPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f:WANPPPConnection.1", true},
 		{"uuid-family-mismatch", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f:WANPPPConnection.1", false},
 	} {

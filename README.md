@@ -175,8 +175,9 @@ service, resolved through the documented
 `Layer3Forwarding:GetDefaultConnectionService` action, which returns the
 default connection’s service identifier. FRITZ! routers return that identifier
 either as the advertised `serviceId`, the advertised service `type`, or a
-UPnP-style identifier (`urn:upnp-org:serviceId:WANIPConnection1` or
-`uuid:…:WANIPConnection.1`); `forwards` accepts any of these shapes and
+UPnP-style identifier (`urn:upnp-org:serviceId:WANIPConnection1`,
+`uuid:…:WANIPConnection.1`, or the dot-separated `1.WANIPConnection.1`
+that FRITZ!OS returns); `forwards` accepts any of these shapes and
 matches the one advertised WAN service of the same family and instance.
 An empty identifier, or one that names no advertised WAN service or more than
 one (for example a bare service type shared by two `WANIPConnection`

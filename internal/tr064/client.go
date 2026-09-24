@@ -722,7 +722,8 @@ func activeWANError(err error) *Error {
 
 // activeWANServiceID matches a Layer3Forwarding default connection service
 // identifier shaped urn:upnp-org:serviceId:WANIPConnectionN,
-// WANPPPConnectionN, or uuid:...:WANIPConnection.N against the advertised WAN
+// WANPPPConnectionN, uuid:...:WANIPConnection.N, or the dot-separated
+// N.WANIPConnection.N that FRITZ!OS returns, against the advertised WAN
 // service of that same family and instance.
 func activeWANServiceID(advertisedType, advertisedID, defaultService string) bool {
 	var family, instance string
@@ -735,7 +736,7 @@ func activeWANServiceID(advertisedType, advertisedID, defaultService string) boo
 		if strings.Contains(tail, ":") {
 			return false
 		}
-		if !strings.HasSuffix(head, ":") {
+		if !strings.HasSuffix(head, ":") && !strings.HasSuffix(head, ".") {
 			return false
 		}
 		family, instance = candidate, strings.TrimPrefix(tail, ".")
