@@ -736,7 +736,7 @@ func activeWANServiceID(advertisedType, advertisedID, defaultService string) boo
 		if strings.Contains(tail, ":") {
 			return false
 		}
-		if !strings.HasSuffix(head, ":") && !strings.HasSuffix(head, ".") {
+		if !strings.HasSuffix(head, ":") && !numericDeviceIndex(head) {
 			return false
 		}
 		family, instance = candidate, strings.TrimPrefix(tail, ".")
@@ -750,6 +750,11 @@ func activeWANServiceID(advertisedType, advertisedID, defaultService string) boo
 		return false
 	}
 	return strings.TrimPrefix(advertisedID[index+len(family):], ":") == instance
+}
+
+func numericDeviceIndex(head string) bool {
+	index, found := strings.CutSuffix(head, ".")
+	return found && index != "" && strings.Trim(index, "0123456789") == ""
 }
 
 func (c *Client) advertisesPortMappingActions(ctx context.Context, svc service) error {
