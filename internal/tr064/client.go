@@ -697,6 +697,9 @@ func wifiMutationError(err error) *Error {
 	var protocolErr *Error
 	if errors.As(err, &protocolErr) {
 		result.Kind, result.StatusCode, result.FaultCode = protocolErr.Kind, protocolErr.StatusCode, protocolErr.FaultCode
+		if result.Kind == "network" {
+			result.Message = "router did not respond to the Wi-Fi radio change; the change may have been applied, and re-running the idempotent command is safe"
+		}
 		if result.Kind == "router" && result.FaultCode == "401" {
 			result.Kind = "unsupported"
 		}

@@ -203,10 +203,14 @@ The mutation contract:
 - Result (machine-readable): compact `wifi:` block with `action`, `instance`, `previous`,
   `current`, `changed`, and a `next:` suggestion; JSON is
   `{"wifi":{"instance":...,"action":...,"previous":...,"current":...,"changed":...}}`.
-  The preview JSON additionally carries `current`, `intended`, and `preview: true`.
+  The preview JSON is
+  `{"wifi":{"instance":...,"action":...,"current":...,"intended":...,"preview":true}}`
+  and does not include `previous` or `changed`.
 - Errors are structured on stderr with the standard exit codes (`2` usage, `3` auth, `4`
   network, `5` unsupported — including a router fault 401 on `SetEnable`, `6` protocol when
-  the router did not confirm the state). Router fault text, codes, and URLs are discarded.
+  the router did not confirm the state). A network failure after `SetEnable` was sent is
+  reported as possibly-applied: the change may have reached the router without a response,
+  and re-running the idempotent command is safe. Router fault text, codes, and URLs are discarded.
 - SSIDs, BSSIDs, keys, and radio secrets are never requested or printed by the mutation path;
   it reads only the enable state.
 
