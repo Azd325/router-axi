@@ -2048,3 +2048,21 @@ func TestWiFiMutationSelectsExplicitInstance(t *testing.T) {
 		t.Fatalf("request = %s", request)
 	}
 }
+
+// Regression for observed FRITZ!Box 6591 Cable / FRITZ!OS 8.25 guest-instance
+// behavior: SetEnable is accepted without a fault, but the verification read
+// still returns the old state. The command must refuse to report success.
+func TestWiFiMutationReportsUnappliedSetEnable(t *testing.T) {
+	client, _ := mutationFixtureClient(t, map[string][]mutationExchange{
+		"/wifi2": {
+			{action: "GetInfo", payload: enabledInfo("0")},
+			{action: "SetEnable", body: "<NewEnable>1</NewEnable>", payload: `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:SetEnableResponse xmlns:u="urn:dslforum-org:service:WLANConfiguration:1"></u:SetEnableResponse></s:Body></s:Envelope>`},
+			{action: "GetInfo", payload: enabledInfo("0")},
+		},
+	})
+	result, err := client.WiFiMutation(t.Context(), 2, true, true)
+	var protocolErr *Error
+	if result.Instance != "" || !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || !strings.Contains(protocolErr.Message, "did not confirm") {
+		t.Fatalf("result=%#v error=%#v", result, err)
+	}
+}

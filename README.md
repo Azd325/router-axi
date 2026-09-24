@@ -211,6 +211,10 @@ The mutation contract:
   the router did not confirm the state). A network failure after `SetEnable` was sent is
   reported as possibly-applied: the change may have reached the router without a response,
   and re-running the idempotent command is safe. Router fault text, codes, and URLs are discarded.
+- A router may accept `SetEnable` without applying it (observed on a FRITZ!Box 6591
+  Cable / FRITZ!OS 8.25 guest instance): the confirmation read then still reports the old
+  state and the command exits `6` with the unconfirmed-state error. That is an honest
+  capability boundary of the firmware, not a CLI success, and re-running is safe.
 - SSIDs, BSSIDs, keys, and radio secrets are never requested or printed by the mutation path;
   it reads only the enable state.
 
