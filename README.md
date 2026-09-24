@@ -192,6 +192,7 @@ The mutation contract:
 
 - Without `--confirm` the command reads the current state, prints a preview with the target
   instance and intended new state, changes nothing, and exits `0` with a `next:` suggestion.
+  That suggestion repeats an explicit `--host`, so the confirmed run reaches the previewed router.
   It never relies on an interactive prompt.
 - With `--confirm` the command re-reads the current state first, sends `SetEnable` only when the
   state differs, and re-reads `GetInfo` afterwards: success is reported only when the router
