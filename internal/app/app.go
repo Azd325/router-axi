@@ -397,7 +397,7 @@ func parse(args []string) (options, error) {
 	if opts.force && opts.command != "backup" {
 		return opts, errors.New("--force is valid only with backup")
 	}
-	if opts.command == "backup" && opts.output == "" {
+	if opts.command == "backup" && opts.output == "" && !opts.help {
 		return opts, errors.New("backup requires --output PATH")
 	}
 	if opts.all && opts.command != "calls" && opts.command != "devices" && opts.command != "leases" && opts.command != "forwards" {

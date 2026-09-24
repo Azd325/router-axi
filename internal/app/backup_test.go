@@ -110,10 +110,12 @@ func TestBackupHelpIsOffline(t *testing.T) {
 		t.Fatal("help reached the client factory")
 		return nil, nil
 	}, func(string) string { return "" })
-	var stdout, stderr bytes.Buffer
-	code := application.Run(t.Context(), []string{"backup", "--output", "fritz.export", "--help"}, &stdout, &stderr)
-	if code != ExitOK || stderr.Len() != 0 || !strings.Contains(stdout.String(), "--force") || !strings.Contains(stdout.String(), "ROUTER_AXI_BACKUP_PASSWORD") || !strings.Contains(stdout.String(), "never overwritten without --force") {
-		t.Fatal("backup help omitted its safety contract")
+	for _, args := range [][]string{{"backup", "--output", "fritz.export", "--help"}, {"backup", "--help"}, {"backup", "-h"}} {
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), args, &stdout, &stderr)
+		if code != ExitOK || stderr.Len() != 0 || !strings.Contains(stdout.String(), "--force") || !strings.Contains(stdout.String(), "ROUTER_AXI_BACKUP_PASSWORD") || !strings.Contains(stdout.String(), "never overwritten without --force") {
+			t.Fatalf("backup help omitted its safety contract: %v", args)
+		}
 	}
 }
 
