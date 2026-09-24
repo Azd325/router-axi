@@ -449,6 +449,12 @@ ROUTER_AXI_LIVE_TEST=1 ROUTER_AXI_LIVE_MUTATION_TEST=1 \
   go test ./internal/tr064 -run 'TestLiveWiFiMutation$' -count=1
 ```
 
+Warning: `TestLiveWiFiMutation` briefly toggles the selected radio off and on. Run it only
+from a host connected to the router over wired LAN — if the test host reaches the router
+through the radio being toggled, the connection drops mid-test and neither verification nor
+restore can reach the router. The test reports only pass/fail; hardware validation of the
+change direction is only meaningful when the router confirms both changes.
+
 ## License
 
 [MIT](LICENSE)

@@ -596,13 +596,13 @@ func parseEnable(value string) (bool, error) {
 // are used; the router's current state is always read first, and a mutation is
 // only sent when the state actually differs from the requested state.
 type WiFiMutation struct {
-	Instance string `json:"instance"`
-	Action   string `json:"action"`
-	Current  bool   `json:"current"`
-	Intended bool   `json:"intended"`
-	Preview  bool   `json:"preview"`
-	Previous bool   `json:"previous"`
-	Changed  bool   `json:"changed"`
+	Instance string
+	Action   string
+	Current  bool
+	Intended bool
+	Preview  bool
+	Previous bool
+	Changed  bool
 }
 
 const wifiMutationRemediation = "use firmware that implements WLANConfiguration:SetEnable, or use supported firmware"
