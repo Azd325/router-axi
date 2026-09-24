@@ -175,8 +175,11 @@ It reads the router’s active WAN service, resolved through the documented
 default connection’s service identifier. FRITZ! routers return that identifier
 either as the advertised `serviceId`, the advertised service `type`, or a
 UPnP-style identifier (`urn:upnp-org:serviceId:WANIPConnection1` or
-`uuid:…:WANIPConnection:1`); `forwards` accepts any of these shapes and
+`uuid:…:WANIPConnection.1`); `forwards` accepts any of these shapes and
 matches the one advertised WAN service of the same family and instance.
+An empty identifier, or one that names no advertised WAN service or more than
+one (for example a bare service type shared by two `WANIPConnection`
+instances), is unsupported; inactive instances are never contacted.
 That instance, `WANIPConnection` or
 `WANPPPConnection`, must advertise both `GetPortMappingNumberOfEntries` and
 `GetGenericPortMappingEntry` in its SCPD, including disabled mappings.

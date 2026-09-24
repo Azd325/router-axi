@@ -556,6 +556,7 @@ const maxHostEntries = 4096
 
 const (
 	maxPortMappingEntries = 4096
+	activeWANMessage      = "could not determine the active WAN service; enable Layer3Forwarding:GetDefaultConnectionService or use supported firmware"
 	forwardsRemediation   = "enable a WANIPConnection or WANPPPConnection service with documented port-mapping enumeration actions, or use supported firmware"
 )
 
@@ -608,41 +609,36 @@ func (c *Client) Forwards(ctx context.Context) ([]Forward, error) {
 	if err != nil {
 		return nil, err
 	}
-	forwards := make([]Forward, 0)
-	for _, svc := range []service{activeService} {
-		countValues, err := c.actionOnService(ctx, svc, "GetPortMappingNumberOfEntries")
+	countValues, err := c.actionOnService(ctx, activeService, "GetPortMappingNumberOfEntries")
+	if err != nil {
+		return nil, forwardsError(err)
+	}
+	count, err := portMappingCount(countValues.PortMappingCount)
+	if err != nil {
+		return nil, err
+	}
+	forwards := make([]Forward, 0, count)
+	for index := uint64(0); index < count; index++ {
+		values, err := c.actionOnService(ctx, activeService, "GetGenericPortMappingEntry", soapArgument{Name: "NewPortMappingIndex", Value: strconv.FormatUint(index, 10)})
 		if err != nil {
 			return nil, forwardsError(err)
 		}
-		count, err := portMappingCount(countValues.PortMappingCount)
+		forward, err := parseForward(values)
 		if err != nil {
 			return nil, err
 		}
-		if uint64(len(forwards))+count > maxPortMappingEntries {
-			return nil, &Error{Kind: "protocol", Operation: "forwards", Message: "port-mapping tables exceed the inspection limit"}
-		}
-		for index := uint64(0); index < count; index++ {
-			values, err := c.actionOnService(ctx, svc, "GetGenericPortMappingEntry", soapArgument{Name: "NewPortMappingIndex", Value: strconv.FormatUint(index, 10)})
-			if err != nil {
-				return nil, forwardsError(err)
-			}
-			forward, err := parseForward(values)
-			if err != nil {
-				return nil, err
-			}
-			forwards = append(forwards, forward)
-		}
-		finalCount, err := c.actionOnService(ctx, svc, "GetPortMappingNumberOfEntries")
-		if err != nil {
-			return nil, forwardsError(err)
-		}
-		final, err := portMappingCount(finalCount.PortMappingCount)
-		if err != nil {
-			return nil, err
-		}
-		if final != count {
-			return nil, &Error{Kind: "protocol", Operation: "forwards", Message: "port mappings changed during enumeration; retry the read"}
-		}
+		forwards = append(forwards, forward)
+	}
+	finalCount, err := c.actionOnService(ctx, activeService, "GetPortMappingNumberOfEntries")
+	if err != nil {
+		return nil, forwardsError(err)
+	}
+	final, err := portMappingCount(finalCount.PortMappingCount)
+	if err != nil {
+		return nil, err
+	}
+	if final != count {
+		return nil, &Error{Kind: "protocol", Operation: "forwards", Message: "port mappings changed during enumeration; retry the read"}
 	}
 	sort.SliceStable(forwards, func(i, j int) bool { return compareForwards(forwards[i], forwards[j]) < 0 })
 	return forwards, nil
@@ -669,26 +665,51 @@ func compareForwards(left, right Forward) int {
 }
 
 func (c *Client) activePortMappingService(ctx context.Context) (service, error) {
-	services, err := c.portMappingServices(ctx)
-	if err != nil {
-		return service{}, err
+	services := make([]service, 0)
+	for _, svc := range c.allServices {
+		for _, prefix := range wanMappingPrefixes {
+			if strings.HasPrefix(svc.Type, prefix) {
+				services = append(services, svc)
+				break
+			}
+		}
 	}
-	defaultService, err := c.action(ctx, "urn:dslforum-org:service:Layer3Forwarding:", "GetDefaultConnectionService")
+	if len(services) == 0 {
+		return service{}, &Error{Kind: "unsupported", Operation: "forwards", Message: "router does not advertise a WANIPConnection or WANPPPConnection service; " + forwardsRemediation}
+	}
+	defaultValues, err := c.action(ctx, "urn:dslforum-org:service:Layer3Forwarding:", "GetDefaultConnectionService")
 	if err != nil {
 		return service{}, activeWANError(err)
 	}
+	defaultService := strings.TrimSpace(defaultValues.DefaultConnectionService)
+	if defaultService == "" {
+		return service{}, &Error{Kind: "unsupported", Operation: "forwards", Message: activeWANMessage}
+	}
+	var matches []service
 	for _, svc := range services {
-		if defaultService.DefaultConnectionService == svc.Type || defaultService.DefaultConnectionService == svc.ID || activeWANServiceID(svc.Type, svc.ID, defaultService.DefaultConnectionService) {
-			return svc, nil
+		if defaultService == svc.Type || defaultService == svc.ID || activeWANServiceID(svc.Type, svc.ID, defaultService) {
+			matches = append(matches, svc)
 		}
 	}
-	return service{}, &Error{Kind: "unsupported", Operation: "forwards", Message: "router default WAN service does not support documented port-mapping enumeration; " + forwardsRemediation}
+	if len(matches) != 1 {
+		return service{}, &Error{Kind: "unsupported", Operation: "forwards", Message: "router default WAN service does not name exactly one advertised WAN service; " + forwardsRemediation}
+	}
+	active := matches[0]
+	control, err := c.base.Parse(active.ControlURL)
+	if err != nil || active.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.Fragment != "" {
+		return service{}, &Error{Kind: "protocol", Operation: "forwards", Message: "router advertised an invalid WAN control URL"}
+	}
+	if err := c.advertisesPortMappingActions(ctx, active); err != nil {
+		return service{}, err
+	}
+	active.ControlURL = control.Path
+	return active, nil
 }
 
 func activeWANError(err error) *Error {
 	result := forwardsError(err)
 	result.Operation = "forwards"
-	result.Message = "could not determine the active WAN service; enable Layer3Forwarding:GetDefaultConnectionService or use supported firmware"
+	result.Message = activeWANMessage
 	if result.Kind == "router" && result.StatusCode == http.StatusInternalServerError {
 		result.Kind = "unsupported"
 	}
@@ -697,8 +718,8 @@ func activeWANError(err error) *Error {
 
 // activeWANServiceID matches a Layer3Forwarding default connection service
 // identifier shaped urn:upnp-org:serviceId:WANIPConnectionN,
-// WANPPPConnectionN, or uuid:...:WANIPConnection:1 against an advertised WAN
-// service of that same family.
+// WANPPPConnectionN, or uuid:...:WANIPConnection.N against the advertised WAN
+// service of that same family and instance.
 func activeWANServiceID(advertisedType, advertisedID, defaultService string) bool {
 	var family, instance string
 	for _, candidate := range []string{"WANIPConnection", "WANPPPConnection"} {
@@ -716,47 +737,14 @@ func activeWANServiceID(advertisedType, advertisedID, defaultService string) boo
 		family, instance = candidate, strings.TrimPrefix(tail, ".")
 		break
 	}
-	if family == "" || !strings.Contains(advertisedType, family) {
+	if family == "" || instance == "" || !strings.Contains(advertisedType, family) {
 		return false
 	}
 	index := strings.LastIndex(advertisedID, family)
 	if index < 0 {
 		return false
 	}
-	documentedInstance := strings.TrimPrefix(advertisedID[index+len(family):], ":")
-	if instance != "" && documentedInstance != instance {
-		return false
-	}
-	return true
-}
-
-func (c *Client) portMappingServices(ctx context.Context) ([]service, error) {
-	services := make([]service, 0)
-	for _, svc := range c.allServices {
-		for _, prefix := range wanMappingPrefixes {
-			if strings.HasPrefix(svc.Type, prefix) {
-				services = append(services, svc)
-				break
-			}
-		}
-	}
-	if len(services) == 0 {
-		return nil, &Error{Kind: "unsupported", Operation: "forwards", Message: "router does not advertise a WANIPConnection or WANPPPConnection service; " + forwardsRemediation}
-	}
-	sort.SliceStable(services, func(i, j int) bool {
-		return cmp.Or(cmp.Compare(services[i].Type, services[j].Type), cmp.Compare(services[i].ID, services[j].ID), cmp.Compare(services[i].ControlURL, services[j].ControlURL)) < 0
-	})
-	for i, svc := range services {
-		control, err := c.base.Parse(svc.ControlURL)
-		if err != nil || svc.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.Fragment != "" {
-			return nil, &Error{Kind: "protocol", Operation: "forwards", Message: "router advertised an invalid WAN control URL"}
-		}
-		services[i].ControlURL = control.Path
-		if err := c.advertisesPortMappingActions(ctx, svc); err != nil {
-			return nil, err
-		}
-	}
-	return services, nil
+	return strings.TrimPrefix(advertisedID[index+len(family):], ":") == instance
 }
 
 func (c *Client) advertisesPortMappingActions(ctx context.Context, svc service) error {

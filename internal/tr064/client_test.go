@@ -575,11 +575,11 @@ func forwardFixtureClient(t *testing.T, exchanges []forwardExchange) *Client {
 }
 
 func forwardScript(defaultService, activePath string, tables ...[]string) []forwardExchange {
-	exchanges := []forwardExchange{{path: descriptionPath, body: portMappingDescriptionFixture}}
-	for _, path := range []string{"/ip1", "/ip2", "/ppp1"} {
-		exchanges = append(exchanges, forwardExchange{path: path + ".xml", body: portMappingSCPDFixture})
+	exchanges := []forwardExchange{
+		{path: descriptionPath, body: portMappingDescriptionFixture},
+		{path: "/layer3", action: "GetDefaultConnectionService", body: `<Envelope><NewDefaultConnectionService>` + defaultService + `</NewDefaultConnectionService></Envelope>`},
+		{path: activePath + ".xml", body: portMappingSCPDFixture},
 	}
-	exchanges = append(exchanges, forwardExchange{path: "/layer3", action: "GetDefaultConnectionService", body: `<Envelope><NewDefaultConnectionService>` + defaultService + `</NewDefaultConnectionService></Envelope>`})
 	count := forwardExchange{path: activePath, action: "GetPortMappingNumberOfEntries", body: strings.Replace(portMappingCountFixture, ">2<", fmt.Sprintf(">%d<", entriesFor(tables)), 1)}
 	exchanges = append(exchanges, count)
 	for index, entry := range allEntries(tables) {
@@ -694,7 +694,7 @@ func TestForwardsSelectsDefaultConnectionService(t *testing.T) {
 		name, defaultService, activePath string
 	}{
 		{"ip-by-id", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "/ip1"},
-		{"ip-by-type", "urn:dslforum-org:service:WANIPConnection:1", "/ip1"},
+		{"second-ip-by-id", "urn:WANIPConnection-com:serviceId:WANIPConnection2", "/ip2"},
 		{"ppp-by-id", "urn:WANPPPConnection-com:serviceId:WANPPPConnection1", "/ppp1"},
 		{"ppp-by-type", "urn:dslforum-org:service:WANPPPConnection:1", "/ppp1"},
 	} {
@@ -719,6 +719,7 @@ func TestForwardsSelectsUpnpStyleDefaultConnectionService(t *testing.T) {
 	}{
 		{"ip-family", "urn:upnp-org:serviceId:WANIPConnection1", "/ip1"},
 		{"ppp-family", "urn:upnp-org:serviceId:WANPPPConnection1", "/ppp1"},
+		{"uuid-ip-family", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f:WANIPConnection.2", "/ip2"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			script := forwardScript(test.defaultService, test.activePath, []string{portMappingEntryFixture})
@@ -742,10 +743,7 @@ func TestForwardsRejectsUnsupportedUpnpStyleDefaultConnectionService(t *testing.
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			script := forwardScript(test.defaultService, "/ip1")
-			for i := range script[:5] {
-				script[i].optional = true
-			}
-			err := assertForwardError(t, forwardFixtureClient(t, script[:5]), "unsupported", 0)
+			err := assertForwardError(t, forwardFixtureClient(t, script[:2]), "unsupported", 0)
 			if !strings.Contains(err.Message, forwardsRemediation) {
 				t.Fatalf("missing remediation: %#v", err)
 			}
@@ -765,6 +763,7 @@ func TestActiveWANServiceIDMatchesAdvertisedFamily(t *testing.T) {
 		{"non-wan-service", "urn:dslforum-org:service:Hosts:1", "urn:Hosts-com:serviceId:Hosts1", "urn:upnp-org:serviceId:WANIPConnection1", false},
 		{"additional-colon", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "urn:upnp-org:serviceId:WANIPConnection:1", false},
 		{"malformed-family", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "urn:upnp-org:serviceId:WANConnection", false},
+		{"family-without-instance", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "urn:upnp-org:serviceId:WANIPConnection", false},
 		{"uuid-ip-family", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f.WANIPConnection.1", true},
 		{"uuid-ppp-family", "urn:dslforum-org:service:WANPPPConnection:1", "urn:WANPPPConnection-com:serviceId:WANPPPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f.WANPPPConnection.1", true},
 		{"uuid-family-mismatch", "urn:dslforum-org:service:WANIPConnection:1", "urn:WANIPConnection-com:serviceId:WANIPConnection1", "uuid:4d69648d-6c2f-4e46-bf4e-1a2b3c4d5e6f.WANPPPConnection.1", false},
@@ -789,20 +788,24 @@ func TestForwardsSkipsInactiveAdvertisedServices(t *testing.T) {
 
 func TestForwardsRequiresUsableDefaultConnectionService(t *testing.T) {
 	for _, test := range []struct {
-		name, defaultService string
+		name, defaultService, remediation string
+		idless                            bool
 	}{
-		{"missing-layer3", ""},
-		{"invalid-value", "urn:synthetic:unknown"},
-		{"non-wan", "urn:dslforum-org:service:WANCommonInterfaceConfig:1"},
+		{"missing-layer3", "", "Layer3Forwarding:GetDefaultConnectionService", false},
+		{"whitespace", " \n ", "Layer3Forwarding:GetDefaultConnectionService", false},
+		{"empty-with-idless-service", "", "Layer3Forwarding:GetDefaultConnectionService", true},
+		{"invalid-value", "urn:synthetic:unknown", forwardsRemediation, false},
+		{"non-wan", "urn:dslforum-org:service:WANCommonInterfaceConfig:1", forwardsRemediation, false},
+		{"ambiguous-type", "urn:dslforum-org:service:WANIPConnection:1", forwardsRemediation, false},
+		{"family-without-instance", "urn:upnp-org:serviceId:WANIPConnection", forwardsRemediation, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			script := forwardScript(test.defaultService, "/ip1")
-			for i := range script[:5] {
-				script[i].optional = true
+			script := forwardScript(test.defaultService, "/ip1")[:2]
+			if test.idless {
+				script[0].body = strings.Replace(script[0].body, "<serviceId>urn:WANIPConnection-com:serviceId:WANIPConnection1</serviceId>", "", 1)
 			}
-			script = script[:5]
 			err := assertForwardError(t, forwardFixtureClient(t, script), "unsupported", 0)
-			if !strings.Contains(err.Message, forwardsRemediation) {
+			if !strings.Contains(err.Message, test.remediation) {
 				t.Fatalf("missing remediation: %#v", err)
 			}
 		})
@@ -820,8 +823,8 @@ func TestForwardsLayer3ErrorsAreSanitized(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			script := activeIPScript()
-			script[4].body, script[4].status = test.body, test.status
-			err := assertForwardError(t, forwardFixtureClient(t, script[:5]), test.kind, test.status)
+			script[1].body, script[1].status = test.body, test.status
+			err := assertForwardError(t, forwardFixtureClient(t, script[:2]), test.kind, test.status)
 			if test.kind == "unsupported" && !strings.Contains(err.Message, "Layer3Forwarding:GetDefaultConnectionService") {
 				t.Fatalf("missing remediation: %#v", err)
 			}
@@ -830,7 +833,7 @@ func TestForwardsLayer3ErrorsAreSanitized(t *testing.T) {
 }
 
 func TestForwardsLayer3NetworkErrorsAreSanitized(t *testing.T) {
-	script := activeIPScript()[:5]
+	script := activeIPScript()[:2]
 	for i := range script {
 		script[i].optional = true
 	}
@@ -867,7 +870,7 @@ func TestForwardsValidatesRequiredFields(t *testing.T) {
 		for _, value := range field.values {
 			t.Run(field.tag+"/"+value, func(t *testing.T) {
 				script := activeIPScript([]string{portMappingEntryFixture, mappingField(portMappingEntryFixture, field.tag, value)})
-				_ = assertForwardError(t, forwardFixtureClient(t, script[:8]), "protocol", 0)
+				_ = assertForwardError(t, forwardFixtureClient(t, script[:6]), "protocol", 0)
 			})
 		}
 	}
@@ -875,7 +878,7 @@ func TestForwardsValidatesRequiredFields(t *testing.T) {
 
 func TestForwardsValidatesCountsBeforeAndAfterEnumeration(t *testing.T) {
 	for _, value := range []string{"missing", "", "-1", "+1", "1.5", "private-value", "4097", "65536", "18446744073709551616"} {
-		for _, position := range []int{5, 8} {
+		for _, position := range []int{3, 6} {
 			t.Run(fmt.Sprintf("%s/%d", value, position), func(t *testing.T) {
 				script := activeIPScript([]string{portMappingEntryFixture, portMappingEntryFixture})
 				script[position].body = mappingField(portMappingCountFixture, "NewPortMappingNumberOfEntries", value)
@@ -894,7 +897,7 @@ func TestForwardsEnforcesAggregateLimit(t *testing.T) {
 			}
 			script := activeIPScript(entries)
 			if secondCount == 1 {
-				position := 5 + 1 + len(entries)
+				position := 4 + len(entries)
 				script[position].body = mappingField(portMappingCountFixture, "NewPortMappingNumberOfEntries", "1")
 				_ = assertForwardError(t, forwardFixtureClient(t, script[:position+1]), "protocol", 0)
 				return
@@ -916,18 +919,11 @@ func TestForwardsUnsupportedCapabilitiesDoNotSendSOAP(t *testing.T) {
 				script[0].body = wifiDescriptionFixture
 				script = script[:1]
 			case "SCPDURL":
-				script[0].body = strings.Replace(portMappingDescriptionFixture, "<SCPDURL>/ppp1.xml</SCPDURL>", "", 1)
-				script[4].optional = true
-				script[5].optional = true
-				script = script[:3]
+				script[0].body = strings.Replace(portMappingDescriptionFixture, "<SCPDURL>/ip1.xml</SCPDURL>", "", 1)
+				script = script[:2]
 			default:
-				for _, position := range []int{1, 2, 3} {
-					script[position].body = strings.Replace(portMappingSCPDFixture, "<action><name>"+missing+"</name></action>", "", 1)
-				}
-				for _, position := range []int{2, 3, 4, 5} {
-					script[position].optional = true
-				}
-				script = script[:4]
+				script[2].body = strings.Replace(portMappingSCPDFixture, "<action><name>"+missing+"</name></action>", "", 1)
+				script = script[:3]
 			}
 			err := assertForwardError(t, forwardFixtureClient(t, script), "unsupported", 0)
 			if !strings.Contains(err.Message, forwardsRemediation) {
@@ -941,8 +937,8 @@ func TestForwardsChangedCountsAreAtomic(t *testing.T) {
 	for _, count := range []string{"0", "3"} {
 		t.Run(count, func(t *testing.T) {
 			script := activeIPScript([]string{portMappingEntryFixture}, []string{portMappingEntryFixture})
-			script[8].body = mappingField(portMappingCountFixture, "NewPortMappingNumberOfEntries", count)
-			err := assertForwardError(t, forwardFixtureClient(t, script[:9]), "protocol", 0)
+			script[6].body = mappingField(portMappingCountFixture, "NewPortMappingNumberOfEntries", count)
+			err := assertForwardError(t, forwardFixtureClient(t, script[:7]), "protocol", 0)
 			if !strings.Contains(err.Message, "retry") {
 				t.Fatalf("missing retry guidance: %#v", err)
 			}
@@ -965,8 +961,8 @@ func TestForwardsLateErrorsAreAtomicAndSanitized(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			script := activeIPScript([]string{portMappingEntryFixture}, []string{portMappingEntryFixture, portMappingEntryFixture})
-			script[8].body, script[8].status = test.body, test.status
-			err := assertForwardError(t, forwardFixtureClient(t, script[:9]), test.kind, test.status)
+			script[6].body, script[6].status = test.body, test.status
+			err := assertForwardError(t, forwardFixtureClient(t, script[:7]), test.kind, test.status)
 			if test.kind == "unsupported" && !strings.Contains(err.Message, forwardsRemediation) {
 				t.Fatalf("missing remediation: %#v", err)
 			}
@@ -975,7 +971,7 @@ func TestForwardsLateErrorsAreAtomicAndSanitized(t *testing.T) {
 }
 
 func TestForwardsDescriptionErrorsAreSanitized(t *testing.T) {
-	for _, position := range []int{0, 1} {
+	for _, position := range []int{0, 2} {
 		for _, status := range []int{http.StatusUnauthorized, http.StatusServiceUnavailable, http.StatusOK} {
 			t.Run(fmt.Sprintf("%d/%d", position, status), func(t *testing.T) {
 				script := activeIPScript()[:position+1]
@@ -1021,7 +1017,7 @@ func TestForwardsRejectsUnsafeServiceURLs(t *testing.T) {
 	for _, tag := range []string{"controlURL", "SCPDURL"} {
 		for _, address := range []string{external.URL + "/private-endpoint", "//" + strings.TrimPrefix(external.URL, "http://") + "/private-endpoint", "http://private-user:private-password@192.0.2.1/private-endpoint", "__ORIGIN__/private-endpoint#private-fragment", ""} {
 			t.Run(tag+"/"+address, func(t *testing.T) {
-				script := activeIPScript()[:1]
+				script := activeIPScript()[:2]
 				original := "/ip1"
 				if tag == "SCPDURL" {
 					original += ".xml"
@@ -1055,7 +1051,7 @@ func TestForwardsRefusesRedirects(t *testing.T) {
 		externalRequests.Add(1)
 	}))
 	defer external.Close()
-	for _, position := range []int{0, 1, 4, 5} {
+	for _, position := range []int{0, 1, 2, 3} {
 		for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect} {
 			t.Run(fmt.Sprintf("%d/%d", position, status), func(t *testing.T) {
 				script := activeIPScript([]string{portMappingEntryFixture})[:position+1]
