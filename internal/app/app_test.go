@@ -81,7 +81,7 @@ func (f fakeReader) Doctor(context.Context) (tr064.Doctor, error) {
 		Endpoint: "http://router.test:49000", Reachability: tr064.DoctorCheck{State: "reachable"},
 		Protocol: tr064.DoctorCheck{State: "available"}, Authentication: tr064.DoctorCheck{State: "authenticated"},
 		Model: "FRITZ!Box 7590 AX", Firmware: "8.02",
-		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Calls: advertised, Devices: advertised, Leases: advertised, WiFi: advertised, Forwards: advertised, Reboot: advertised},
+		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Calls: advertised, Devices: advertised, Leases: advertised, WiFi: advertised, Forwards: advertised, Reboot: advertised, Backup: advertised},
 	}, f.err
 }
 func (f fakeReader) Status(context.Context) (tr064.Status, error) {
@@ -123,6 +123,12 @@ func (f fakeReader) WiFi(context.Context) ([]tr064.Radio, error) {
 
 func (f fakeReader) Reboot(_ context.Context, confirm bool) (tr064.RebootResult, error) {
 	return tr064.RebootResult{Endpoint: "http://router.test:49000", Preview: !confirm, Accepted: confirm}, f.err
+}
+
+const syntheticBackupPayload = "**** SYNTHETIC ROUTER-AXI TEST EXPORT ****\nsynthetic-configuration-export-content\n**** END OF SYNTHETIC EXPORT ****"
+
+func (f fakeReader) ConfigExport(context.Context, string) ([]byte, error) {
+	return []byte(syntheticBackupPayload), f.err
 }
 
 func (f fakeReader) WiFiMutation(context.Context, uint64, bool, bool) (tr064.WiFiMutation, error) {
@@ -221,7 +227,7 @@ func TestNoCommandRunsStatus(t *testing.T) {
 
 func TestDoctorJSONIsDeterministic(t *testing.T) {
 	code, stdout, stderr := runTest(t, "doctor", "--json")
-	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"leases":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"},"reboot":{"state":"advertised"}}}` + "\n"
+	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"leases":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"},"reboot":{"state":"advertised"},"backup":{"state":"advertised"}}}` + "\n"
 	if code != ExitOK || stdout != want || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}

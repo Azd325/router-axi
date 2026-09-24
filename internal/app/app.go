@@ -2,10 +2,14 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -36,6 +40,7 @@ type Reader interface {
 	WiFiMutation(context.Context, uint64, bool, bool) (tr064.WiFiMutation, error)
 	Forwards(context.Context) ([]tr064.Forward, error)
 	Reboot(context.Context, bool) (tr064.RebootResult, error)
+	ConfigExport(context.Context, string) ([]byte, error)
 }
 type Factory func(Config) (Reader, error)
 type App struct {
@@ -49,10 +54,10 @@ func New(factory Factory, getenv func(string) string) *App {
 }
 
 type options struct {
-	command, host, action    string
-	json, help, all, confirm bool
-	instance                 uint64
-	instanceSet              bool
+	command, host, action, output   string
+	json, help, all, confirm, force bool
+	instance                        uint64
+	instanceSet                     bool
 }
 
 type callResult struct {
@@ -113,6 +118,8 @@ func wifiPreviewJSON(result tr064.WiFiMutation) wifiPreviewResult {
 const rebootEffect = "the router will restart and temporarily interrupt all local services"
 const rebootRecovery = "wait for the router to recover, then run router-axi doctor; do not automatically repeat reboot"
 
+const backupNext = "keep the export passphrase safe; the backup can only be restored with it"
+
 type rebootPreviewState struct {
 	Endpoint string `json:"endpoint"`
 	Preview  bool   `json:"preview"`
@@ -132,6 +139,16 @@ type forwardResult struct {
 	Omitted  int             `json:"omitted"`
 }
 
+type backupResult struct {
+	Path   string `json:"path"`
+	Bytes  int    `json:"bytes"`
+	SHA256 string `json:"sha256"`
+}
+
+type backupJSONResult struct {
+	Backup backupResult `json:"backup"`
+}
+
 func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	opts, err := parse(args)
 	if err != nil {
@@ -143,6 +160,9 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		hint := "router-axi help"
 		if opts.command == "reboot" {
 			hint = "router-axi reboot [--confirm] [--host ADDRESS] [--json] [--help]"
+		}
+		if opts.command == "backup" {
+			hint = "router-axi backup --output PATH [--force] [--host ADDRESS] [--json] [--help]"
 		}
 		return writeError(stderr, opts.json, ExitUsage, "invalid_arguments", err.Error(), hint)
 	}
@@ -189,6 +209,13 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			return renderProtocolError(stderr, opts.json, err)
 		}
 		return writeReboot(stdout, result, opts.json)
+	}
+	if opts.command == "backup" {
+		passphrase := a.getenv("ROUTER_AXI_BACKUP_PASSWORD")
+		if passphrase == "" {
+			return writeError(stderr, opts.json, ExitUsage, "backup_passphrase_missing", "backup requires ROUTER_AXI_BACKUP_PASSWORD; the export passphrase is never read from arguments or other variables", "router-axi backup --help")
+		}
+		return a.runBackup(ctx, reader, opts, stdout, stderr, passphrase)
 	}
 
 	var value any
@@ -329,6 +356,14 @@ func parse(args []string) (options, error) {
 				return opts, errors.New("--host requires a value")
 			}
 			opts.host = args[i]
+		case "--output":
+			i++
+			if i >= len(args) || args[i] == "" || strings.HasPrefix(args[i], "-") {
+				return opts, errors.New("--output requires a file path")
+			}
+			opts.output = args[i]
+		case "--force":
+			opts.force = true
 		default:
 			if strings.HasPrefix(args[i], "-") {
 				option, _, _ := strings.Cut(args[i], "=")
@@ -355,6 +390,15 @@ func parse(args []string) (options, error) {
 	if opts.confirm && !wifiMutation && opts.command != "reboot" {
 		return opts, errors.New("--confirm is valid only with reboot, wifi enable, or wifi disable")
 	}
+	if opts.output != "" && opts.command != "backup" {
+		return opts, errors.New("--output is valid only with backup")
+	}
+	if opts.force && opts.command != "backup" {
+		return opts, errors.New("--force is valid only with backup")
+	}
+	if opts.command == "backup" && opts.output == "" {
+		return opts, errors.New("backup requires --output PATH")
+	}
 	if opts.all && opts.command != "calls" && opts.command != "devices" && opts.command != "leases" && opts.command != "forwards" {
 		return opts, errors.New("--all is valid only for calls, devices, leases, or forwards")
 	}
@@ -362,12 +406,15 @@ func parse(args []string) (options, error) {
 }
 
 func validCommand(command string) bool {
-	return command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "forwards" || command == "reboot"
+	return command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "forwards" || command == "reboot" || command == "backup"
 }
 
 func help(command, action string) string {
 	if command == "reboot" {
 		return "usage: router-axi reboot [--confirm] [--host ADDRESS] [--json] [--help]\nWithout --confirm: preview only. With --confirm: restart the router and temporarily interrupt all local services.\nNo prompts, retries, or recovery polling; reboot is not idempotent.\nexamples: router-axi reboot; router-axi reboot --confirm\n"
+	}
+	if command == "backup" {
+		return "usage: router-axi backup --output PATH [--force] [--host ADDRESS] [--json] [--help]\nDownloads the documented DeviceConfig:X_AVM-DE_GetConfigFile export to PATH with an atomic owner-only write.\nThe export passphrase is read only from ROUTER_AXI_BACKUP_PASSWORD and is required to restore the file.\nAn existing file is never overwritten without --force; the download uses HTTPS and fails closed on untrusted certificates.\nNo prompts. Examples: router-axi backup --output fritz.export; router-axi backup --output fritz.export --force\n"
 	}
 	if action != "" && command == "wifi" {
 		return "usage: router-axi wifi " + action + " [--instance N] --confirm [--host ADDRESS] [--json]\n"
@@ -382,7 +429,7 @@ func help(command, action string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + "\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -405,7 +452,7 @@ func writeCompact(w io.Writer, command string, value any) error {
 			name  string
 			check tr064.DoctorCheck
 		}{
-			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"calls", v.Capabilities.Calls}, {"devices", v.Capabilities.Devices}, {"leases", v.Capabilities.Leases}, {"wifi", v.Capabilities.WiFi}, {"forwards", v.Capabilities.Forwards}, {"reboot", v.Capabilities.Reboot},
+			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"calls", v.Capabilities.Calls}, {"devices", v.Capabilities.Devices}, {"leases", v.Capabilities.Leases}, {"wifi", v.Capabilities.WiFi}, {"forwards", v.Capabilities.Forwards}, {"reboot", v.Capabilities.Reboot}, {"backup", v.Capabilities.Backup},
 		} {
 			if _, err := fmt.Fprintf(w, "  %s: %s\n", capability.name, check(capability.check)); err != nil {
 				return err
@@ -537,6 +584,9 @@ func renderProtocolError(w io.Writer, jsonOutput bool, err error) int {
 		if protocolErr.Operation == "reboot" {
 			hint = "router-axi reboot --help"
 		}
+		if protocolErr.Operation == "backup" {
+			hint = "router-axi backup --help"
+		}
 		return writeError(w, jsonOutput, ExitUsage, protocolErr.Code, protocolErr.Message, hint)
 	case "auth":
 		return writeError(w, jsonOutput, ExitAuth, "authentication_failed", protocolErr.Message, "set ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD")
@@ -571,6 +621,85 @@ func writeError(w io.Writer, jsonOutput bool, exit int, code, message, hint stri
 		}
 	}
 	return exit
+}
+
+// runBackup performs the documented configuration export and stores it at the
+// explicitly requested destination. The destination is validated before the
+// router is contacted, the write is atomic and owner-only, and an existing
+// file is never replaced without --force. The export passphrase is never
+// echoed, logged, or written anywhere but the encrypted export itself.
+func (a *App) runBackup(ctx context.Context, reader Reader, opts options, stdout, stderr io.Writer, passphrase string) int {
+	if strings.HasSuffix(opts.output, string(os.PathSeparator)) {
+		return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output must name a file, not a directory", "router-axi backup --help")
+	}
+	if info, err := os.Stat(opts.output); err == nil {
+		if info.IsDir() {
+			return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output names an existing directory", "router-axi backup --help")
+		}
+		if !opts.force {
+			return writeError(stderr, opts.json, ExitUsage, "output_exists", "backup --output already exists; pass --force to overwrite it", "router-axi backup --output "+shellWord(opts.output)+" --force")
+		}
+	}
+	dir := filepath.Dir(opts.output)
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output parent directory does not exist", "router-axi backup --help")
+	}
+	data, err := reader.ConfigExport(ctx, passphrase)
+	if err != nil {
+		return renderProtocolError(stderr, opts.json, err)
+	}
+	if writeErr := writeBackupFile(opts.output, data, opts.force); writeErr != nil {
+		if errors.Is(writeErr, os.ErrExist) && !opts.force {
+			return writeError(stderr, opts.json, ExitUsage, "output_exists", "backup --output already exists; pass --force to overwrite it", "router-axi backup --output "+shellWord(opts.output)+" --force")
+		}
+		return writeError(stderr, opts.json, ExitInternal, "backup_write_failed", "the configuration export could not be written to the requested path", "check the destination directory and permissions")
+	}
+	sum := sha256.Sum256(data)
+	result := backupResult{Path: opts.output, Bytes: len(data), SHA256: hex.EncodeToString(sum[:])}
+	if opts.json {
+		return writeJSON(stdout, backupJSONResult{Backup: result})
+	}
+	if _, err := fmt.Fprintf(stdout, "backup:\n  path: %s\n  bytes: %d\n  sha256: %s\nnext: %s\n", strconv.Quote(result.Path), result.Bytes, result.SHA256, backupNext); err != nil {
+		return ExitInternal
+	}
+	return ExitOK
+}
+
+// writeBackupFile stores the export through a temporary file in the
+// destination directory, so the target is either fully written or untouched.
+// Without force the file is created with an atomic no-replace operation, so an
+// existing target survives even when it appears between the preflight check
+// and the write. The temporary file is always removed.
+func writeBackupFile(path string, data []byte, force bool) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".router-axi-backup-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if force {
+		if err := os.Rename(tmpName, path); err != nil {
+			return err
+		}
+	} else if err := os.Link(tmpName, path); err != nil {
+		return err
+	}
+	if dir, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
+	return nil
 }
 
 func writeReboot(w io.Writer, result tr064.RebootResult, jsonOutput bool) int {

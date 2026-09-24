@@ -73,6 +73,12 @@ var portMappingCountFixture string
 //go:embed testdata/port-mapping-entry.xml
 var portMappingEntryFixture string
 
+//go:embed testdata/config-file-url.xml
+var configFileURLFixture string
+
+//go:embed testdata/config-export.txt
+var configExportFixture string
+
 func fixtureServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	responses := map[string]string{
@@ -2429,5 +2435,423 @@ func TestWiFiMutationReportsUnappliedSetEnable(t *testing.T) {
 	var protocolErr *Error
 	if result.Instance != "" || !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || !strings.Contains(protocolErr.Message, "did not confirm") {
 		t.Fatalf("result=%#v error=%#v", result, err)
+	}
+}
+
+const backupServiceFixture = `<service><serviceType>urn:dslforum-org:service:DeviceConfig:1</serviceType><controlURL>/config</controlURL></service>`
+const backupDescriptionFixture = `<root><device><serviceList>` + backupServiceFixture + `</serviceList></device></root>`
+const backupDoctorDescriptionFixture = `<root><device><serviceList>` + backupServiceFixture + `<service><serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType><controlURL>/device</controlURL></service></serviceList></device></root>`
+const backupExportPassphrase = "private-export-passphrase"
+const backupGetConfigFileAction = `"urn:dslforum-org:service:DeviceConfig:1#X_AVM-DE_GetConfigFile"`
+const backupGetInfoAction = `"urn:dslforum-org:service:DeviceInfo:1#GetInfo"`
+
+// backupExchange scripts one expected request of the export flow. Exchanges
+// are consumed in order; any unexpected request fails the test.
+type backupExchange struct {
+	method, path, soapAction, soapBody, body, challenge, location, nc string
+	status                                                            int
+	drop                                                              bool
+}
+
+// backupFixtureClient serves the documented export flow over TLS, because the
+// configuration download must be HTTPS. The digest expectations mirror the
+// production client: the SOAP action retry uses nonce count 1 and the one-time
+// download uses nonce count 2.
+func backupFixtureClient(t *testing.T, script []backupExchange, credentials bool) (*Client, *atomic.Int64) {
+	t.Helper()
+	pending := make(chan backupExchange, len(script))
+	for _, exchange := range script {
+		pending <- exchange
+	}
+	var downloads atomic.Int64
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Every response closes its connection, so a dropped exchange cannot be
+		// transparently replayed by the HTTP transport and request counting
+		// stays deterministic.
+		w.Header().Set("Connection", "close")
+		if strings.HasPrefix(r.URL.Path, "/TR064/") && r.Method == http.MethodGet {
+			downloads.Add(1)
+		}
+		var exchange backupExchange
+		select {
+		case exchange = <-pending:
+		default:
+			t.Error("unexpected request during the configuration export")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if exchange.method == "" {
+			exchange.method = http.MethodGet
+		}
+		if r.Method != exchange.method || r.URL.RequestURI() != exchange.path || r.Header.Get("SOAPAction") != exchange.soapAction {
+			t.Errorf("request=%s %s %s, want=%s %s %s", r.Method, r.URL.RequestURI(), r.Header.Get("SOAPAction"), exchange.method, exchange.path, exchange.soapAction)
+		}
+		if exchange.soapBody != "" {
+			body, err := io.ReadAll(r.Body)
+			if err != nil || !strings.Contains(string(body), exchange.soapBody) {
+				t.Error("the SOAP request body did not carry the documented argument")
+			}
+		}
+		auth := r.Header.Get("Authorization")
+		if exchange.nc != "" {
+			params := map[string]string{}
+			for _, part := range strings.Split(strings.TrimPrefix(auth, "Digest "), ",") {
+				key, value, _ := strings.Cut(strings.TrimSpace(part), "=")
+				params[key] = strings.Trim(value, `"`)
+			}
+			want := md5hex(md5hex("private-user:synthetic:private-password") + ":synthetic-nonce:" + exchange.nc + ":" + params["cnonce"] + ":auth:" + md5hex(exchange.method+":"+exchange.path))
+			if !strings.HasPrefix(auth, "Digest ") || params["uri"] != exchange.path || params["nc"] != exchange.nc || params["response"] != want || params["cnonce"] == "" {
+				t.Error("invalid digest authorization for the export request")
+			}
+		} else if auth != "" {
+			t.Error("unexpected authorization")
+		}
+		if exchange.drop {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
+		if exchange.challenge != "" {
+			w.Header().Set("WWW-Authenticate", exchange.challenge)
+		}
+		if exchange.location != "" {
+			w.Header().Set("Location", exchange.location)
+		}
+		if exchange.status != 0 {
+			w.WriteHeader(exchange.status)
+		}
+		_, _ = w.Write([]byte(strings.ReplaceAll(exchange.body, "__ORIGIN__", r.Host)))
+	}))
+	t.Cleanup(func() {
+		server.Close()
+		if len(pending) != 0 {
+			t.Errorf("%d scripted requests were not made", len(pending))
+		}
+	})
+	username, password := "", ""
+	if credentials {
+		username, password = "private-user", "private-password"
+	}
+	client, err := New(server.URL, username, password, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, &downloads
+}
+
+// backupScript returns the expected request sequence of one successful export.
+func backupScript(credentials bool) []backupExchange {
+	description := backupExchange{path: descriptionPath, body: backupDescriptionFixture}
+	action := backupExchange{
+		method: http.MethodPost, path: "/config", soapAction: backupGetConfigFileAction,
+		soapBody: "<" + configExportPasswordArg + ">" + backupExportPassphrase + "</" + configExportPasswordArg + ">",
+		body:     configFileURLFixture,
+	}
+	download := backupExchange{path: "/TR064/synthetic-export-token", body: configExportFixture}
+	if !credentials {
+		return []backupExchange{description, action, download}
+	}
+	challengeAction := action
+	challengeAction.status, challengeAction.body, challengeAction.challenge = http.StatusUnauthorized, "private-challenge-body", rebootDigestChallenge
+	challengeDownload := download
+	challengeDownload.status, challengeDownload.body, challengeDownload.challenge = http.StatusUnauthorized, "private-challenge-body", rebootDigestChallenge
+	action.nc, download.nc = "00000001", "00000002"
+	return []backupExchange{description, challengeAction, action, challengeDownload, download}
+}
+
+func assertBackupError(t *testing.T, client *Client, kind, code string) *Error {
+	t.Helper()
+	export, err := client.ConfigExport(t.Context(), backupExportPassphrase)
+	var protocolErr *Error
+	if export != nil || !errors.As(err, &protocolErr) || protocolErr.Kind != kind || protocolErr.Operation != "backup" || protocolErr.Code != code {
+		t.Fatalf("export=%d error=%#v", len(export), err)
+	}
+	for _, secret := range []string{"private", backupExportPassphrase, "/TR064/", "/config", client.base.Host, descriptionPath} {
+		if strings.Contains(fmt.Sprintf("%#v", protocolErr), secret) {
+			t.Fatalf("unsanitized export error: %#v", protocolErr)
+		}
+	}
+	return protocolErr
+}
+
+func TestConfigExportDownloadsDocumentedExport(t *testing.T) {
+	for _, credentials := range []bool{false, true} {
+		t.Run(fmt.Sprint(credentials), func(t *testing.T) {
+			client, downloads := backupFixtureClient(t, backupScript(credentials), credentials)
+			export, err := client.ConfigExport(t.Context(), backupExportPassphrase)
+			wantDownloads := int64(1)
+			if credentials {
+				wantDownloads = 2
+			}
+			if err != nil || string(export) != configExportFixture || downloads.Load() != wantDownloads {
+				t.Fatalf("err=%v downloads=%d", err, downloads.Load())
+			}
+			if client.services != nil || client.digestChallenge != nil || client.http.CheckRedirect != nil {
+				t.Fatal("the export changed shared client state")
+			}
+		})
+	}
+}
+
+func TestConfigExportRequiresExportPassphrase(t *testing.T) {
+	client, downloads := backupFixtureClient(t, nil, false)
+	_ = assertBackupPassphraseError(t, client)
+	if downloads.Load() != 0 {
+		t.Fatal("a missing passphrase contacted the router")
+	}
+}
+
+func assertBackupPassphraseError(t *testing.T, client *Client) *Error {
+	t.Helper()
+	export, err := client.ConfigExport(t.Context(), "")
+	var protocolErr *Error
+	if export != nil || !errors.As(err, &protocolErr) || protocolErr.Kind != "usage" || protocolErr.Code != "backup_passphrase_missing" {
+		t.Fatalf("export=%d error=%#v", len(export), err)
+	}
+	return protocolErr
+}
+
+func TestConfigExportRejectsMissingDuplicateAndUnsupportedServices(t *testing.T) {
+	for _, replacement := range []string{"", backupServiceFixture + backupServiceFixture, strings.Replace(backupServiceFixture, "DeviceConfig:1", "DeviceConfig:2", 1), backupServiceFixture + strings.Replace(backupServiceFixture, "DeviceConfig:1", "DeviceConfig:2", 1)} {
+		script := backupScript(false)[:1]
+		script[0].body = strings.Replace(script[0].body, backupServiceFixture, replacement, 1)
+		client, downloads := backupFixtureClient(t, script, false)
+		_ = assertBackupError(t, client, "unsupported", "")
+		if downloads.Load() != 0 {
+			t.Fatal("invalid services triggered an export")
+		}
+	}
+}
+
+func TestConfigExportRefusesUnsafeEndpoints(t *testing.T) {
+	for _, suffix := range []string{"/private-path", "?private-query", "?", "#private-fragment", "/%2f"} {
+		client, downloads := backupFixtureClient(t, nil, false)
+		base, err := client.base.Parse(suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.base = base
+		_ = assertBackupError(t, client, "usage", "invalid_configuration")
+		if downloads.Load() != 0 {
+			t.Fatal("an unsafe endpoint triggered an export")
+		}
+	}
+	client, downloads := backupFixtureClient(t, nil, false)
+	base, err := client.base.Parse("http://private-user:private-password@" + client.base.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.base = base
+	_ = assertBackupError(t, client, "usage", "invalid_configuration")
+	if downloads.Load() != 0 {
+		t.Fatal("an unsafe endpoint triggered an export")
+	}
+}
+
+func TestConfigExportRefusesUnsafeControlURLs(t *testing.T) {
+	var externalRequests atomic.Int64
+	external := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { externalRequests.Add(1) }))
+	defer external.Close()
+	for _, address := range []string{"", external.URL + "/private", "//" + strings.TrimPrefix(external.URL, "http://") + "/private", "__ORIGIN__/private?query", "__ORIGIN__/private?", "__ORIGIN__/private#fragment", "http://private-user:private-password@192.0.2.1/private", "%private"} {
+		script := backupScript(false)[:1]
+		script[0].body = strings.Replace(backupDescriptionFixture, ">/config<", ">"+address+"<", 1)
+		client, downloads := backupFixtureClient(t, script, false)
+		_ = assertBackupError(t, client, "protocol", "")
+		if downloads.Load() != 0 {
+			t.Fatal("an unsafe control URL triggered an export")
+		}
+	}
+	if externalRequests.Load() != 0 {
+		t.Fatal("an unsafe control URL reached an external server")
+	}
+}
+
+func TestConfigExportAcceptsAbsoluteControlURL(t *testing.T) {
+	script := backupScript(false)
+	script[0].body = strings.Replace(backupDescriptionFixture, ">/config<", ">https://__ORIGIN__/config<", 1)
+	client, downloads := backupFixtureClient(t, script, false)
+	export, err := client.ConfigExport(t.Context(), backupExportPassphrase)
+	if err != nil || string(export) != configExportFixture || downloads.Load() != 1 {
+		t.Fatalf("err=%v downloads=%d", err, downloads.Load())
+	}
+}
+
+func TestConfigExportResponsesAreValidated(t *testing.T) {
+	fault := `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><errorCode>401</errorCode><errorDescription>private-fault</errorDescription></s:Fault></s:Body></s:Envelope>`
+	for _, test := range []struct {
+		name, body, kind, code string
+		status, statusWant     int
+	}{
+		{"empty-url", strings.Replace(configFileURLFixture, "https://__ORIGIN__/TR064/synthetic-export-token", "", 1), "protocol", "", 200, 0},
+		{"missing-url", `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:X_AVM-DE_GetConfigFileResponse xmlns:u="urn:dslforum-org:service:DeviceConfig:1"/></s:Body></s:Envelope>`, "protocol", "", 200, 200},
+		{"malformed", "<private-body", "protocol", "", 200, 200},
+		{"wrong-namespace", strings.Replace(configFileURLFixture, "DeviceConfig:1", "DeviceConfig:2", 1), "protocol", "", 200, 200},
+		{"trailing-root", configFileURLFixture + `<private/>`, "protocol", "", 200, 200},
+		{"http403", "private-body", "auth", "", 403, 403},
+		{"invalid-action-fault", fault, "unsupported", "", 500, 500},
+		{"invalid-action-fault-http200", fault, "unsupported", "", 200, 200},
+		{"router-fault", strings.Replace(fault, ">401<", ">private-code<", 1), "router", "", 500, 500},
+		{"missing-fault-code", strings.Replace(fault, "<errorCode>401</errorCode>", "", 1), "router", "", 200, 200},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script := backupScript(false)[:1]
+			script = append(script, backupExchange{method: http.MethodPost, path: "/config", soapAction: backupGetConfigFileAction, status: test.status, body: test.body})
+			client, downloads := backupFixtureClient(t, script, false)
+			err := assertBackupError(t, client, test.kind, test.code)
+			if err.StatusCode != test.statusWant {
+				t.Fatalf("error=%#v", err)
+			}
+			if downloads.Load() != 0 {
+				t.Fatal("an invalid action response still downloaded the export")
+			}
+		})
+	}
+}
+
+func TestConfigExportRefusesUnsafeDownloadURLs(t *testing.T) {
+	var externalRequests atomic.Int64
+	external := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { externalRequests.Add(1) }))
+	defer external.Close()
+	for _, test := range []struct {
+		name, url, kind string
+	}{
+		{"plaintext", strings.Replace(configFileURLFixture, "https://__ORIGIN__", "http://__ORIGIN__", 1), "protocol"},
+		{"off-host", strings.Replace(configFileURLFixture, "__ORIGIN__", "192.0.2.1", 1), "protocol"},
+		{"userinfo", strings.Replace(configFileURLFixture, "__ORIGIN__", "private-user:private-password@192.0.2.1", 1), "protocol"},
+		{"fragment", strings.Replace(configFileURLFixture, "synthetic-export-token", "synthetic-export-token#private", 1), "protocol"},
+		{"credentials-query", strings.Replace(configFileURLFixture, "synthetic-export-token", "synthetic-export-token?private", 1), "protocol"},
+		{"no-host", strings.Replace(configFileURLFixture, "https://__ORIGIN__/", "https://", 1), "protocol"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script := backupScript(false)[:1]
+			script = append(script, backupExchange{method: http.MethodPost, path: "/config", soapAction: backupGetConfigFileAction, body: test.url})
+			client, downloads := backupFixtureClient(t, script, false)
+			_ = assertBackupError(t, client, test.kind, "")
+			if downloads.Load() != 0 {
+				t.Fatal("an unsafe download URL was fetched")
+			}
+		})
+	}
+	if externalRequests.Load() != 0 {
+		t.Fatal("an unsafe download URL reached an external server")
+	}
+}
+
+func TestConfigExportAuthFailuresNeverDownload(t *testing.T) {
+	script := backupScript(true)[:3]
+	script[2].status, script[2].body, script[2].challenge = http.StatusUnauthorized, "private-body", rebootDigestChallenge
+	client, downloads := backupFixtureClient(t, script, true)
+	_ = assertBackupError(t, client, "auth", "")
+	if downloads.Load() != 0 {
+		t.Fatal("an unauthorized action still downloaded the export")
+	}
+}
+
+func TestConfigExportDownloadFailuresAreSanitized(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		status     int
+		kind, code string
+	}{
+		{"auth", http.StatusUnauthorized, "auth", ""},
+		{"forbidden", http.StatusForbidden, "auth", ""},
+		{"router", http.StatusInternalServerError, "router", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script := backupScript(true)
+			script[4].status, script[4].body = test.status, "private-body"
+			client, downloads := backupFixtureClient(t, script, true)
+			err := assertBackupError(t, client, test.kind, test.code)
+			if err.StatusCode != test.status {
+				t.Fatalf("status=%#v", err)
+			}
+			if downloads.Load() != 2 {
+				t.Fatal("the download did not use the documented one-time URL flow")
+			}
+		})
+	}
+}
+
+func TestConfigExportDroppedDownloadNeverRetries(t *testing.T) {
+	script := backupScript(false)
+	script[2].drop = true
+	client, downloads := backupFixtureClient(t, script, false)
+	_ = assertBackupError(t, client, "network", "")
+	if downloads.Load() != 1 {
+		t.Fatalf("download attempts=%d", downloads.Load())
+	}
+}
+
+func TestConfigExportRefusesRedirectsAtEveryStage(t *testing.T) {
+	var externalRequests atomic.Int64
+	external := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { externalRequests.Add(1) }))
+	defer external.Close()
+	for _, status := range []int{301, 302, 303, 307, 308} {
+		for position := range 3 {
+			script := backupScript(false)[:position+1]
+			script[position].status, script[position].location = status, external.URL+"/private"
+			client, downloads := backupFixtureClient(t, script, false)
+			_ = assertBackupError(t, client, "network", "")
+			want := int64(0)
+			if position == 2 {
+				want = 1
+			}
+			if downloads.Load() != want || client.http.CheckRedirect != nil {
+				t.Fatal("a redirect changed the request count or the shared redirect policy")
+			}
+		}
+	}
+	if externalRequests.Load() != 0 {
+		t.Fatal("a redirect reached an external server")
+	}
+}
+
+func TestConfigExportRejectsOversizedDownload(t *testing.T) {
+	original := maxConfigExportBytes
+	maxConfigExportBytes = 8
+	t.Cleanup(func() { maxConfigExportBytes = original })
+	client, downloads := backupFixtureClient(t, backupScript(false), false)
+	_ = assertBackupError(t, client, "protocol", "")
+	if downloads.Load() != 1 {
+		t.Fatal("an oversized export was downloaded more than once")
+	}
+}
+
+func TestConfigExportFailsClosedOnUntrustedCertificates(t *testing.T) {
+	client, downloads := backupFixtureClient(t, nil, false)
+	client.http = &http.Client{Timeout: 10 * time.Second}
+	err := assertBackupError(t, client, "network", tlsUntrustedCode)
+	if !strings.Contains(err.Message, "certificate") {
+		t.Fatalf("error=%#v", err)
+	}
+	if downloads.Load() != 0 {
+		t.Fatal("an untrusted certificate still downloaded the export")
+	}
+}
+
+func TestDoctorAdvertisesBackupWithoutExporting(t *testing.T) {
+	unsupported := DoctorCheck{State: "unsupported", Remediation: configExportRemediation}
+	for _, tc := range []struct {
+		description string
+		want        DoctorCheck
+	}{
+		{backupDoctorDescriptionFixture, DoctorCheck{State: "advertised"}},
+		{strings.Replace(backupDoctorDescriptionFixture, backupServiceFixture, "", 1), unsupported},
+		{strings.Replace(backupDoctorDescriptionFixture, "DeviceConfig:1", "DeviceConfig:2", 1), unsupported},
+		{strings.Replace(backupDoctorDescriptionFixture, backupServiceFixture, backupServiceFixture+backupServiceFixture, 1), unsupported},
+	} {
+		script := []backupExchange{
+			{path: descriptionPath, body: tc.description},
+			{method: http.MethodPost, path: "/device", soapAction: backupGetInfoAction, body: deviceFixture},
+		}
+		client, downloads := backupFixtureClient(t, script, false)
+		report, err := client.Doctor(t.Context())
+		if err != nil || report.Capabilities.Backup != tc.want || downloads.Load() != 0 {
+			t.Fatalf("report=%#v error=%v", report, err)
+		}
 	}
 }

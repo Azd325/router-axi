@@ -6,6 +6,8 @@ import (
 	"context"
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/xml"
 	"errors"
@@ -84,6 +86,7 @@ type DoctorCapabilities struct {
 	WiFi     DoctorCheck `json:"wifi"`
 	Forwards DoctorCheck `json:"forwards"`
 	Reboot   DoctorCheck `json:"reboot"`
+	Backup   DoctorCheck `json:"backup"`
 }
 
 type Doctor struct {
@@ -347,7 +350,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 		Protocol:       unknown,
 		Authentication: unknown,
 		Capabilities: DoctorCapabilities{
-			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Calls: unknown, Devices: unknown, Leases: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown,
+			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Calls: unknown, Devices: unknown, Leases: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown, Backup: unknown,
 		},
 	}
 	if err := c.discover(ctx); err != nil {
@@ -377,6 +380,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 	report.Capabilities.WiFi = c.advertisedCapability([]string{wlanServicePrefix}, wifiRemediation)
 	report.Capabilities.Forwards = c.advertisedCapability(wanMappingPrefixes, forwardsRemediation)
 	report.Capabilities.Reboot = c.rebootCapability()
+	report.Capabilities.Backup = c.backupCapability()
 	if report.Capabilities.Status.State == "advertised" && report.Capabilities.WAN.State == "advertised" && report.Capabilities.Traffic.State == "advertised" {
 		report.Capabilities.Overview = DoctorCheck{State: "advertised"}
 	} else {
@@ -809,6 +813,14 @@ func (c *Client) rebootCapability() DoctorCheck {
 }
 
 func (c *Client) rebootService(prefix string) (service, error) {
+	return c.uniqueService(prefix, "reboot", rebootRemediation)
+}
+
+// uniqueService requires exactly one advertised service instance of the given
+// type prefix and validates that its control URL stays on the router origin
+// without user information, query, or fragment. Operations that must not touch
+// an ambiguous target use it to fail before any request is sent.
+func (c *Client) uniqueService(prefix, operation, remediation string) (service, error) {
 	var matches []service
 	for _, svc := range c.allServices {
 		if strings.HasPrefix(svc.Type, prefix) {
@@ -816,12 +828,12 @@ func (c *Client) rebootService(prefix string) (service, error) {
 		}
 	}
 	if len(matches) != 1 || matches[0].Type != prefix+"1" {
-		return service{}, &Error{Kind: "unsupported", Operation: "reboot", Message: "reboot requires exactly one supported service instance; " + rebootRemediation}
+		return service{}, &Error{Kind: "unsupported", Operation: operation, Message: operation + " requires exactly one supported service instance; " + remediation}
 	}
 	svc := matches[0]
 	control, err := c.base.Parse(svc.ControlURL)
 	if err != nil || svc.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.ForceQuery || control.Fragment != "" {
-		return service{}, &Error{Kind: "protocol", Operation: "reboot", Message: "router advertised an unsafe reboot preflight control URL"}
+		return service{}, &Error{Kind: "protocol", Operation: operation, Message: "router advertised an unsafe " + operation + " preflight control URL"}
 	}
 	svc.ControlURL = control.Path
 	return svc, nil
@@ -914,9 +926,287 @@ func validateRebootResponse(body []byte, status int) error {
 	return nil
 }
 
-const maxHostEntries = 4096
+const (
+	configExportRemediation = "enable the DeviceConfig TR-064 service with X_AVM-DE_GetConfigFile, or use supported firmware"
+	configExportAction      = "X_AVM-DE_GetConfigFile"
+	configExportPasswordArg = "NewX_AVM-DE_Password"
+	tlsUntrustedCode        = "tls_untrusted"
+	tlsRemediation          = "the router's HTTPS certificate is not trusted by this system; install the router certificate locally or use supported firmware"
+)
+
+// maxConfigExportBytes bounds the accepted configuration export payload.
+var maxConfigExportBytes int64 = 64 << 20
+
+// ConfigExport downloads the documented encrypted FRITZ!Box configuration
+// export. It invokes only the DeviceConfig:X_AVM-DE_GetConfigFile SOAP action
+// carrying only the export passphrase — with the standard Digest handshake,
+// like every other documented read — then downloads the returned one-time
+// HTTPS URL with the same credentials. The download URL is never
+// returned to the caller, redirects and plaintext HTTP downloads are refused,
+// and the router configuration is never modified: no factory reset, no
+// X_AVM-DE_SetConfigFile, and no browser or undocumented endpoint is used.
+func (c *Client) ConfigExport(ctx context.Context, passphrase string) ([]byte, error) {
+	if passphrase == "" {
+		return nil, &Error{Kind: "usage", Code: "backup_passphrase_missing", Operation: "backup", Message: "configuration export requires an export passphrase"}
+	}
+	if c.base.User != nil || c.base.RawQuery != "" || c.base.ForceQuery || c.base.Fragment != "" || (c.base.EscapedPath() != "" && c.base.EscapedPath() != "/") {
+		return nil, &Error{Kind: "usage", Code: "invalid_configuration", Operation: "backup", Message: "backup requires a router origin without user information, query, fragment, or non-root path"}
+	}
+	client := *c
+	httpClient := *c.http
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("backup refuses redirects")
+	}
+	client.http = &httpClient
+	client.services, client.allServices, client.digestChallenge = nil, nil, nil
+	if err := client.discover(ctx); err != nil {
+		return nil, configExportError(err)
+	}
+	target, err := client.uniqueService(deviceConfigPrefix, "backup", configExportRemediation)
+	if err != nil {
+		return nil, err
+	}
+	control := client.base.ResolveReference(&url.URL{Path: target.ControlURL})
+	var argument strings.Builder
+	argument.WriteString("<" + configExportPasswordArg + ">")
+	if err := xml.EscapeText(&argument, []byte(passphrase)); err != nil {
+		return nil, &Error{Kind: "protocol", Operation: "backup", Message: "could not encode the configuration export request"}
+	}
+	argument.WriteString("</" + configExportPasswordArg + ">")
+	envelope := `<?xml version="1.0"?><s:Envelope xmlns:s="` + soapNamespace + `" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` + configExportAction + ` xmlns:u="` + target.Type + `">` + argument.String() + `</u:` + configExportAction + `></s:Body></s:Envelope>`
+	headers := http.Header{"Content-Type": {`text/xml; charset="utf-8"`}, "SOAPAction": {`"` + target.Type + `#` + configExportAction + `"`}}
+	body, status, err := client.request(ctx, http.MethodPost, control, []byte(envelope), headers)
+	if err != nil {
+		return nil, configExportError(err)
+	}
+	if status == http.StatusForbidden {
+		return nil, &Error{Kind: "auth", Operation: "backup", StatusCode: status, Message: "router rejected the export credentials"}
+	}
+	configFileURL, err := validateConfigExportResponse(body, status)
+	if err != nil {
+		return nil, err
+	}
+	u, err := url.Parse(strings.TrimSpace(configFileURL))
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
+		return nil, &Error{Kind: "protocol", Operation: "backup", Message: "router did not return a documented HTTPS configuration download URL"}
+	}
+	if !strings.EqualFold(u.Hostname(), client.base.Hostname()) {
+		return nil, &Error{Kind: "protocol", Operation: "backup", Message: "configuration download URL is outside the router host"}
+	}
+	return client.downloadConfig(ctx, u)
+}
+
+// validateConfigExportResponse accepts only a well-formed SOAP envelope whose
+// body is either the documented X_AVM-DE_GetConfigFileResponse carrying
+// exactly one download-URL argument or a fault. Anything else, including
+// additional output arguments or trailing content, fails closed. The fault
+// texts and the returned URL never reach the caller's error output.
+func validateConfigExportResponse(body []byte, status int) (string, error) {
+	decoder := xml.NewDecoder(bytes.NewReader(body))
+	var stack []xml.Name
+	var envelopeSeen, bodySeen, responseSeen, faultSeen, urlSeen bool
+	var configFileURL string
+	invalid := func() error {
+		return &Error{Kind: "protocol", Operation: "backup", StatusCode: status, Message: "router returned an invalid configuration export response"}
+	}
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", invalid()
+		}
+		switch token := token.(type) {
+		case xml.StartElement:
+			switch len(stack) {
+			case 0:
+				if envelopeSeen || token.Name != (xml.Name{Space: soapNamespace, Local: "Envelope"}) {
+					return "", invalid()
+				}
+				envelopeSeen = true
+			case 1:
+				if token.Name != (xml.Name{Space: soapNamespace, Local: "Body"}) || bodySeen {
+					return "", invalid()
+				}
+				bodySeen = true
+			case 2:
+				if responseSeen || faultSeen {
+					return "", invalid()
+				}
+				switch token.Name {
+				case xml.Name{Space: deviceConfigPrefix + "1", Local: "X_AVM-DE_GetConfigFileResponse"}:
+					responseSeen = true
+				case xml.Name{Space: soapNamespace, Local: "Fault"}:
+					faultSeen = true
+				default:
+					return "", invalid()
+				}
+			default:
+				if !faultSeen {
+					if !responseSeen || urlSeen || token.Name.Local != "NewX_AVM-DE_ConfigFileUrl" {
+						return "", invalid()
+					}
+					urlSeen = true
+				}
+			}
+			stack = append(stack, token.Name)
+		case xml.EndElement:
+			if len(stack) == 0 {
+				return "", invalid()
+			}
+			stack = stack[:len(stack)-1]
+		case xml.CharData:
+			switch {
+			case urlSeen && len(stack) == 4:
+				configFileURL += string(token)
+			case faultSeen:
+			case strings.TrimSpace(string(token)) != "":
+				return "", invalid()
+			}
+		}
+	}
+	if !envelopeSeen || !bodySeen || len(stack) != 0 {
+		return "", invalid()
+	}
+	if faultSeen {
+		var values soapValues
+		if err := xml.Unmarshal(body, &values); err != nil {
+			return "", invalid()
+		}
+		if values.FaultCode == "401" {
+			return "", &Error{Kind: "unsupported", Operation: "backup", StatusCode: status, Message: "router does not support DeviceConfig:X_AVM-DE_GetConfigFile; " + configExportRemediation}
+		}
+		return "", &Error{Kind: "router", Operation: "backup", StatusCode: status, Message: "router rejected the configuration export"}
+	}
+	if !responseSeen || !urlSeen || status < 200 || status >= 300 {
+		return "", invalid()
+	}
+	return configFileURL, nil
+}
+
+// downloadConfig performs the one-time export download. The documented URL is
+// HTTPS only; AVM's DeviceConfig reference requires SSL while its Remote
+// Access reference shows an HTTP example URL, so plaintext downloads fail
+// closed instead of downgrading. Certificate verification is never skipped.
+func (c *Client) downloadConfig(ctx context.Context, u *url.URL) ([]byte, error) {
+	do := func(auth string) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		if err != nil {
+			return nil, err
+		}
+		if auth != "" {
+			req.Header.Set("Authorization", auth)
+		}
+		return c.http.Do(req)
+	}
+	resp, err := do("")
+	if err != nil {
+		return nil, downloadNetworkError(err)
+	}
+	if resp.StatusCode == http.StatusUnauthorized && c.username != "" {
+		challenge := resp.Header.Get("WWW-Authenticate")
+		_ = resp.Body.Close()
+		auth, authErr := digestAuthorization(challenge, http.MethodGet, u.RequestURI(), c.username, c.password, 2)
+		if authErr != nil {
+			return nil, &Error{Kind: "auth", Operation: "backup", Message: "router did not offer HTTP Digest authentication for the configuration download"}
+		}
+		resp, err = do(auth)
+		if err != nil {
+			return nil, downloadNetworkError(err)
+		}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, &Error{Kind: "auth", Operation: "backup", StatusCode: resp.StatusCode, Message: "router rejected the configuration download credentials"}
+	}
+	if resp.StatusCode >= 400 {
+		return nil, &Error{Kind: "router", Operation: "backup", StatusCode: resp.StatusCode, Message: "router refused the configuration download"}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigExportBytes+1))
+	if err != nil {
+		return nil, &Error{Kind: "network", Operation: "backup", Message: "configuration download could not be read"}
+	}
+	if int64(len(body)) > maxConfigExportBytes {
+		return nil, &Error{Kind: "protocol", Operation: "backup", Message: "router returned an implausibly large configuration export"}
+	}
+	return body, nil
+}
+
+// configExportError converts every export failure into a fixed message that
+// carries no router data: fault text, status lines, URLs, one-time download
+// tokens, and the passphrase are all discarded.
+func configExportError(err error) *Error {
+	result := &Error{Kind: "protocol", Operation: "backup", Message: "configuration export failed"}
+	var protocolErr *Error
+	if !errors.As(err, &protocolErr) {
+		return result
+	}
+	result.Kind, result.StatusCode, result.FaultCode, result.Code = protocolErr.Kind, protocolErr.StatusCode, protocolErr.FaultCode, protocolErr.Code
+	switch {
+	case result.Code == tlsUntrustedCode:
+		result.Message = tlsRemediation
+	case result.Kind == "network":
+		result.Message = "router could not be reached during the configuration export"
+	case result.Kind == "auth":
+		result.Message = "router rejected the export credentials"
+	case result.Kind == "router":
+		result.Message = "router rejected the configuration export"
+	}
+	if result.Kind == "router" && result.FaultCode == "401" {
+		result.Kind = "unsupported"
+	}
+	if result.Kind == "unsupported" {
+		result.Message = "router does not support DeviceConfig:X_AVM-DE_GetConfigFile; " + configExportRemediation
+	}
+	return result
+}
+
+// downloadNetworkError reports a failed configuration-download transport
+// without echoing the failed URL, which embeds a one-time router token. Trust
+// failures are called out explicitly so the operator can act on them;
+// certificate verification is never skipped.
+func downloadNetworkError(err error) *Error {
+	result := &Error{Kind: "network", Operation: "backup", Message: "the configuration download could not be completed"}
+	if tlsUntrusted(err) {
+		result.Code = tlsUntrustedCode
+		result.Message = tlsRemediation
+	}
+	return result
+}
+
+// tlsUntrusted reports whether err is a TLS certificate verification failure.
+func tlsUntrusted(err error) bool {
+	var unknownAuthority x509.UnknownAuthorityError
+	var invalidCertificate x509.CertificateInvalidError
+	var hostname x509.HostnameError
+	var verification *tls.CertificateVerificationError
+	return errors.As(err, &unknownAuthority) || errors.As(err, &invalidCertificate) || errors.As(err, &hostname) || errors.As(err, &verification)
+}
+
+// requestNetworkError preserves a transport failure verbatim, as other
+// commands do, and only marks TLS trust failures so they can be reported with
+// their remediation.
+func requestNetworkError(operation string, err error) *Error {
+	result := &Error{Kind: "network", Operation: operation, Message: err.Error()}
+	if tlsUntrusted(err) {
+		result.Code = tlsUntrustedCode
+	}
+	return result
+}
+
+// backupCapability reports DeviceConfig advertisement only. It never invokes
+// X_AVM-DE_GetConfigFile and proves no export permission.
+func (c *Client) backupCapability() DoctorCheck {
+	if _, err := c.uniqueService(deviceConfigPrefix, "backup", configExportRemediation); err != nil {
+		return DoctorCheck{State: "unsupported", Remediation: configExportRemediation}
+	}
+	return DoctorCheck{State: "advertised"}
+}
 
 const (
+	maxHostEntries = 4096
+
 	maxPortMappingEntries = 4096
 	activeWANMessage      = "could not determine the active WAN service"
 	activeWANRemediation  = "enable Layer3Forwarding:GetDefaultConnectionService or use supported firmware"
@@ -1466,7 +1756,7 @@ func (c *Client) request(ctx context.Context, method string, u *url.URL, body []
 	}
 	resp, err := do("")
 	if err != nil {
-		return nil, 0, &Error{Kind: "network", Operation: method + " " + u.Path, Message: err.Error()}
+		return nil, 0, requestNetworkError(method+" "+u.Path, err)
 	}
 	if resp.StatusCode == http.StatusUnauthorized && c.username != "" {
 		challenge := resp.Header.Get("WWW-Authenticate")
@@ -1480,7 +1770,7 @@ func (c *Client) request(ctx context.Context, method string, u *url.URL, body []
 		}
 		resp, err = do(auth)
 		if err != nil {
-			return nil, 0, &Error{Kind: "network", Operation: method + " " + u.Path, Message: err.Error()}
+			return nil, 0, requestNetworkError(method+" "+u.Path, err)
 		}
 	}
 	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))

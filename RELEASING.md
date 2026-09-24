@@ -38,6 +38,10 @@ checklist. Run every command from a clean checkout:
       is not idempotent, and has no automatic recovery verification or rollback.
       Record reboot hardware validation as not performed unless separately
       authorized and actually observed; synthetic acceptance is not recovery evidence.
+      Live backup coverage additionally requires `ROUTER_AXI_LIVE_BACKUP_TEST=1`
+      and `ROUTER_AXI_BACKUP_PASSWORD`, is skipped by default, and never writes
+      a backup file; record backup hardware validation as not performed unless
+      separately authorized and actually observed.
 - [ ] Create and push the SemVer tag on the checked `main` commit.
 
   ```sh
