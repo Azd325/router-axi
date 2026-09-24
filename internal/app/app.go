@@ -35,6 +35,7 @@ type Reader interface {
 	WiFi(context.Context) ([]tr064.Radio, error)
 	WiFiMutation(context.Context, uint64, bool, bool) (tr064.WiFiMutation, error)
 	Forwards(context.Context) ([]tr064.Forward, error)
+	Reboot(context.Context, bool) (tr064.RebootResult, error)
 }
 type Factory func(Config) (Reader, error)
 type App struct {
@@ -109,6 +110,22 @@ func wifiPreviewJSON(result tr064.WiFiMutation) wifiPreviewResult {
 	return wifiPreviewResult{WiFi: wifiPreviewState{result.Instance, result.Action, result.Current, result.Intended, true}}
 }
 
+const rebootEffect = "the router will restart and temporarily interrupt all local services"
+const rebootRecovery = "wait for the router to recover, then run router-axi doctor; do not automatically repeat reboot"
+
+type rebootPreviewState struct {
+	Endpoint string `json:"endpoint"`
+	Preview  bool   `json:"preview"`
+	Effect   string `json:"effect"`
+	Execute  string `json:"execute"`
+}
+
+type rebootAcceptedState struct {
+	Endpoint string `json:"endpoint"`
+	Accepted bool   `json:"accepted"`
+	Recovery string `json:"recovery"`
+}
+
 type forwardResult struct {
 	Forwards []tr064.Forward `json:"forwards"`
 	Total    int             `json:"total"`
@@ -118,7 +135,16 @@ type forwardResult struct {
 func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	opts, err := parse(args)
 	if err != nil {
-		return writeError(stderr, false, ExitUsage, "invalid_arguments", err.Error(), "router-axi help")
+		for _, arg := range args {
+			if arg == "--json" {
+				opts.json = true
+			}
+		}
+		hint := "router-axi help"
+		if opts.command == "reboot" {
+			hint = "router-axi reboot [--confirm] [--host ADDRESS] [--json] [--help]"
+		}
+		return writeError(stderr, opts.json, ExitUsage, "invalid_arguments", err.Error(), hint)
 	}
 	if opts.help || opts.command == "help" {
 		if _, err := io.WriteString(stdout, help(opts.command, opts.action)); err != nil {
@@ -151,7 +177,18 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	reader, err := a.factory(Config{Host: host, Username: a.getenv("ROUTER_AXI_USERNAME"), Password: a.getenv("ROUTER_AXI_PASSWORD")})
 	if err != nil {
-		return writeError(stderr, opts.json, ExitUsage, "invalid_configuration", err.Error(), "router-axi help")
+		message := err.Error()
+		if opts.command == "reboot" {
+			message = "invalid router endpoint; use an HTTP or HTTPS host without userinfo, query, fragment, or a non-root path"
+		}
+		return writeError(stderr, opts.json, ExitUsage, "invalid_configuration", message, "router-axi help")
+	}
+	if opts.command == "reboot" {
+		result, err := reader.Reboot(ctx, opts.confirm)
+		if err != nil {
+			return renderProtocolError(stderr, opts.json, err)
+		}
+		return writeReboot(stdout, result, opts.json)
 	}
 
 	var value any
@@ -294,7 +331,8 @@ func parse(args []string) (options, error) {
 			opts.host = args[i]
 		default:
 			if strings.HasPrefix(args[i], "-") {
-				return opts, fmt.Errorf("unknown option: %s", args[i])
+				option, _, _ := strings.Cut(args[i], "=")
+				return opts, fmt.Errorf("unknown option: %s", option)
 			}
 			if opts.command == "" {
 				opts.command = args[i]
@@ -310,10 +348,12 @@ func parse(args []string) (options, error) {
 			return opts, errors.New("exactly one command is required")
 		}
 	}
-	if opts.confirm || opts.instanceSet {
-		if opts.command != "wifi" || opts.action == "" {
-			return opts, errors.New("--confirm and --instance are valid only with wifi enable or wifi disable")
-		}
+	wifiMutation := opts.command == "wifi" && opts.action != ""
+	if opts.instanceSet && !wifiMutation {
+		return opts, errors.New("--instance is valid only with wifi enable or wifi disable")
+	}
+	if opts.confirm && !wifiMutation && opts.command != "reboot" {
+		return opts, errors.New("--confirm is valid only with reboot, wifi enable, or wifi disable")
 	}
 	if opts.all && opts.command != "calls" && opts.command != "devices" && opts.command != "leases" && opts.command != "forwards" {
 		return opts, errors.New("--all is valid only for calls, devices, leases, or forwards")
@@ -322,10 +362,13 @@ func parse(args []string) (options, error) {
 }
 
 func validCommand(command string) bool {
-	return command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "forwards"
+	return command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "forwards" || command == "reboot"
 }
 
 func help(command, action string) string {
+	if command == "reboot" {
+		return "usage: router-axi reboot [--confirm] [--host ADDRESS] [--json] [--help]\nWithout --confirm: preview only. With --confirm: restart the router and temporarily interrupt all local services.\nNo prompts, retries, or recovery polling; reboot is not idempotent.\nexamples: router-axi reboot; router-axi reboot --confirm\n"
+	}
 	if action != "" && command == "wifi" {
 		return "usage: router-axi wifi " + action + " [--instance N] --confirm [--host ADDRESS] [--json]\n"
 	}
@@ -339,7 +382,7 @@ func help(command, action string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + "\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  forwards  port-forwarding rules\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -362,7 +405,7 @@ func writeCompact(w io.Writer, command string, value any) error {
 			name  string
 			check tr064.DoctorCheck
 		}{
-			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"calls", v.Capabilities.Calls}, {"devices", v.Capabilities.Devices}, {"leases", v.Capabilities.Leases}, {"wifi", v.Capabilities.WiFi}, {"forwards", v.Capabilities.Forwards},
+			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"calls", v.Capabilities.Calls}, {"devices", v.Capabilities.Devices}, {"leases", v.Capabilities.Leases}, {"wifi", v.Capabilities.WiFi}, {"forwards", v.Capabilities.Forwards}, {"reboot", v.Capabilities.Reboot},
 		} {
 			if _, err := fmt.Fprintf(w, "  %s: %s\n", capability.name, check(capability.check)); err != nil {
 				return err
@@ -490,7 +533,11 @@ func renderProtocolError(w io.Writer, jsonOutput bool, err error) int {
 	}
 	switch protocolErr.Kind {
 	case "usage":
-		return writeError(w, jsonOutput, ExitUsage, protocolErr.Code, protocolErr.Message, "router-axi wifi enable|disable --instance N")
+		hint := "router-axi wifi enable|disable --instance N"
+		if protocolErr.Operation == "reboot" {
+			hint = "router-axi reboot --help"
+		}
+		return writeError(w, jsonOutput, ExitUsage, protocolErr.Code, protocolErr.Message, hint)
 	case "auth":
 		return writeError(w, jsonOutput, ExitAuth, "authentication_failed", protocolErr.Message, "set ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD")
 	case "network":
@@ -524,6 +571,31 @@ func writeError(w io.Writer, jsonOutput bool, exit int, code, message, hint stri
 		}
 	}
 	return exit
+}
+
+func writeReboot(w io.Writer, result tr064.RebootResult, jsonOutput bool) int {
+	var err error
+	if result.Preview {
+		execute := "router-axi reboot --host " + shellWord(result.Endpoint) + " --confirm"
+		if jsonOutput {
+			execute += " --json"
+			return writeJSON(w, struct {
+				Reboot rebootPreviewState `json:"reboot"`
+			}{rebootPreviewState{result.Endpoint, true, rebootEffect, execute}})
+		}
+		_, err = fmt.Fprintf(w, "reboot:\n  endpoint: %s\n  preview: true\n  effect: %s\n  execute: %s\n", strconv.Quote(result.Endpoint), rebootEffect, strconv.Quote(execute))
+	} else {
+		if jsonOutput {
+			return writeJSON(w, struct {
+				Reboot rebootAcceptedState `json:"reboot"`
+			}{rebootAcceptedState{result.Endpoint, result.Accepted, rebootRecovery}})
+		}
+		_, err = fmt.Fprintf(w, "reboot:\n  endpoint: %s\n  accepted: %t\n  recovery: %s\n", strconv.Quote(result.Endpoint), result.Accepted, rebootRecovery)
+	}
+	if err != nil {
+		return ExitInternal
+	}
+	return ExitOK
 }
 
 func writeWiFiPreview(w io.Writer, result tr064.WiFiMutation, host string) error {

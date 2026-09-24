@@ -21,6 +21,14 @@ Read-only inspection is the default surface.
 A state-changing command shows its intended effect before it executes.
 Disruptive changes require an explicit confirmation flag and never rely on a prompt.
 Mutations are idempotent where the underlying router capability permits it.
+Wi-Fi changes verify the requested state; router reboot is explicitly not idempotent.
+Reboot previews identify the selected endpoint, the interruption of all local services,
+and the exact confirmed command. A confirmed reboot sends the documented
+DeviceConfig:Reboot action once, reports acknowledgement rather than recovery,
+and never retries or polls after initiation. A lost response is an uncertain
+outcome, not success or permission to repeat. The operator waits for recovery,
+reconnects if necessary, and checks the router manually; no recovery deadline
+or rollback is promised.
 Commands report a machine-readable result and a non-zero exit code on failure.
 Secrets never appear in normal output, error messages, or debug logs.
 

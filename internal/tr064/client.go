@@ -83,6 +83,7 @@ type DoctorCapabilities struct {
 	Leases   DoctorCheck `json:"leases"`
 	WiFi     DoctorCheck `json:"wifi"`
 	Forwards DoctorCheck `json:"forwards"`
+	Reboot   DoctorCheck `json:"reboot"`
 }
 
 type Doctor struct {
@@ -311,6 +312,7 @@ type Client struct {
 	services           map[string]service
 	allServices        []service
 	now                func() time.Time
+	digestChallenge    *string
 }
 
 func New(address, username, password string, httpClient *http.Client) (*Client, error) {
@@ -345,7 +347,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 		Protocol:       unknown,
 		Authentication: unknown,
 		Capabilities: DoctorCapabilities{
-			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Calls: unknown, Devices: unknown, Leases: unknown, WiFi: unknown, Forwards: unknown,
+			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Calls: unknown, Devices: unknown, Leases: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown,
 		},
 	}
 	if err := c.discover(ctx); err != nil {
@@ -374,6 +376,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 	report.Capabilities.Leases = hostsCapability
 	report.Capabilities.WiFi = c.advertisedCapability([]string{wlanServicePrefix}, wifiRemediation)
 	report.Capabilities.Forwards = c.advertisedCapability(wanMappingPrefixes, forwardsRemediation)
+	report.Capabilities.Reboot = c.advertisedCapability([]string{deviceConfigPrefix}, rebootRemediation)
 	if report.Capabilities.Status.State == "advertised" && report.Capabilities.WAN.State == "advertised" && report.Capabilities.Traffic.State == "advertised" {
 		report.Capabilities.Overview = DoctorCheck{State: "advertised"}
 	} else {
@@ -708,6 +711,195 @@ func wifiMutationError(err error) *Error {
 		}
 	}
 	return result
+}
+
+type RebootResult struct {
+	Endpoint string
+	Preview  bool
+	Accepted bool
+}
+
+const (
+	deviceConfigPrefix = "urn:dslforum-org:service:DeviceConfig:"
+	rebootRemediation  = "enable the DeviceConfig TR-064 service with Reboot, or use supported firmware"
+	soapNamespace      = "http://schemas.xmlsoap.org/soap/envelope/"
+)
+
+func (c *Client) Reboot(ctx context.Context, confirm bool) (RebootResult, error) {
+	if c.base.User != nil || c.base.RawQuery != "" || c.base.ForceQuery || c.base.Fragment != "" || (c.base.EscapedPath() != "" && c.base.EscapedPath() != "/") {
+		return RebootResult{}, &Error{Kind: "usage", Code: "invalid_configuration", Operation: "reboot", Message: "reboot requires a router origin without user information, query, fragment, or non-root path"}
+	}
+	client := *c
+	httpClient := *c.http
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("reboot refuses redirects")
+	}
+	client.http = &httpClient
+	client.services, client.allServices, client.digestChallenge = nil, nil, nil
+	if err := client.discover(ctx); err != nil {
+		return RebootResult{}, rebootPreflightError(err)
+	}
+	target, err := client.rebootService(deviceConfigPrefix)
+	if err != nil {
+		return RebootResult{}, err
+	}
+	endpoint := *client.base
+	endpoint.Path, endpoint.RawPath = "", ""
+	result := RebootResult{Endpoint: endpoint.String()}
+	if !confirm {
+		result.Preview = true
+		return result, nil
+	}
+	var challenge string
+	if client.username != "" {
+		info, err := client.rebootService("urn:dslforum-org:service:DeviceInfo:")
+		if err != nil {
+			return RebootResult{}, err
+		}
+		client.digestChallenge = &challenge
+		if _, err := client.actionOnService(ctx, info, "GetInfo"); err != nil {
+			return RebootResult{}, rebootPreflightError(err)
+		}
+	}
+	control := client.base.ResolveReference(&url.URL{Path: target.ControlURL})
+	envelope := `<?xml version="1.0"?><s:Envelope xmlns:s="` + soapNamespace + `" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:Reboot xmlns:u="` + target.Type + `"></u:Reboot></s:Body></s:Envelope>`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, control.String(), strings.NewReader(envelope))
+	if err != nil {
+		return RebootResult{}, rebootPreflightError(err)
+	}
+	req.GetBody = nil
+	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
+	req.Header.Set("SOAPAction", `"`+target.Type+`#Reboot"`)
+	if challenge != "" {
+		auth, err := digestAuthorization(challenge, http.MethodPost, control.RequestURI(), client.username, client.password)
+		if err != nil {
+			return RebootResult{}, rebootPreflightError(&Error{Kind: "auth"})
+		}
+		req.Header.Set("Authorization", auth)
+	}
+	resp, err := client.http.Do(req)
+	if err != nil {
+		return RebootResult{}, rebootUncertain("network", 0)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return RebootResult{}, &Error{Kind: "auth", Operation: "reboot", StatusCode: resp.StatusCode, Message: "router rejected reboot authentication; do not automatically repeat"}
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
+	if err != nil || len(body) > 8<<20 {
+		return RebootResult{}, rebootUncertain("network", resp.StatusCode)
+	}
+	if err := validateRebootResponse(body, resp.StatusCode); err != nil {
+		return RebootResult{}, err
+	}
+	result.Accepted = true
+	return result, nil
+}
+
+func (c *Client) rebootService(prefix string) (service, error) {
+	var matches []service
+	for _, svc := range c.allServices {
+		if strings.HasPrefix(svc.Type, prefix) {
+			matches = append(matches, svc)
+		}
+	}
+	if len(matches) != 1 || matches[0].Type != prefix+"1" {
+		return service{}, &Error{Kind: "unsupported", Operation: "reboot", Message: "reboot requires exactly one supported service instance; " + rebootRemediation}
+	}
+	svc := matches[0]
+	control, err := c.base.Parse(svc.ControlURL)
+	if err != nil || svc.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.ForceQuery || control.Fragment != "" {
+		return service{}, &Error{Kind: "protocol", Operation: "reboot", Message: "router advertised an unsafe reboot preflight control URL"}
+	}
+	svc.ControlURL = control.Path
+	return svc, nil
+}
+
+func rebootPreflightError(err error) *Error {
+	result := &Error{Kind: "protocol", Operation: "reboot", Message: "reboot preflight failed; no reboot was sent"}
+	var protocolErr *Error
+	if errors.As(err, &protocolErr) {
+		result.Kind, result.StatusCode = protocolErr.Kind, protocolErr.StatusCode
+		if result.StatusCode == http.StatusUnauthorized || result.StatusCode == http.StatusForbidden {
+			result.Kind = "auth"
+		}
+	}
+	return result
+}
+
+func rebootUncertain(kind string, status int) *Error {
+	return &Error{Kind: kind, Code: "reboot_uncertain", Operation: "reboot", StatusCode: status, Message: "reboot outcome is uncertain; the router may be restarting; do not automatically repeat"}
+}
+
+func validateRebootResponse(body []byte, status int) error {
+	decoder := xml.NewDecoder(bytes.NewReader(body))
+	var stack []xml.Name
+	var envelopeSeen, bodySeen, responseSeen, faultSeen bool
+	invalid := func() error { return rebootUncertain("protocol", status) }
+	for {
+		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return invalid()
+		}
+		switch token := token.(type) {
+		case xml.StartElement:
+			switch len(stack) {
+			case 0:
+				if envelopeSeen || token.Name != (xml.Name{Space: soapNamespace, Local: "Envelope"}) {
+					return invalid()
+				}
+				envelopeSeen = true
+			case 1:
+				if token.Name != (xml.Name{Space: soapNamespace, Local: "Body"}) || bodySeen {
+					return invalid()
+				}
+				bodySeen = true
+			case 2:
+				if responseSeen || faultSeen {
+					return invalid()
+				}
+				switch token.Name {
+				case xml.Name{Space: deviceConfigPrefix + "1", Local: "RebootResponse"}:
+					responseSeen = true
+				case xml.Name{Space: soapNamespace, Local: "Fault"}:
+					faultSeen = true
+				default:
+					return invalid()
+				}
+			default:
+				if !faultSeen {
+					return invalid()
+				}
+			}
+			stack = append(stack, token.Name)
+		case xml.EndElement:
+			stack = stack[:len(stack)-1]
+		case xml.CharData:
+			if !faultSeen && strings.TrimSpace(string(token)) != "" {
+				return invalid()
+			}
+		}
+	}
+	if !envelopeSeen || !bodySeen || len(stack) != 0 {
+		return invalid()
+	}
+	if faultSeen {
+		var values soapValues
+		if err := xml.Unmarshal(body, &values); err != nil {
+			return invalid()
+		}
+		if values.FaultCode == "401" {
+			return &Error{Kind: "unsupported", Operation: "reboot", StatusCode: status, Message: "router does not support DeviceConfig:Reboot; " + rebootRemediation}
+		}
+		return &Error{Kind: "router", Operation: "reboot", StatusCode: status, Message: "router rejected reboot; do not automatically repeat"}
+	}
+	if !responseSeen || status < 200 || status >= 300 {
+		return invalid()
+	}
+	return nil
 }
 
 const maxHostEntries = 4096
@@ -1270,6 +1462,9 @@ func (c *Client) request(ctx context.Context, method string, u *url.URL, body []
 		auth, authErr := digestAuthorization(challenge, method, u.RequestURI(), c.username, c.password)
 		if authErr != nil {
 			return nil, 0, &Error{Kind: "auth", Operation: method + " " + u.Path, Message: authErr.Error()}
+		}
+		if c.digestChallenge != nil {
+			*c.digestChallenge = challenge
 		}
 		resp, err = do(auth)
 		if err != nil {
