@@ -194,13 +194,25 @@ func TestLiveWiFiMutation(t *testing.T) {
 		t.Fatal("live Wi-Fi state read failed")
 	}
 	original := result.Current
+	// Restore the original state even when the toggle-verification itself
+	// fails, so the live test can never leave the radio toggled.
+	restored := false
+	t.Cleanup(func() {
+		if !restored {
+			cleanup, err := client.WiFiMutation(ctx, instance, original, true)
+			if err != nil || cleanup.Preview || cleanup.Current != original {
+				t.Error("live Wi-Fi mutation cleanup could not restore the original radio state")
+			}
+		}
+	})
 	// Toggle, then restore, and require the router to confirm both changes.
 	toggled, err := client.WiFiMutation(ctx, instance, !original, true)
 	if err != nil || toggled.Preview || !toggled.Changed || toggled.Current != !original {
 		t.Fatal("live Wi-Fi mutation was not confirmed by the router")
 	}
-	restored, err := client.WiFiMutation(ctx, instance, original, true)
-	if err != nil || restored.Preview || restored.Current != original {
+	cleanup, err := client.WiFiMutation(ctx, instance, original, true)
+	restored = err == nil && !cleanup.Preview && cleanup.Current == original
+	if !restored {
 		t.Fatal("live Wi-Fi mutation did not restore the original radio state")
 	}
 	_ = toggled.Instance

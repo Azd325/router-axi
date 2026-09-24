@@ -522,13 +522,9 @@ func (c *Client) WiFi(ctx context.Context) ([]Radio, error) {
 		if err != nil {
 			return nil, wifiError(err)
 		}
-		enabled := false
-		switch strings.TrimSpace(info.Enable) {
-		case "0":
-		case "1":
-			enabled = true
-		default:
-			return nil, &Error{Kind: "protocol", Operation: "wifi", Message: "router returned an invalid Wi-Fi enable state"}
+		enabled, err := parseEnable(info.Enable)
+		if err != nil {
+			return nil, err
 		}
 		band := "unknown"
 		switch info.FrequencyBand {
@@ -581,6 +577,18 @@ func wifiError(err error) *Error {
 		result.StatusCode = protocolErr.StatusCode
 	}
 	return result
+}
+
+// parseEnable strictly converts the documented 0/1 enable state.
+func parseEnable(value string) (bool, error) {
+	switch strings.TrimSpace(value) {
+	case "0":
+		return false, nil
+	case "1":
+		return true, nil
+	default:
+		return false, &Error{Kind: "protocol", Operation: "wifi", Message: "router returned an invalid Wi-Fi enable state"}
+	}
 }
 
 // WiFiMutation describes one WLANConfiguration radio state change or its
@@ -636,13 +644,9 @@ func (c *Client) WiFiMutation(ctx context.Context, instance uint64, enable, conf
 	if err != nil {
 		return WiFiMutation{}, wifiError(err)
 	}
-	var current bool
-	switch strings.TrimSpace(info.Enable) {
-	case "0":
-	case "1":
-		current = true
-	default:
-		return WiFiMutation{}, &Error{Kind: "protocol", Operation: "wifi", Message: "router returned an invalid Wi-Fi enable state"}
+	current, err := parseEnable(info.Enable)
+	if err != nil {
+		return WiFiMutation{}, err
 	}
 	result := WiFiMutation{Instance: target.ID, Action: action, Current: current, Intended: enable}
 	if !confirm {
@@ -663,21 +667,29 @@ func (c *Client) WiFiMutation(ctx context.Context, instance uint64, enable, conf
 	}
 	verified, err := c.actionOnService(ctx, target, "GetInfo")
 	if err != nil {
-		return WiFiMutation{}, wifiError(err)
+		return WiFiMutation{}, wifiVerifyError(err)
 	}
-	var confirmed bool
-	switch strings.TrimSpace(verified.Enable) {
-	case "0":
-	case "1":
-		confirmed = true
-	default:
-		return WiFiMutation{}, &Error{Kind: "protocol", Operation: "wifi", Message: "router returned an invalid Wi-Fi enable state"}
+	confirmed, err := parseEnable(verified.Enable)
+	if err != nil {
+		return WiFiMutation{}, err
 	}
 	if confirmed != enable {
 		return WiFiMutation{}, &Error{Kind: "protocol", Operation: "wifi", Message: "router did not confirm the requested Wi-Fi radio state"}
 	}
 	result.Current, result.Changed = confirmed, true
 	return result, nil
+}
+
+// wifiVerifyError reports a failure of the state-verification read after a
+// SetEnable was already sent, so the caller knows a change may have been
+// applied and that re-running the idempotent command is safe.
+func wifiVerifyError(err error) *Error {
+	result := &Error{Kind: "protocol", Operation: "wifi", Message: "Wi-Fi radio change sent but the new state could not be verified"}
+	var protocolErr *Error
+	if errors.As(err, &protocolErr) {
+		result.Kind, result.StatusCode, result.FaultCode = protocolErr.Kind, protocolErr.StatusCode, protocolErr.FaultCode
+	}
+	return result
 }
 
 func wifiMutationError(err error) *Error {

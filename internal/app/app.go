@@ -490,11 +490,7 @@ func renderProtocolError(w io.Writer, jsonOutput bool, err error) int {
 	}
 	switch protocolErr.Kind {
 	case "usage":
-		code := protocolErr.Code
-		if code == "" {
-			code = "invalid_target"
-		}
-		return writeError(w, jsonOutput, ExitUsage, code, protocolErr.Message, "router-axi wifi enable|disable --instance N")
+		return writeError(w, jsonOutput, ExitUsage, protocolErr.Code, protocolErr.Message, "router-axi wifi enable|disable --instance N")
 	case "auth":
 		return writeError(w, jsonOutput, ExitAuth, "authentication_failed", protocolErr.Message, "set ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD")
 	case "network":
