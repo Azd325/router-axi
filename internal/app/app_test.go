@@ -121,6 +121,45 @@ func (f fakeReader) WiFi(context.Context) ([]tr064.Radio, error) {
 	return []tr064.Radio{{ServiceID: "urn:WLANConfiguration-com:serviceId:WLANConfiguration1", SSID: "synthetic-ap", Enabled: true, Channel: 6, Band: "2400", Standard: "ax", AssociatedDevices: 2, SecurityMode: "11i"}}, f.err
 }
 
+func (f fakeReader) WiFiMutation(context.Context, uint64, bool, bool) (tr064.WiFiMutation, error) {
+	return tr064.WiFiMutation{}, f.err
+}
+
+type wifiMutationReader struct {
+	fakeReader
+	instance uint64
+	enable   bool
+	confirm  bool
+	result   tr064.WiFiMutation
+}
+
+func (f *wifiMutationReader) WiFiMutation(_ context.Context, instance uint64, enable, confirm bool) (tr064.WiFiMutation, error) {
+	f.instance, f.enable, f.confirm = instance, enable, confirm
+	if f.err != nil {
+		return tr064.WiFiMutation{}, f.err
+	}
+	if !confirm {
+		n := instance
+		if n == 0 {
+			n = 1
+		}
+		return tr064.WiFiMutation{Instance: "urn:WLANConfiguration-com:serviceId:WLANConfiguration" + fmt.Sprint(n), Action: actionName(enable), Current: true, Intended: enable, Preview: true}, nil
+	}
+	if f.result.Instance == "" {
+		f.result.Instance = "urn:WLANConfiguration-com:serviceId:WLANConfiguration" + fmt.Sprint(instance)
+		f.result.Action = actionName(enable)
+		f.result.Previous, f.result.Current, f.result.Changed = !enable, enable, true
+	}
+	return f.result, nil
+}
+
+func actionName(enable bool) string {
+	if enable {
+		return "enable"
+	}
+	return "disable"
+}
+
 func (f fakeReader) Forwards(context.Context) ([]tr064.Forward, error) {
 	return []tr064.Forward{{Enabled: true, Protocol: "TCP", ExternalPort: 8443, InternalClient: "192.0.2.10", InternalPort: 443, Description: "synthetic service", RemoteHost: "198.51.100.10"}}, f.err
 }
@@ -455,7 +494,7 @@ func TestWiFiFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "wifi", "--help")
-	if code != ExitOK || stdout != "usage: router-axi wifi [--host ADDRESS] [--json]\n" || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi wifi [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm]\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -817,5 +856,126 @@ func TestLeasesFlagsAndHelp(t *testing.T) {
 	code, stdout, stderr := runTest(t, "leases", "--help")
 	if code != ExitOK || stdout != "usage: router-axi leases [--host ADDRESS] [--json] [--all]\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestWiFiMutationPreviewRequiresExplicitConfirmation(t *testing.T) {
+	for _, args := range [][]string{{"wifi", "disable"}, {"wifi", "disable", "--json"}} {
+		reader := &wifiMutationReader{confirm: false}
+		application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), args, &stdout, &stderr)
+		if code != ExitOK || stderr.Len() != 0 {
+			t.Fatalf("args=%v code=%d stderr=%q", args, code, stderr.String())
+		}
+		if args[1] != "disable" || reader.enable {
+			t.Fatal("intended state was not propagated")
+		}
+		want := "wifi:\n  action: disable\n  instance: urn:WLANConfiguration-com:serviceId:WLANConfiguration1\n  current: enabled\n  intended: disabled\n  changed: false\nnext: router-axi wifi disable --instance 1 --confirm\n"
+		if args[len(args)-1] == "--json" {
+			want = `{"wifi":{"instance":"urn:WLANConfiguration-com:serviceId:WLANConfiguration1","action":"disable","current":true,"intended":false,"preview":true}}` + "\n"
+		}
+		if stdout.String() != want {
+			t.Fatalf("preview stdout=%q want=%q", stdout.String(), want)
+		}
+	}
+}
+
+func TestWiFiMutationConfirmedFlagsReachTheReader(t *testing.T) {
+	reader := &wifiMutationReader{}
+	application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"wifi", "enable", "--instance", "3", "--confirm", "--json"}, &stdout, &stderr)
+	if code != ExitOK || stderr.Len() != 0 {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	if reader.instance != 3 || !reader.enable || !reader.confirm {
+		t.Fatalf("reader saw instance=%d enable=%t confirm=%t", reader.instance, reader.enable, reader.confirm)
+	}
+	want := `{"wifi":{"instance":"urn:WLANConfiguration-com:serviceId:WLANConfiguration3","action":"enable","previous":false,"current":true,"changed":true}}` + "\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout=%q want=%q", stdout.String(), want)
+	}
+}
+
+func TestWiFiMutationCompactResult(t *testing.T) {
+	reader := &wifiMutationReader{result: tr064.WiFiMutation{Instance: "urn:WLANConfiguration-com:serviceId:WLANConfiguration1", Action: "disable", Previous: true, Current: false, Changed: true}}
+	application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"wifi", "disable", "--confirm"}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("code=%d stderr=%q", code, stderr.String())
+	}
+	want := "wifi:\n  action: disable\n  instance: urn:WLANConfiguration-com:serviceId:WLANConfiguration1\n  previous: enabled\n  current: disabled\n  changed: true\nnext: router-axi wifi\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout=%q want=%q", stdout.String(), want)
+	}
+}
+
+func TestWiFiMutationIdempotentNoChange(t *testing.T) {
+	reader := &wifiMutationReader{result: tr064.WiFiMutation{Instance: "urn:WLANConfiguration-com:serviceId:WLANConfiguration1", Action: "enable", Previous: true, Current: true, Changed: false}}
+	application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"wifi", "enable", "--confirm"}, &stdout, &stderr)
+	if code != ExitOK || !strings.Contains(stdout.String(), "changed: false") {
+		t.Fatalf("code=%d stdout=%q", code, stdout.String())
+	}
+}
+
+func TestWiFiMutationRefusesAmbiguousInstance(t *testing.T) {
+	for _, jsonOutput := range []bool{false, true} {
+		reader := fakeReader{err: &tr064.Error{Kind: "usage", Code: "ambiguous_instance", Message: "router advertises 3 WLAN instances; specify the target with --instance"}}
+		application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })
+		args := []string{"wifi", "disable", "--confirm"}
+		if jsonOutput {
+			args = append(args, "--json")
+		}
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), args, &stdout, &stderr)
+		if code != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "ambiguous_instance") {
+			t.Fatalf("json=%t code=%d stderr=%q", jsonOutput, code, stderr.String())
+		}
+	}
+}
+
+func TestWiFiMutationUsageErrors(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"wifi", "enable", "--instance", "0"}, "--instance requires a WLANConfiguration number of 1 or greater"},
+		{[]string{"wifi", "enable", "--confirm", "--all"}, "--all is valid only for calls, devices, leases, or forwards"},
+		{[]string{"status", "--confirm"}, "--confirm and --instance are valid only with wifi enable or wifi disable"},
+		{[]string{"wifi", "enable", "disable"}, "wifi accepts one action: enable or disable"},
+		{[]string{"wifi", "restart"}, "exactly one command is required"},
+		{[]string{"wan", "enable"}, "exactly one command is required"},
+	}
+	for _, test := range tests {
+		_, _, stderr := runTest(t, test.args...)
+		if !strings.Contains(stderr, test.want) {
+			t.Fatalf("args=%v stderr=%q want=%q", test.args, stderr, test.want)
+		}
+	}
+}
+
+func TestWiFiMutationProtocolAndAuthErrors(t *testing.T) {
+	tests := []struct {
+		kind     string
+		codeWant string
+		exit     int
+	}{
+		{"auth", "authentication_failed", ExitAuth},
+		{"network", "router_unreachable", ExitNetwork},
+		{"unsupported", "unsupported_capability", ExitUnsupported},
+		{"protocol", "router_protocol_error", ExitRouter},
+	}
+	for _, test := range tests {
+		reader := fakeReader{err: &tr064.Error{Kind: test.kind, Message: "Wi-Fi radio change failed"}}
+		application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), []string{"wifi", "disable", "--confirm"}, &stdout, &stderr)
+		if code != test.exit || stdout.Len() != 0 || !strings.Contains(stderr.String(), test.codeWant) {
+			t.Fatalf("kind=%s code=%d stderr=%q", test.kind, code, stderr.String())
+		}
 	}
 }

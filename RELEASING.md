@@ -31,6 +31,8 @@ checklist. Run every command from a clean checkout:
 - [ ] Keep live-router tests local-only. If they are run, use the
       credential-safe command in [README.md](README.md#opt-in-live-router-tests),
       confirm `CI` is empty, and do not retain or publish their output.
+      Live mutation coverage additionally requires the explicit
+      `ROUTER_AXI_LIVE_MUTATION_TEST=1` opt-in and is skipped by default.
 - [ ] Create and push the SemVer tag on the checked `main` commit.
 
   ```sh

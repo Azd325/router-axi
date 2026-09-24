@@ -11,6 +11,12 @@ import (
 
 const liveTestFlag = "ROUTER_AXI_LIVE_TEST"
 
+// liveMutationTestFlag is an additional explicit opt-in for live mutation
+// coverage. It is deliberately separate from liveTestFlag and is never
+// honored on CI or in ordinary test runs.
+const liveMutationTestFlag = "ROUTER_AXI_LIVE_MUTATION_TEST"
+const liveMutationInstanceFlag = "ROUTER_AXI_WIFI_INSTANCE"
+
 type liveTestSettings struct {
 	host, username, password string
 }
@@ -150,6 +156,54 @@ func TestLiveLeases(t *testing.T) {
 			t.Fatal("lease observation returned a non-finite or invalid remaining time")
 		}
 	}
+}
+
+func TestLiveWiFiMutation(t *testing.T) {
+	settings, enabled := liveTestConfig(os.Getenv)
+	if !enabled || os.Getenv(liveMutationTestFlag) != "1" {
+		t.Skip("live mutation coverage requires ROUTER_AXI_LIVE_TEST=1 plus an additional explicit ROUTER_AXI_LIVE_MUTATION_TEST=1 opt-in and complete configuration")
+	}
+	client, err := New(settings.host, settings.username, settings.password, nil)
+	if err != nil {
+		t.Fatal("live router configuration was rejected")
+	}
+	ctx := t.Context()
+	services, err := client.wlanServices(ctx)
+	if err != nil {
+		var protocolErr *Error
+		if errors.As(err, &protocolErr) && protocolErr.Kind == "unsupported" {
+			t.Skip("WLANConfiguration is unsupported; hardware mutation was not validated")
+		}
+		t.Fatal("Wi-Fi capability discovery failed")
+	}
+	var instance uint64
+	if explicit := strings.TrimSpace(os.Getenv(liveMutationInstanceFlag)); explicit != "" {
+		instance, err = strconv.ParseUint(explicit, 10, 64)
+		if err != nil || instance == 0 {
+			t.Fatal("live mutation instance must be a WLANConfiguration number of 1 or greater")
+		}
+	} else if len(services) == 1 {
+		// The single instance is unambiguous.
+	} else {
+		t.Skip("multiple WLAN instances require an explicit instance; hardware mutation was not validated")
+	}
+	// Never log SSIDs, radio data, or addresses: this test reports only
+	// pass/fail at the command level.
+	result, err := client.WiFiMutation(ctx, instance, true, false)
+	if err != nil || !result.Preview {
+		t.Fatal("live Wi-Fi state read failed")
+	}
+	original := result.Current
+	// Toggle, then restore, and require the router to confirm both changes.
+	toggled, err := client.WiFiMutation(ctx, instance, !original, true)
+	if err != nil || toggled.Preview || !toggled.Changed || toggled.Current != !original {
+		t.Fatal("live Wi-Fi mutation was not confirmed by the router")
+	}
+	restored, err := client.WiFiMutation(ctx, instance, original, true)
+	if err != nil || restored.Preview || restored.Current != original {
+		t.Fatal("live Wi-Fi mutation did not restore the original radio state")
+	}
+	_ = toggled.Instance
 }
 
 func TestLiveReadOnlyCommands(t *testing.T) {
