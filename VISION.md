@@ -27,8 +27,9 @@ explicitly named destination through an atomic owner-only file, never overwrites
 an existing file without an explicit flag, and its export passphrase comes only
 from a dedicated environment variable, is never reused from login credentials,
 and never appears in output. The one-time download address and export contents
-are never printed; downloads use HTTPS, refuse redirects and plaintext, and fail
-closed on untrusted certificates.
+are never printed; the export request and download use HTTPS only, so the
+passphrase never travels in plaintext, refuse redirects, and fail closed on
+untrusted certificates.
 Reboot previews identify the selected endpoint, the interruption of all local services,
 and the exact confirmed command. A confirmed reboot sends the documented
 DeviceConfig:Reboot action once, reports acknowledgement rather than recovery,

@@ -938,7 +938,8 @@ const (
 var maxConfigExportBytes int64 = 64 << 20
 
 // ConfigExport downloads the documented encrypted FRITZ!Box configuration
-// export. It invokes only the DeviceConfig:X_AVM-DE_GetConfigFile SOAP action
+// export. It refuses a non-HTTPS router origin before any request, so the
+// passphrase never travels in plaintext. It invokes only the DeviceConfig:X_AVM-DE_GetConfigFile SOAP action
 // carrying only the export passphrase — with the standard Digest handshake,
 // like every other documented read — then downloads the returned one-time
 // HTTPS URL with the same credentials. The download URL is never
@@ -951,6 +952,9 @@ func (c *Client) ConfigExport(ctx context.Context, passphrase string) ([]byte, e
 	}
 	if c.base.User != nil || c.base.RawQuery != "" || c.base.ForceQuery || c.base.Fragment != "" || (c.base.EscapedPath() != "" && c.base.EscapedPath() != "/") {
 		return nil, &Error{Kind: "usage", Code: "invalid_configuration", Operation: "backup", Message: "backup requires a router origin without user information, query, fragment, or non-root path"}
+	}
+	if c.base.Scheme != "https" {
+		return nil, &Error{Kind: "usage", Code: "backup_requires_https", Operation: "backup", Message: "backup sends the export passphrase only over HTTPS; use an https router origin (for example --host https://fritz.box:49443) with a router certificate trusted by this system"}
 	}
 	client := *c
 	httpClient := *c.http

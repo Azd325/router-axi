@@ -62,7 +62,7 @@ router-axi wifi enable
 router-axi wifi disable
 router-axi wifi disable --instance 1 --confirm
 router-axi reboot          # preview only; restart requires --confirm
-router-axi backup --output fritz.export
+router-axi backup --host https://fritz.box:49443 --output fritz.export
 router-axi forwards
 router-axi forwards --json
 router-axi forwards --all
@@ -308,6 +308,13 @@ credentials keep their existing `ROUTER_AXI_USERNAME` and
 `ROUTER_AXI_PASSWORD` variables and are used only for the documented TR-064
 authentication.
 
+`backup` **requires an HTTPS router origin**, because the action request
+carries the export passphrase in its SOAP body and Digest authentication does
+not protect that body. Pass `--host https://fritz.box:49443` (or set
+`ROUTER_AXI_HOST` to an `https://` origin) and trust the router certificate on
+the local system. A plaintext origin, including the default `fritz.box`, is
+refused with `backup_requires_https` (exit `2`) before any request is sent.
+
 The download URL is a one-time router-generated address that is valid for less
 than 30 seconds and is never printed or logged. AVM's DeviceConfig reference
 requires the URL to be HTTPS secured with the TR-064 certificate, while the
@@ -331,6 +338,10 @@ The local file contract:
 - An existing file is never overwritten without `--force`. Without `--force`
   the final write is an atomic no-replace operation, so even a file that
   appears between the preflight check and the write survives untouched.
+  That operation is a hard link; a filesystem without hard-link support
+  (for example FAT/exFAT or some network mounts) fails with
+  `backup_link_unsupported`, and `--force` writes with an atomic rename
+  instead.
 - Output is metadata only: compact `path`, `bytes`, and `sha256`, or
   `{"backup":{"path":"…","bytes":…,"sha256":"…"}}` in JSON. The export
   contents, the passphrase, and the download URL never appear in output,
@@ -339,8 +350,9 @@ The local file contract:
 Missing or duplicate `DeviceConfig` services, an unsafe control URL, and an
 invalid-action fault exit `5` with service/firmware remediation; rejected
 credentials exit `3`; transport failures `4`; malformed responses, refused
-HTTPS URLs, and other router faults `6`; unusable destinations and a missing
-passphrase exit `2`. The export is bounded at 64 MiB; larger downloads are a
+HTTPS URLs, and other router faults `6`; unusable destinations, a plaintext
+router origin, and a missing passphrase exit `2`. An untrusted router
+certificate exits `4` with the code `tls_untrusted`. The export is bounded at 64 MiB; larger downloads are a
 protocol error. Compatibility is fixture-backed with synthetic servers only;
 the FRITZ!Box export flow is **not hardware-validated**, and `backup` does not
 verify that the export can be restored.
@@ -596,8 +608,9 @@ complete live gate above plus `ROUTER_AXI_LIVE_BACKUP_TEST=1` and an exported
 `DeviceConfig:X_AVM-DE_GetConfigFile` action and its one-time HTTPS download,
 then **discards the payload**: it never writes a backup file anywhere and never
 logs the export, the download URL, or the passphrase. It reports only
-pass/fail, and skips explicitly when the action is unsupported or the router
-certificate is not trusted locally; the ordinary live-read and mutation flags
+pass/fail, and skips explicitly when `ROUTER_AXI_HOST` is not an `https://`
+origin, the action is unsupported, or the router certificate is not trusted
+locally; the ordinary live-read and mutation flags
 can never trigger an export.
 
 ```sh

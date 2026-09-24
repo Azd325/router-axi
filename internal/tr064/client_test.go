@@ -2652,6 +2652,23 @@ func TestConfigExportRefusesUnsafeEndpoints(t *testing.T) {
 	}
 }
 
+func TestConfigExportRefusesPlaintextOrigin(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1) }))
+	defer server.Close()
+	client, err := New(server.URL, "private-user", "private-password", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	protocolErr := assertBackupError(t, client, "usage", "backup_requires_https")
+	if !strings.Contains(protocolErr.Message, "--host https://") {
+		t.Fatalf("error=%#v", protocolErr)
+	}
+	if requests.Load() != 0 {
+		t.Fatal("a plaintext origin received a request before the export was refused")
+	}
+}
+
 func TestConfigExportRefusesUnsafeControlURLs(t *testing.T) {
 	var externalRequests atomic.Int64
 	external := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { externalRequests.Add(1) }))

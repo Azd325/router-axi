@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 
 	"github.com/Azd325/router-axi/internal/tr064"
@@ -369,5 +371,76 @@ func TestBackupClientFailuresAreSanitized(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("a failed backup wrote a file")
+	}
+}
+
+func TestBackupRefusesPlaintextOriginBeforeContactingRouter(t *testing.T) {
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1) }))
+	t.Cleanup(server.Close)
+	path := filepath.Join(t.TempDir(), "fritz.export")
+	application := New(func(config Config) (Reader, error) {
+		return tr064.New(config.Host, config.Username, config.Password, server.Client())
+	}, backupTestGetenv(nil))
+	for _, jsonOutput := range []bool{false, true} {
+		args := []string{"backup", "--output", path, "--host", server.URL}
+		if jsonOutput {
+			args = append(args, "--json")
+		}
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), args, &stdout, &stderr)
+		if code != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "backup_requires_https") || !strings.Contains(stderr.String(), "--host https://") || strings.Contains(stderr.String(), backupTestPassphrase) {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+		}
+	}
+	if requests.Load() != 0 {
+		t.Fatal("a plaintext origin received a request")
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("a refused backup wrote a file")
+	}
+}
+
+func TestBackupReportsUntrustedCertificate(t *testing.T) {
+	server := backupFixtureServer(t, "")
+	path := filepath.Join(t.TempDir(), "fritz.export")
+	application := New(func(config Config) (Reader, error) {
+		return tr064.New(config.Host, config.Username, config.Password, nil)
+	}, backupTestGetenv(nil))
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"backup", "--output", path, "--host", server.URL, "--json"}, &stdout, &stderr)
+	var payload struct {
+		Error struct{ Code, Message, Hint string } `json:"error"`
+	}
+	if err := json.Unmarshal(stderr.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if code != ExitNetwork || stdout.Len() != 0 || payload.Error.Code != "tls_untrusted" || !strings.Contains(payload.Error.Hint, "certificate") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("an untrusted certificate wrote a file")
+	}
+}
+
+func TestBackupReportsUnsupportedHardLinks(t *testing.T) {
+	original := linkFile
+	t.Cleanup(func() { linkFile = original })
+	for _, errno := range []syscall.Errno{syscall.ENOTSUP, syscall.EPERM, syscall.EXDEV} {
+		t.Run(errno.Error(), func(t *testing.T) {
+			linkFile = func(oldname, newname string) error {
+				return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: errno}
+			}
+			dir := t.TempDir()
+			path := filepath.Join(dir, "fritz.export")
+			code, stdout, stderr := runBackupTest(t, nil, "backup", "--output", path)
+			if code != ExitInternal || stdout != "" || !strings.Contains(stderr, "backup_link_unsupported") || !strings.Contains(stderr, "--force") {
+				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+			}
+			entries, err := os.ReadDir(dir)
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("entries=%v err=%v", entries, err)
+			}
+		})
 	}
 }

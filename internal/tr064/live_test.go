@@ -221,6 +221,9 @@ func TestLiveBackup(t *testing.T) {
 			if protocolErr.Kind == "unsupported" {
 				t.Skip("DeviceConfig:X_AVM-DE_GetConfigFile is unsupported; the hardware export was not validated")
 			}
+			if protocolErr.Code == "backup_requires_https" {
+				t.Skip("live backup requires an https ROUTER_AXI_HOST; the hardware export was not validated")
+			}
 			if protocolErr.Code == tlsUntrustedCode {
 				t.Skip("the router certificate is not trusted locally; the hardware export was not validated")
 			}

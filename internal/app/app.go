@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/Azd325/router-axi/internal/tr064"
 )
@@ -414,7 +415,7 @@ func help(command, action string) string {
 		return "usage: router-axi reboot [--confirm] [--host ADDRESS] [--json] [--help]\nWithout --confirm: preview only. With --confirm: restart the router and temporarily interrupt all local services.\nNo prompts, retries, or recovery polling; reboot is not idempotent.\nexamples: router-axi reboot; router-axi reboot --confirm\n"
 	}
 	if command == "backup" {
-		return "usage: router-axi backup --output PATH [--force] [--host ADDRESS] [--json] [--help]\nDownloads the documented DeviceConfig:X_AVM-DE_GetConfigFile export to PATH with an atomic owner-only write.\nThe export passphrase is read only from ROUTER_AXI_BACKUP_PASSWORD and is required to restore the file.\nAn existing file is never overwritten without --force; the download uses HTTPS and fails closed on untrusted certificates.\nNo prompts. Examples: router-axi backup --output fritz.export; router-axi backup --output fritz.export --force\n"
+		return "usage: router-axi backup --output PATH [--force] [--host ADDRESS] [--json] [--help]\nDownloads the documented DeviceConfig:X_AVM-DE_GetConfigFile export to PATH with an atomic owner-only write.\nThe export passphrase is read only from ROUTER_AXI_BACKUP_PASSWORD and is required to restore the file.\nAn existing file is never overwritten without --force; the router origin must be HTTPS (for example --host https://fritz.box:49443) with a locally trusted certificate, so the passphrase never travels in plaintext.\nNo prompts. Examples: router-axi backup --host https://fritz.box:49443 --output fritz.export; router-axi backup --host https://fritz.box:49443 --output fritz.export --force\n"
 	}
 	if action != "" && command == "wifi" {
 		return "usage: router-axi wifi " + action + " [--instance N] --confirm [--host ADDRESS] [--json]\n"
@@ -591,6 +592,9 @@ func renderProtocolError(w io.Writer, jsonOutput bool, err error) int {
 	case "auth":
 		return writeError(w, jsonOutput, ExitAuth, "authentication_failed", protocolErr.Message, "set ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD")
 	case "network":
+		if protocolErr.Code == "tls_untrusted" {
+			return writeError(w, jsonOutput, ExitNetwork, "tls_untrusted", protocolErr.Message, "trust the router's HTTPS certificate on this system; verification is never skipped")
+		}
 		return writeError(w, jsonOutput, ExitNetwork, "router_unreachable", protocolErr.Message, "check --host and local network access")
 	case "unsupported":
 		return writeError(w, jsonOutput, ExitUnsupported, "unsupported_capability", protocolErr.Message, "")
@@ -652,6 +656,9 @@ func (a *App) runBackup(ctx context.Context, reader Reader, opts options, stdout
 		if errors.Is(writeErr, os.ErrExist) && !opts.force {
 			return writeError(stderr, opts.json, ExitUsage, "output_exists", "backup --output already exists; pass --force to overwrite it", "router-axi backup --output "+shellWord(opts.output)+" --force")
 		}
+		if errors.Is(writeErr, errNoReplaceUnsupported) {
+			return writeError(stderr, opts.json, ExitInternal, "backup_link_unsupported", "the destination filesystem does not support the atomic no-replace write; --force writes with an atomic rename that replaces any existing file", "router-axi backup --output "+shellWord(opts.output)+" --force")
+		}
 		return writeError(stderr, opts.json, ExitInternal, "backup_write_failed", "the configuration export could not be written to the requested path", "check the destination directory and permissions")
 	}
 	sum := sha256.Sum256(data)
@@ -670,6 +677,11 @@ func (a *App) runBackup(ctx context.Context, reader Reader, opts options, stdout
 // Without force the file is created with an atomic no-replace operation, so an
 // existing target survives even when it appears between the preflight check
 // and the write. The temporary file is always removed.
+var (
+	linkFile                = os.Link
+	errNoReplaceUnsupported = errors.New("filesystem does not support hard links")
+)
+
 func writeBackupFile(path string, data []byte, force bool) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".router-axi-backup-*")
 	if err != nil {
@@ -692,7 +704,10 @@ func writeBackupFile(path string, data []byte, force bool) error {
 		if err := os.Rename(tmpName, path); err != nil {
 			return err
 		}
-	} else if err := os.Link(tmpName, path); err != nil {
+	} else if err := linkFile(tmpName, path); err != nil {
+		if errors.Is(err, errors.ErrUnsupported) || errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EXDEV) || errors.Is(err, syscall.EMLINK) {
+			return errNoReplaceUnsupported
+		}
 		return err
 	}
 	if dir, err := os.Open(filepath.Dir(path)); err == nil {
