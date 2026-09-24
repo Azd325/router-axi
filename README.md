@@ -113,7 +113,7 @@ classification, not a physical switch port or inferred connection detail.
 
 ### Observed lease metadata
 
-`leases` requires the current checkout; it is not included in v0.1.0.
+`leases` is included since v0.2.0.
 It reports **observations from the Hosts table**, including inactive remembered
 hosts, not configured DHCP reservations or a DNS record inventory. It shares
 `devices`' table reader without changing that command's behavior.
