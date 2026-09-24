@@ -81,7 +81,7 @@ func (f fakeReader) Doctor(context.Context) (tr064.Doctor, error) {
 		Endpoint: "http://router.test:49000", Reachability: tr064.DoctorCheck{State: "reachable"},
 		Protocol: tr064.DoctorCheck{State: "available"}, Authentication: tr064.DoctorCheck{State: "authenticated"},
 		Model: "FRITZ!Box 7590 AX", Firmware: "8.02",
-		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Calls: advertised, Devices: advertised, Leases: advertised, WiFi: advertised, Forwards: advertised},
+		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Calls: advertised, Devices: advertised, Leases: advertised, WiFi: advertised, Forwards: advertised, Reboot: advertised},
 	}, f.err
 }
 func (f fakeReader) Status(context.Context) (tr064.Status, error) {
@@ -119,6 +119,10 @@ func (f fakeReader) Leases(context.Context) ([]tr064.Lease, error) {
 
 func (f fakeReader) WiFi(context.Context) ([]tr064.Radio, error) {
 	return []tr064.Radio{{ServiceID: "urn:WLANConfiguration-com:serviceId:WLANConfiguration1", SSID: "synthetic-ap", Enabled: true, Channel: 6, Band: "2400", Standard: "ax", AssociatedDevices: 2, SecurityMode: "11i"}}, f.err
+}
+
+func (f fakeReader) Reboot(_ context.Context, confirm bool) (tr064.RebootResult, error) {
+	return tr064.RebootResult{Endpoint: "http://router.test:49000", Preview: !confirm, Accepted: confirm}, f.err
 }
 
 func (f fakeReader) WiFiMutation(context.Context, uint64, bool, bool) (tr064.WiFiMutation, error) {
@@ -217,7 +221,7 @@ func TestNoCommandRunsStatus(t *testing.T) {
 
 func TestDoctorJSONIsDeterministic(t *testing.T) {
 	code, stdout, stderr := runTest(t, "doctor", "--json")
-	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"leases":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"}}}` + "\n"
+	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"leases":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"},"reboot":{"state":"advertised"}}}` + "\n"
 	if code != ExitOK || stdout != want || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -968,7 +972,7 @@ func TestWiFiMutationUsageErrors(t *testing.T) {
 	}{
 		{[]string{"wifi", "enable", "--instance", "0"}, "--instance requires a WLANConfiguration number of 1 or greater"},
 		{[]string{"wifi", "enable", "--confirm", "--all"}, "--all is valid only for calls, devices, leases, or forwards"},
-		{[]string{"status", "--confirm"}, "--confirm and --instance are valid only with wifi enable or wifi disable"},
+		{[]string{"status", "--confirm"}, "--confirm is valid only with reboot, wifi enable, or wifi disable"},
 		{[]string{"wifi", "enable", "disable"}, "wifi accepts one action: enable or disable"},
 		{[]string{"wifi", "restart"}, "exactly one command is required"},
 		{[]string{"wan", "enable"}, "exactly one command is required"},

@@ -1915,6 +1915,371 @@ func mutationRequestCount(requests <-chan string) int {
 	}
 }
 
+const rebootServiceFixture = `<service><serviceType>urn:dslforum-org:service:DeviceConfig:1</serviceType><controlURL>/config</controlURL></service>`
+const rebootDescriptionFixture = `<root><device><serviceList>` + rebootServiceFixture + `<service><serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType><controlURL>/device</controlURL></service></serviceList></device></root>`
+const rebootResponseFixture = `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:RebootResponse xmlns:u="urn:dslforum-org:service:DeviceConfig:1"/></s:Body></s:Envelope>`
+const rebootDigestChallenge = `Digest realm="synthetic", nonce="synthetic-nonce", qop="auth"`
+
+type rebootExchange struct {
+	path, action, body, challenge, location string
+	status                                  int
+	auth, drop                              bool
+}
+
+func rebootFixtureClient(t *testing.T, script []rebootExchange, credentials bool) (*Client, *atomic.Int64) {
+	t.Helper()
+	pending := make(chan rebootExchange, len(script))
+	for _, exchange := range script {
+		pending <- exchange
+	}
+	var posts atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.Contains(r.Header.Get("SOAPAction"), "#Reboot") {
+			posts.Add(1)
+		}
+		var exchange rebootExchange
+		select {
+		case exchange = <-pending:
+		default:
+			t.Error("unexpected request after scripted preflight or reboot")
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		method, action := http.MethodGet, ""
+		if exchange.action != "" {
+			method = http.MethodPost
+			serviceType := "urn:dslforum-org:service:DeviceInfo:1"
+			if exchange.action == "Reboot" {
+				serviceType = "urn:dslforum-org:service:DeviceConfig:1"
+			}
+			action = `"` + serviceType + "#" + exchange.action + `"`
+			body, err := io.ReadAll(r.Body)
+			want := `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` + exchange.action + ` xmlns:u="` + serviceType + `"></u:` + exchange.action + `></s:Body></s:Envelope>`
+			if err != nil || string(body) != want {
+				t.Error("unexpected SOAP request body")
+			}
+		}
+		if r.Method != method || r.URL.RequestURI() != exchange.path || r.Header.Get("SOAPAction") != action {
+			t.Errorf("request=%s %s %s, want=%s %s %s", r.Method, r.URL.RequestURI(), r.Header.Get("SOAPAction"), method, exchange.path, action)
+		}
+		auth := r.Header.Get("Authorization")
+		if exchange.auth {
+			params := map[string]string{}
+			for _, part := range strings.Split(strings.TrimPrefix(auth, "Digest "), ",") {
+				key, value, _ := strings.Cut(strings.TrimSpace(part), "=")
+				params[key] = strings.Trim(value, `"`)
+			}
+			nc := "00000001"
+			if exchange.action == "Reboot" {
+				nc = "00000002"
+			}
+			want := md5hex(md5hex("private-user:synthetic:private-password") + ":synthetic-nonce:" + nc + ":" + params["cnonce"] + ":auth:" + md5hex(method+":"+exchange.path))
+			if !strings.HasPrefix(auth, "Digest ") || params["uri"] != exchange.path || params["nc"] != nc || params["response"] != want || params["cnonce"] == "" {
+				t.Error("invalid digest authorization for request URI")
+			}
+		} else if auth != "" {
+			t.Error("unexpected authorization")
+		}
+		if exchange.drop {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = conn.Close()
+			return
+		}
+		if exchange.challenge != "" {
+			w.Header().Set("WWW-Authenticate", exchange.challenge)
+		}
+		if exchange.location != "" {
+			w.Header().Set("Location", exchange.location)
+		}
+		if exchange.status != 0 {
+			w.WriteHeader(exchange.status)
+		}
+		_, _ = w.Write([]byte(strings.ReplaceAll(exchange.body, "__ORIGIN__", "http://"+r.Host)))
+	}))
+	t.Cleanup(func() {
+		server.Close()
+		if len(pending) != 0 {
+			t.Errorf("%d scripted requests were not made", len(pending))
+		}
+	})
+	username, password := "", ""
+	if credentials {
+		username, password = "private-user", "private-password"
+	}
+	client, err := New(server.URL, username, password, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, &posts
+}
+
+func rebootScript() []rebootExchange {
+	return []rebootExchange{{path: descriptionPath, body: rebootDescriptionFixture}, {path: "/config", action: "Reboot", body: rebootResponseFixture}}
+}
+
+func assertRebootError(t *testing.T, client *Client, confirm bool, kind string, uncertain bool) *Error {
+	t.Helper()
+	result, err := client.Reboot(t.Context(), confirm)
+	var protocolErr *Error
+	if result != (RebootResult{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != kind || protocolErr.Operation != "reboot" || protocolErr.FaultCode != "" {
+		t.Fatalf("result=%#v error=%#v", result, err)
+	}
+	if uncertain != (protocolErr.Code == "reboot_uncertain") || (uncertain && !strings.Contains(protocolErr.Message, "do not automatically repeat")) {
+		t.Fatalf("incorrect uncertainty: %#v", protocolErr)
+	}
+	for _, secret := range []string{"private", client.base.Host, "/config", "/device", descriptionPath} {
+		if strings.Contains(fmt.Sprintf("%#v", protocolErr), secret) {
+			t.Fatalf("unsanitized error: %#v", protocolErr)
+		}
+	}
+	return protocolErr
+}
+
+func TestRebootPreviewSendsNoSOAP(t *testing.T) {
+	for _, credentials := range []bool{false, true} {
+		t.Run(fmt.Sprint(credentials), func(t *testing.T) {
+			client, posts := rebootFixtureClient(t, rebootScript()[:1], credentials)
+			endpoint := client.base.String()
+			client.base.Path = "/"
+			result, err := client.Reboot(t.Context(), false)
+			if err != nil || result != (RebootResult{Endpoint: endpoint, Preview: true}) || posts.Load() != 0 {
+				t.Fatalf("result=%#v posts=%d error=%v", result, posts.Load(), err)
+			}
+		})
+	}
+}
+
+func TestRebootConfirmSendsExactlyOnePOST(t *testing.T) {
+	for _, mode := range []string{"anonymous", "digest", "no-challenge"} {
+		t.Run(mode, func(t *testing.T) {
+			script := rebootScript()
+			switch mode {
+			case "digest":
+				script[1].auth = true
+				script = append(script[:1], append([]rebootExchange{
+					{path: "/device", action: "GetInfo", status: http.StatusUnauthorized, challenge: rebootDigestChallenge},
+					{path: "/device", action: "GetInfo", auth: true, body: deviceFixture},
+				}, script[1:]...)...)
+			case "no-challenge":
+				script = append(script[:1], append([]rebootExchange{{path: "/device", action: "GetInfo", body: deviceFixture}}, script[1:]...)...)
+			}
+			client, posts := rebootFixtureClient(t, script, mode != "anonymous")
+			result, err := client.Reboot(t.Context(), true)
+			if err != nil || result != (RebootResult{Endpoint: client.base.String(), Accepted: true}) || posts.Load() != 1 {
+				t.Fatalf("result=%#v posts=%d error=%v", result, posts.Load(), err)
+			}
+			if client.digestChallenge != nil || client.services != nil || client.http.CheckRedirect != nil {
+				t.Fatal("reboot changed shared client state")
+			}
+		})
+	}
+}
+
+func TestRebootRejectsMissingDuplicateAndUnsupportedServices(t *testing.T) {
+	for _, replacement := range []string{"", rebootServiceFixture + rebootServiceFixture, strings.Replace(rebootServiceFixture, "DeviceConfig:1", "DeviceConfig:2", 1), rebootServiceFixture + strings.Replace(rebootServiceFixture, "DeviceConfig:1", "DeviceConfig:2", 1)} {
+		for _, confirm := range []bool{false, true} {
+			script := rebootScript()[:1]
+			script[0].body = strings.Replace(script[0].body, rebootServiceFixture, replacement, 1)
+			client, posts := rebootFixtureClient(t, script, false)
+			_ = assertRebootError(t, client, confirm, "unsupported", false)
+			if posts.Load() != 0 {
+				t.Fatal("invalid services triggered reboot")
+			}
+		}
+	}
+}
+
+func TestRebootRejectsUnsafeEndpoints(t *testing.T) {
+	for _, suffix := range []string{"/private-path", "?private-query", "?", "#private-fragment", "/%2f"} {
+		client, _ := rebootFixtureClient(t, nil, false)
+		base, err := client.base.Parse(suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.base = base
+		_ = assertRebootError(t, client, true, "usage", false)
+	}
+	client, _ := rebootFixtureClient(t, nil, false)
+	base, err := client.base.Parse("http://private-user:private-password@" + client.base.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.base = base
+	_ = assertRebootError(t, client, true, "usage", false)
+}
+
+func TestRebootRejectsUnsafeControlURLs(t *testing.T) {
+	var externalRequests atomic.Int64
+	external := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { externalRequests.Add(1) }))
+	defer external.Close()
+	for _, path := range []string{"/config", "/device"} {
+		for _, address := range []string{"", external.URL + "/private", "//" + strings.TrimPrefix(external.URL, "http://") + "/private", "__ORIGIN__/private?query", "__ORIGIN__/private?", "__ORIGIN__/private#fragment", "http://private-user:private-password@192.0.2.1/private", "%private"} {
+			script := rebootScript()[:1]
+			script[0].body = strings.Replace(script[0].body, ">"+path+"<", ">"+address+"<", 1)
+			client, posts := rebootFixtureClient(t, script, true)
+			_ = assertRebootError(t, client, true, "protocol", false)
+			if posts.Load() != 0 {
+				t.Fatal("unsafe URL triggered reboot")
+			}
+		}
+	}
+	if externalRequests.Load() != 0 {
+		t.Fatal("unsafe URL reached external server")
+	}
+}
+
+func TestRebootAcceptsAbsoluteControlURL(t *testing.T) {
+	script := rebootScript()
+	script[0].body = strings.Replace(script[0].body, ">/config<", ">__ORIGIN__/config<", 1)
+	client, posts := rebootFixtureClient(t, script, false)
+	result, err := client.Reboot(t.Context(), true)
+	if err != nil || !result.Accepted || posts.Load() != 1 {
+		t.Fatalf("result=%#v posts=%d error=%v", result, posts.Load(), err)
+	}
+}
+
+func TestRebootResponsesNeverRetry(t *testing.T) {
+	fault := `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><detail><UPnPError><errorCode>401</errorCode><errorDescription>private-fault</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>`
+	for _, test := range []struct {
+		name, body, kind string
+		status           int
+		uncertain        bool
+	}{
+		{"http401", "private-body", "auth", 401, false},
+		{"http403", "private-body", "auth", 403, false},
+		{"empty", "", "protocol", 200, true},
+		{"malformed", "<private-body", "protocol", 200, true},
+		{"wrong-action", deviceFixture, "protocol", 200, true},
+		{"wrong-namespace", strings.Replace(rebootResponseFixture, "DeviceConfig:1", "DeviceConfig:2", 1), "protocol", 200, true},
+		{"wrong-envelope", strings.ReplaceAll(rebootResponseFixture, "http://schemas.xmlsoap.org/soap/envelope/", "private-envelope"), "protocol", 200, true},
+		{"bare-response", `<u:RebootResponse xmlns:u="urn:dslforum-org:service:DeviceConfig:1"/>`, "protocol", 200, true},
+		{"empty-body", `<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body/></s:Envelope>`, "protocol", 200, true},
+		{"trailing-root", rebootResponseFixture + `<private/>`, "protocol", 200, true},
+		{"trailing-text", rebootResponseFixture + "private", "protocol", 200, true},
+		{"output-argument", strings.Replace(rebootResponseFixture, `DeviceConfig:1"/>`, `DeviceConfig:1"><private/></u:RebootResponse>`, 1), "protocol", 200, true},
+		{"http500-success-body", rebootResponseFixture, "protocol", 500, true},
+		{"invalid-action", fault, "unsupported", 500, false},
+		{"invalid-action-http200", fault, "unsupported", 200, false},
+		{"fault", strings.Replace(fault, ">401<", ">private-code<", 1), "router", 500, false},
+		{"missing-fault-code", strings.Replace(fault, "<errorCode>401</errorCode>", "", 1), "router", 200, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script := rebootScript()
+			script[1].body, script[1].status, script[1].challenge = test.body, test.status, rebootDigestChallenge
+			script = append(script[:1], append([]rebootExchange{{path: "/device", action: "GetInfo", body: deviceFixture}}, script[1:]...)...)
+			client, posts := rebootFixtureClient(t, script, true)
+			err := assertRebootError(t, client, true, test.kind, test.uncertain)
+			if err.StatusCode != test.status || posts.Load() != 1 {
+				t.Fatalf("error=%#v posts=%d", err, posts.Load())
+			}
+		})
+	}
+}
+
+func TestRebootDroppedConnectionIsUncertain(t *testing.T) {
+	script := rebootScript()
+	script[1].drop = true
+	client, posts := rebootFixtureClient(t, script, false)
+	_ = assertRebootError(t, client, true, "network", true)
+	if posts.Load() != 1 {
+		t.Fatalf("reboot attempts=%d", posts.Load())
+	}
+}
+
+func TestRebootRefusesRedirectsAtEveryStage(t *testing.T) {
+	var externalRequests atomic.Int64
+	external := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { externalRequests.Add(1) }))
+	defer external.Close()
+	for _, status := range []int{301, 302, 303, 307, 308} {
+		for position := range 3 {
+			script := []rebootExchange{{path: descriptionPath, body: rebootDescriptionFixture}, {path: "/device", action: "GetInfo", body: deviceFixture}, {path: "/config", action: "Reboot", body: rebootResponseFixture}}
+			script = script[:position+1]
+			script[position].status, script[position].location = status, external.URL+"/private"
+			client, posts := rebootFixtureClient(t, script, true)
+			kind := "network"
+			if position == 2 && (status == 307 || status == 308) {
+				kind = "protocol"
+			}
+			_ = assertRebootError(t, client, true, kind, position == 2)
+			want := int64(0)
+			if position == 2 {
+				want = 1
+			}
+			if posts.Load() != want || client.http.CheckRedirect != nil {
+				t.Fatal("redirect changed request count or shared redirect policy")
+			}
+		}
+	}
+	if externalRequests.Load() != 0 {
+		t.Fatal("redirect reached external server")
+	}
+}
+
+func TestRebootPreflightErrorsAreSanitized(t *testing.T) {
+	for position := range 2 {
+		for _, test := range []struct {
+			body, kind string
+			status     int
+		}{
+			{"private", "auth", 401}, {"private", "auth", 403}, {"<private", "protocol", 200},
+			{`<Fault><errorCode>private-code</errorCode><errorDescription>private-fault</errorDescription></Fault>`, "router", 500},
+		} {
+			script := []rebootExchange{{path: descriptionPath, body: rebootDescriptionFixture}, {path: "/device", action: "GetInfo", body: deviceFixture}}
+			script = script[:position+1]
+			script[position].body, script[position].status = test.body, test.status
+			client, posts := rebootFixtureClient(t, script, false)
+			if position == 1 {
+				client.username, client.password = "private-user", "private-password"
+			}
+			_ = assertRebootError(t, client, true, test.kind, false)
+			if posts.Load() != 0 {
+				t.Fatal("failed preflight sent reboot")
+			}
+		}
+	}
+	client, _ := rebootFixtureClient(t, nil, false)
+	client.http.Transport = wifiFailingTransport{}
+	_ = assertRebootError(t, client, true, "network", false)
+}
+
+func TestRebootDigestRejectionNeverRetriesMutation(t *testing.T) {
+	script := []rebootExchange{
+		{path: descriptionPath, body: rebootDescriptionFixture},
+		{path: "/device", action: "GetInfo", status: 401, challenge: rebootDigestChallenge},
+		{path: "/device", action: "GetInfo", auth: true, body: deviceFixture},
+		{path: "/config", action: "Reboot", auth: true, status: 401, challenge: rebootDigestChallenge},
+	}
+	client, posts := rebootFixtureClient(t, script, true)
+	_ = assertRebootError(t, client, true, "auth", false)
+	if posts.Load() != 1 {
+		t.Fatalf("reboot attempts=%d", posts.Load())
+	}
+}
+
+func TestDoctorAdvertisesRebootWithoutExtraReads(t *testing.T) {
+	unsupported := DoctorCheck{State: "unsupported", Remediation: rebootRemediation}
+	for _, tc := range []struct {
+		description string
+		want        DoctorCheck
+	}{
+		{rebootDescriptionFixture, DoctorCheck{State: "advertised"}},
+		{strings.Replace(rebootDescriptionFixture, rebootServiceFixture, "", 1), unsupported},
+		{strings.Replace(rebootDescriptionFixture, "DeviceConfig:1", "DeviceConfig:2", 1), unsupported},
+		{strings.Replace(rebootDescriptionFixture, rebootServiceFixture, rebootServiceFixture+rebootServiceFixture, 1), unsupported},
+	} {
+		description, want := tc.description, tc.want
+		client, posts := rebootFixtureClient(t, []rebootExchange{{path: descriptionPath, body: description}, {path: "/device", action: "GetInfo", body: deviceFixture}}, false)
+		report, err := client.Doctor(t.Context())
+		if err != nil || report.Capabilities.Reboot != want || posts.Load() != 0 {
+			t.Fatal("doctor capability discovery violated its read-only contract")
+		}
+	}
+}
+
 func TestWiFiMutationPreviewSendsOnlyGetInfo(t *testing.T) {
 	client, requests := mutationFixtureClient(t, map[string][]mutationExchange{
 		"/wifi1": {{action: "GetInfo", payload: enabledInfo("1")}},

@@ -2,13 +2,13 @@
 
 ## Scope
 
-`router-axi` is a local, agent-ergonomic router CLI. The supported surface is read-only TR-064 inspection plus one confirmed mutation: `wifi enable|disable` over the documented `WLANConfiguration:GetInfo`/`SetEnable` actions. Mutations follow the VISION "Read before change" contract: they preview their intended effect without confirmation, require an explicit `--confirm` flag, are idempotent with verified state, refuse ambiguous targets, and never print SSIDs or radio data. Do not add other mutations, browser scraping, telemetry, credential persistence, or model-name-based capability guesses without an approved design change.
+`router-axi` is a local, agent-ergonomic router CLI. The supported surface is read-only TR-064 inspection plus confirmed `wifi enable|disable` over documented `WLANConfiguration:GetInfo`/`SetEnable` and `reboot` over documented `DeviceConfig:Reboot`. Mutations follow the VISION "Read before change" contract: they preview their intended effect without confirmation, require an explicit `--confirm` flag, refuse ambiguous targets, and never print SSIDs or radio data. Wi-Fi changes are idempotent with verified state. Reboot is not idempotent: send it once, report acceptance rather than recovery, never retry or poll after initiation, and report lost responses as uncertain outcomes. Do not add other mutations, browser scraping, telemetry, credential persistence, or model-name-based capability guesses without an approved design change.
 
 ## Safety
 
 - Read credentials only from `ROUTER_AXI_USERNAME` and `ROUTER_AXI_PASSWORD`.
 - Never log, commit, or include in fixtures router addresses, serial numbers, call data, credentials, or captured live responses.
-- Keep live-router tests opt-in. They require `ROUTER_AXI_LIVE_TEST=1`, explicit credentials and host, and must refuse CI. Live mutation coverage additionally requires `ROUTER_AXI_LIVE_MUTATION_TEST=1`, defaults to skipped, and must restore the original radio state.
+- Keep live-router tests opt-in. They require `ROUTER_AXI_LIVE_TEST=1`, explicit credentials and host, and must refuse CI. Live mutation coverage additionally requires `ROUTER_AXI_LIVE_MUTATION_TEST=1`, defaults to skipped, and must restore the original radio state. Those flags must never enable reboot. No live reboot test is provided; any future reboot test requires a distinct dangerous opt-in and must remain skipped by default.
 - Preserve structured errors, exit codes, compact default output, and `--json` field ordering.
 
 ## Changes

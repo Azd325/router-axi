@@ -61,6 +61,7 @@ router-axi wifi --json
 router-axi wifi enable
 router-axi wifi disable
 router-axi wifi disable --instance 1 --confirm
+router-axi reboot          # preview only; restart requires --confirm
 router-axi forwards
 router-axi forwards --json
 router-axi forwards --all
@@ -78,7 +79,11 @@ description once and, when `DeviceInfo` is advertised, invokes only
 `DeviceInfo:GetInfo` to verify authentication and obtain model and firmware.
 It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
-`wan`, `traffic`, `calls`, `devices`, `leases`, `wifi`, and `forwards`. For leases,
+`wan`, `traffic`, `calls`, `devices`, `leases`, `wifi`, `forwards`, and `reboot`.
+For reboot, doctor applies the same target selection as the command (exactly
+one `DeviceConfig:1` service, plus exactly one `DeviceInfo:1` when credentials
+are set), but the result is only a candidate capability: doctor never invokes
+Reboot or verifies reboot permission. For leases,
 Hosts advertisement is a candidate capability, not proof of meaningful lease
 metadata; doctor does not read the host table. For forwards,
 WANIPConnection or WANPPPConnection service advertisement is only a candidate
@@ -221,6 +226,62 @@ The mutation contract:
 
 `doctor` continues to report WLANConfiguration advertisement only; it does not invoke `SetEnable`
 or verify mutation support.
+
+### Router reboot
+
+`reboot` requires the current checkout. It uses only the documented
+[FRITZ! DeviceConfig v11, §2.6](https://fritz.support/resources/TR-064_Device_Config.pdf)
+`urn:dslforum-org:service:DeviceConfig:1` action `Reboot`, with **no input or
+output arguments**, at the control URL from the TR-064 device description.
+No factory reset, configuration write, undocumented endpoint, or browser
+scraping is involved.
+
+Without `--confirm`, discovery is read-only and the command exits `0` as a
+**plan**, not a completed mutation. The compact preview identifies the selected
+normalized endpoint, states that the router will restart and temporarily
+interrupt all local services, and supplies the exact execute command. The
+execute command pins `--host` even when selected through `ROUTER_AXI_HOST` or
+the default; JSON previews also preserve `--json`. No interactive prompt occurs.
+
+With `--confirm`, the client refuses ambiguous DeviceConfig targets and unsafe
+control URLs, prepares Digest authentication through the documented read-only
+`DeviceInfo:GetInfo` action when credentials are configured, and sends **exactly
+one Reboot SOAP request**. Authentication challenges, redirects, and network
+failures never cause the reboot request to be repeated. A router that does not
+supply a reusable Digest challenge through the read may reject the single
+request; this fails closed rather than retrying the mutation. Missing services
+or invalid-action faults exit `5`, rejected authentication exits `3`, transport
+failures exit `4`, and malformed responses or other router faults exit `6`.
+Only a valid SOAP `RebootResponse` yields `accepted: true` and exit `0`.
+Accepted means the router acknowledged the request, **not** that it restarted
+or recovered. No polling or additional requests occur after the reboot POST.
+
+The deterministic JSON distinction is:
+
+```json
+{"reboot":{"endpoint":"http://router.test:49000","preview":true,"effect":"the router will restart and temporarily interrupt all local services","execute":"router-axi reboot --host http://router.test:49000 --confirm --json"}}
+{"reboot":{"endpoint":"http://router.test:49000","accepted":true,"recovery":"wait for the router to recover, then run router-axi doctor; do not automatically repeat reboot"}}
+```
+
+**Disruption and recovery:** reboot temporarily interrupts all local services,
+including router access, Wi-Fi, internet connectivity, and telephony. Run it
+only when that outage is acceptable and you have a way to regain local access.
+Wait for the router to recover, reconnect if needed, then manually run
+`router-axi doctor --host ADDRESS` against the selected endpoint. There is no
+promised recovery time, automatic recovery check, or rollback.
+**Reboot is not idempotent.** Each confirmed invocation can cause another
+restart. A lost/malformed response can mean reboot was initiated without an
+acknowledgement; the error reports that uncertainty, not success. Do not
+automatically repeat the command after an error, timeout, or local output
+failure. First check recovery manually and decide whether another reboot is
+really needed.
+
+Only normal preview/result output exposes the selected endpoint to the caller.
+Errors discard router addresses, identifiers, credentials, fault text and SOAP
+bodies. Reboot does not print serials, SSIDs, device data, or the contents of
+its authentication read. Tests use synthetic servers only. No live reboot test
+is provided or run; existing live-test flags cannot reboot a router. Reboot
+acceptance and recovery are **not hardware-validated**.
 
 ### Wi-Fi inspection
 
@@ -391,8 +452,9 @@ router is unreachable, `5` for unsupported router capabilities, and `6` for a
 router or protocol error.
 
 The implementation discovers services through `/tr64desc.xml` and invokes only
-read actions, plus the confirmed `wifi enable|disable` mutation described
-above, which additionally invokes the documented `WLANConfiguration:SetEnable`.
+read actions, plus the confirmed `wifi enable|disable` and `reboot` mutations
+described above, which invoke only the documented `WLANConfiguration:SetEnable`
+and `DeviceConfig:Reboot` respectively.
 Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 `DeviceInfo:GetInfo`, `WANIPConnection` or
 `WANPPPConnection:GetStatusInfo` and `GetExternalIPAddress`,
@@ -446,7 +508,8 @@ advertisement is checked as unsupported. Ordinary `go test ./...` and all CI env
 live test.
 
 Live mutation coverage is additionally opt-in and skipped by default: it requires the
-complete live gate above plus `ROUTER_AXI_LIVE_MUTATION_TEST=1`. It targets the only
+complete live gate above plus `ROUTER_AXI_LIVE_MUTATION_TEST=1`. This enables only
+Wi-Fi coverage, never reboot. There is no live reboot test. It targets the only
 WLANConfiguration instance, or the instance named in `ROUTER_AXI_WIFI_INSTANCE`; with
 several instances and no explicit instance it is skipped. The test reads the current
 enable state, toggles the radio with `SetEnable`, restores the original state, and

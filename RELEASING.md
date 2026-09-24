@@ -33,6 +33,11 @@ checklist. Run every command from a clean checkout:
       confirm `CI` is empty, and do not retain or publish their output.
       Live mutation coverage additionally requires the explicit
       `ROUTER_AXI_LIVE_MUTATION_TEST=1` opt-in and is skipped by default.
+      This covers only restorable Wi-Fi changes, never reboot. Do not reboot
+      hardware as part of release checks: reboot interrupts all local services,
+      is not idempotent, and has no automatic recovery verification or rollback.
+      Record reboot hardware validation as not performed unless separately
+      authorized and actually observed; synthetic acceptance is not recovery evidence.
 - [ ] Create and push the SemVer tag on the checked `main` commit.
 
   ```sh
