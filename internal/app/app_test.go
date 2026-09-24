@@ -881,6 +881,29 @@ func TestWiFiMutationPreviewRequiresExplicitConfirmation(t *testing.T) {
 	}
 }
 
+func TestWiFiMutationPreviewHintRepeatsExplicitHost(t *testing.T) {
+	for host, want := range map[string]string{
+		"192.168.178.2":      " --host 192.168.178.2",
+		"http://[::1]:49000": " --host 'http://[::1]:49000'",
+		"it's.test":          ` --host 'it'\''s.test'`,
+	} {
+		application := New(func(config Config) (Reader, error) {
+			if config.Host != host {
+				t.Fatalf("host=%q want %q", config.Host, host)
+			}
+			return &wifiMutationReader{}, nil
+		}, func(string) string { return "" })
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), []string{"--host", host, "wifi", "disable"}, &stdout, &stderr)
+		if code != ExitOK || stderr.Len() != 0 {
+			t.Fatalf("host=%q code=%d stderr=%q", host, code, stderr.String())
+		}
+		if !strings.HasSuffix(stdout.String(), "\nnext: router-axi wifi disable --instance 1 --confirm"+want+"\n") {
+			t.Fatalf("host=%q stdout=%q", host, stdout.String())
+		}
+	}
+}
+
 func TestWiFiMutationConfirmedFlagsReachTheReader(t *testing.T) {
 	reader := &wifiMutationReader{}
 	application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })

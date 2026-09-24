@@ -164,7 +164,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 				if writeJSON(stdout, wifiPreviewJSON(result)) != ExitOK {
 					return ExitInternal
 				}
-			} else if err := writeWiFiPreview(stdout, result); err != nil {
+			} else if err := writeWiFiPreview(stdout, result, opts.host); err != nil {
 				return ExitInternal
 			}
 			return ExitOK
@@ -526,11 +526,20 @@ func writeError(w io.Writer, jsonOutput bool, exit int, code, message, hint stri
 	return exit
 }
 
-func writeWiFiPreview(w io.Writer, result tr064.WiFiMutation) error {
-	if _, err := fmt.Fprintf(w, "wifi:\n  action: %s\n  instance: %s\n  current: %s\n  intended: %s\n  changed: false\nnext: router-axi wifi %s --instance %s --confirm\n", result.Action, scalar(result.Instance), state(result.Current), state(result.Intended), result.Action, instanceSuffix(result.Instance)); err != nil {
-		return err
+func writeWiFiPreview(w io.Writer, result tr064.WiFiMutation, host string) error {
+	hostFlag := ""
+	if host != "" {
+		hostFlag = " --host " + shellWord(host)
 	}
-	return nil
+	_, err := fmt.Fprintf(w, "wifi:\n  action: %s\n  instance: %s\n  current: %s\n  intended: %s\n  changed: false\nnext: router-axi wifi %s --instance %s --confirm%s\n", result.Action, scalar(result.Instance), state(result.Current), state(result.Intended), result.Action, instanceSuffix(result.Instance), hostFlag)
+	return err
+}
+
+func shellWord(value string) string {
+	if value != "" && strings.Trim(value, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:/_-") == "" {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func writeWiFiMutation(w io.Writer, result wifiMutationState) error {
