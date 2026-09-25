@@ -22,6 +22,8 @@ type WatchSnapshot struct {
 	Source             string `json:"-"`
 }
 
+const WANStatusConnected = "connected"
+
 const watchRemediation = "enable the Layer3Forwarding and WANCommonInterfaceConfig TR-064 services or use supported firmware"
 
 func (c *Client) WatchSnapshot(ctx context.Context) (WatchSnapshot, error) {

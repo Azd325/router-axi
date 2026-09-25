@@ -156,7 +156,7 @@ URLs stay on the router origin and redirects are refused.
 order (there is no enclosing array or final summary):
 
 ```json
-{"sample":1,"observed_at":"2026-01-02T03:04:05Z","wan_status":"Connected","wan_uptime_seconds":100,"total_download_bytes":100,"total_upload_bytes":40,"download_delta_bytes":null,"upload_delta_bytes":null,"download_bytes_per_second":null,"upload_bytes_per_second":null}
+{"sample":1,"observed_at":"2026-01-02T03:04:05Z","wan_status":"connected","wan_uptime_seconds":100,"total_download_bytes":100,"total_upload_bytes":40,"download_delta_bytes":null,"upload_delta_bytes":null,"download_bytes_per_second":null,"upload_bytes_per_second":null}
 ```
 
 Compact output uses one two-line TOON table per sample with a unique key

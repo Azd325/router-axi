@@ -38,7 +38,7 @@ type watchSample struct {
 func runWatch(ctx context.Context, reader Reader, opts options, stdout, stderr io.Writer, registerSignals bool) int {
 	if registerSignals {
 		var stop context.CancelFunc
-		ctx, stop = watchSignalContext(ctx, os.Interrupt, syscall.SIGTERM)
+		ctx, stop = signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 		defer stop()
 	}
 	var previous *tr064.WatchSnapshot
@@ -79,11 +79,6 @@ func runWatch(ctx context.Context, reader Reader, opts options, stdout, stderr i
 	}
 	return ExitOK
 }
-
-// watchSignalContext installs signal-driven cancellation for watch. It is a
-// variable so deterministic tests can substitute a no-op instead of
-// registering real OS signal delivery inside a synthetic-time bubble.
-var watchSignalContext = signal.NotifyContext
 
 func waitWatch(ctx context.Context, interval time.Duration) error {
 	timer := time.NewTimer(interval)
@@ -127,7 +122,7 @@ func makeWatchSample(index int, current tr064.WatchSnapshot, previous *tr064.Wat
 		sample.WANStatus = "unknown"
 	}
 	if previous == nil || current.Source == "" || current.Source != previous.Source ||
-		current.WANStatus != "Connected" || previous.WANStatus != "Connected" ||
+		current.WANStatus != tr064.WANStatusConnected || previous.WANStatus != tr064.WANStatusConnected ||
 		current.WANUptimeSeconds == nil || previous.WANUptimeSeconds == nil ||
 		*current.WANUptimeSeconds < *previous.WANUptimeSeconds {
 		return sample

@@ -22,7 +22,7 @@ import (
 func watchPointer(value uint64) *uint64 { return &value }
 
 func watchFixture(at time.Time, downloaded, uploaded uint64) tr064.WatchSnapshot {
-	return tr064.WatchSnapshot{ObservedAt: at, WANStatus: "Connected", WANUptimeSeconds: watchPointer(100),
+	return tr064.WatchSnapshot{ObservedAt: at, WANStatus: tr064.WANStatusConnected, WANUptimeSeconds: watchPointer(100),
 		TotalDownloadBytes: watchPointer(downloaded), TotalUploadBytes: watchPointer(uploaded),
 		DownloadAt: at.Add(-time.Second), UploadAt: at, Source: "synthetic-source"}
 }
@@ -89,9 +89,9 @@ func TestWatchJSONLAndCompactContract(t *testing.T) {
 		}
 		var out, stderr bytes.Buffer
 		code := watchApp(reader).Run(t.Context(), args, &out, &stderr)
-		want := "sample_1[1]{observed_at,wan_status,wan_uptime_seconds,total_download_bytes,total_upload_bytes,download_delta_bytes,upload_delta_bytes,download_bytes_per_second,upload_bytes_per_second}:\n  \"2026-01-02T03:04:05Z\",Connected,100,100,40,null,null,null,null\n"
+		want := "sample_1[1]{observed_at,wan_status,wan_uptime_seconds,total_download_bytes,total_upload_bytes,download_delta_bytes,upload_delta_bytes,download_bytes_per_second,upload_bytes_per_second}:\n  \"2026-01-02T03:04:05Z\",connected,100,100,40,null,null,null,null\n"
 		if jsonOutput {
-			want = "{\"sample\":1,\"observed_at\":\"2026-01-02T03:04:05Z\",\"wan_status\":\"Connected\",\"wan_uptime_seconds\":100,\"total_download_bytes\":100,\"total_upload_bytes\":40,\"download_delta_bytes\":null,\"upload_delta_bytes\":null,\"download_bytes_per_second\":null,\"upload_bytes_per_second\":null}\n"
+			want = "{\"sample\":1,\"observed_at\":\"2026-01-02T03:04:05Z\",\"wan_status\":\"connected\",\"wan_uptime_seconds\":100,\"total_download_bytes\":100,\"total_upload_bytes\":40,\"download_delta_bytes\":null,\"upload_delta_bytes\":null,\"download_bytes_per_second\":null,\"upload_bytes_per_second\":null}\n"
 		}
 		if code != 0 || out.String() != want || stderr.Len() != 0 {
 			t.Fatalf("code=%d out=%s err=%s", code, out.String(), stderr.String())
@@ -173,13 +173,24 @@ func TestWatchDeltaMath(t *testing.T) {
 	}
 }
 
+func TestWatchDerivesDeltasForNormalizedConnectedStatus(t *testing.T) {
+	at := time.Now()
+	previous := watchFixture(at, 100, 40)
+	current := watchFixture(at.Add(5*time.Second), 200, 80)
+	previous.WANStatus, current.WANStatus = "connected", "connected"
+	sample := makeWatchSample(2, current, &previous)
+	if sample.DownloadDeltaBytes == nil || *sample.DownloadDeltaBytes != 100 || sample.UploadDeltaBytes == nil || *sample.UploadDeltaBytes != 40 {
+		t.Fatal("deltas suppressed for the status tr064 reports when connected")
+	}
+}
+
 func TestWatchDiscontinuity(t *testing.T) {
 	at := time.Now()
 	previous := watchFixture(at, 100, 40)
 	for _, change := range []func(*tr064.WatchSnapshot){
 		func(s *tr064.WatchSnapshot) { s.Source = "other" },
 		func(s *tr064.WatchSnapshot) { s.Source = "" },
-		func(s *tr064.WatchSnapshot) { s.WANStatus = "Disconnected" },
+		func(s *tr064.WatchSnapshot) { s.WANStatus = "disconnected" },
 		func(s *tr064.WatchSnapshot) { s.WANStatus = "unknown" },
 		func(s *tr064.WatchSnapshot) { s.WANUptimeSeconds = nil },
 		func(s *tr064.WatchSnapshot) { s.WANUptimeSeconds = watchPointer(10) },
