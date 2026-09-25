@@ -105,6 +105,10 @@ func (f fakeReader) WAN(context.Context) (tr064.WAN, error) {
 func (f fakeReader) Traffic(context.Context) (tr064.Traffic, error) {
 	return tr064.Traffic{TotalDownloadBytes: 12345678901, TotalUploadBytes: 987654321, ObservedAt: "2025-03-08T09:11:12Z"}, f.err
 }
+func (f fakeReader) WatchSnapshot(context.Context) (tr064.WatchSnapshot, error) {
+	return tr064.WatchSnapshot{}, f.err
+}
+
 func (f fakeReader) Calls(context.Context) ([]tr064.Call, error) {
 	return []tr064.Call{{ID: "12", Direction: "incoming", Remote: "+4930123456", Name: "Alice", Date: "10.03.24 12:34", Duration: "0:02"}}, f.err
 }
