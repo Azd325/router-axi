@@ -14,8 +14,12 @@ func TestRunVersion(t *testing.T) {
 		if exitCode != 0 {
 			t.Fatalf("args=%v exit code = %d, want 0", args, exitCode)
 		}
-		if stdout.String() != "version: dev\n" {
-			t.Fatalf("args=%v stdout = %q, want %q", args, stdout.String(), "version: dev\n")
+		want := "version: dev\n"
+		if args[0] != "version" {
+			want = "dev\n"
+		}
+		if stdout.String() != want {
+			t.Fatalf("args=%v stdout = %q, want %q", args, stdout.String(), want)
 		}
 		if stderr.Len() != 0 {
 			t.Fatalf("args=%v stderr = %q, want empty", args, stderr.String())

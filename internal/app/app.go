@@ -53,11 +53,9 @@ type Reader interface {
 }
 type Factory func(Config) (Reader, error)
 type App struct {
-	factory Factory
-	getenv  func(string) string
-	Version string
-	// executable and homeDir back os.Executable and os.UserHomeDir so the
-	// home-view self-identification is testable.
+	factory    Factory
+	getenv     func(string) string
+	Version    string
 	executable func() (string, error)
 	homeDir    func() (string, error)
 	// watchSignals controls whether watch registers real OS signal
@@ -185,7 +183,10 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return writeError(stderr, opts.json, ExitUsage, "invalid_arguments", err.Error(), usageHint(opts.command))
 	}
 	if opts.versionFlag {
-		opts.command = "version"
+		if _, err := fmt.Fprintln(stdout, a.Version); err != nil {
+			return ExitInternal
+		}
+		return ExitOK
 	}
 	if opts.help || opts.command == "help" {
 		if _, err := io.WriteString(stdout, help(opts.command, opts.action)); err != nil {
@@ -502,9 +503,6 @@ var commandFlags = map[string][]string{
 	"backup":   {"--host", "--json", "--output", "--force", "--help"},
 }
 
-// usageHint builds a self-correcting hint for an invalid_arguments error: it
-// names the valid flags for the command the option was used with, so an
-// agent can correct the call in one turn instead of running --help first.
 func usageHint(command string) string {
 	if flags, ok := commandFlags[command]; ok {
 		return "valid flags for " + command + ": " + strings.Join(flags, ", ")
@@ -556,9 +554,6 @@ func writeJSON(w io.Writer, value any) int {
 
 const cliDescription = "router-axi inspects and operates an AVM FRITZ!Box router over TR-064 with read-only reports and confirmed Wi-Fi, reboot, and backup actions"
 
-// selfIdentification returns the two home-view lines that identify the CLI
-// before live data: the absolute path of the running executable with the
-// user home collapsed to ~, and a one-sentence description.
 func (a *App) selfIdentification() string {
 	bin := "unknown"
 	if path, err := a.executable(); err == nil {

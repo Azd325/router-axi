@@ -302,8 +302,12 @@ func TestVersionFlagsAnswerBeforeRouterWork(t *testing.T) {
 		if code := application.Run(t.Context(), args, &stdout, &stderr); code != ExitOK || stderr.Len() != 0 {
 			t.Fatalf("args=%v code=%d stderr=%q", args, code, stderr.String())
 		}
-		if stdout.String() != "version: 1.2.3\n" {
-			t.Fatalf("args=%v stdout=%q", args, stdout.String())
+		want := "1.2.3\n"
+		if args[0] == "version" {
+			want = "version: 1.2.3\n"
+		}
+		if stdout.String() != want {
+			t.Fatalf("args=%v stdout=%q want=%q", args, stdout.String(), want)
 		}
 	}
 	var stdout, stderr bytes.Buffer
