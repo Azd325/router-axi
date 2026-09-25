@@ -459,7 +459,7 @@ func parse(args []string) (options, error) {
 }
 
 func validCommand(command string) bool {
-	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "backup"
+	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "backup" || command == "version"
 }
 
 // commandHelp holds the per-command help text for read-only commands:
@@ -476,6 +476,7 @@ var commandHelp = map[string]string{
 	"wifi":     "usage: router-axi wifi [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi disable --instance 1 --confirm\n",
 	"guest":    "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID and aggregate radio state only; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n",
 	"forwards": "usage: router-axi forwards [--all] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi forwards; router-axi forwards --all --json\n",
+	"version":  "usage: router-axi version [--json] [--help]\nPrint the router-axi version without contacting the router.\nexamples: router-axi version; router-axi version --json\n",
 }
 
 // commandFlags is the single source of truth for the flags each command
@@ -522,6 +523,7 @@ var commandFlags = map[string][]string{
 	"wifi":     {"--host", "--json", "--instance", "--confirm", "--help"},
 	"reboot":   {"--host", "--json", "--confirm", "--help"},
 	"backup":   {"--host", "--json", "--output", "--force", "--help"},
+	"version":  {"--json", "--help"},
 }
 
 func validateFlagContext(opts options) error {

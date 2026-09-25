@@ -325,6 +325,7 @@ func TestUnknownFlagErrorIsSelfCorrecting(t *testing.T) {
 		{[]string{"watch", "--stats"}, []string{"valid flags for watch: --host, --json, --interval, --count, --help"}},
 		{[]string{"wifi", "enable", "--conform"}, []string{"valid flags for wifi: --host, --json, --instance, --confirm, --help"}},
 		{[]string{"backup", "--out"}, []string{"valid flags for backup: --host, --json, --output, --force, --help"}},
+		{[]string{"version", "--bogus"}, []string{"valid flags for version: --json, --help"}},
 	} {
 		code, _, stderr := runTest(t, test.args...)
 		unknown := "unknown option: " + test.args[len(test.args)-1]
