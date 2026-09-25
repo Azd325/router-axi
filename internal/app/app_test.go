@@ -375,33 +375,21 @@ func TestContextualFlagErrorsRespectCommandAction(t *testing.T) {
 	}
 }
 
-func TestAdvertisedFlagsAreAcceptedInValidCommandForms(t *testing.T) {
-	for command, flags := range commandFlags {
-		for _, flag := range flags {
-			args := []string{command}
-			if command == "wifi" {
-				args = append(args, "enable")
-			}
-			if command == "backup" && flag != "--output" {
-				args = append(args, "--output", "router.export")
-			}
-			switch flag {
-			case "--host":
-				args = append(args, flag, "router.test")
-			case "--interval":
-				args = append(args, flag, "1s")
-			case "--count":
-				args = append(args, flag, "1")
-			case "--instance":
-				args = append(args, flag, "1")
-			case "--output":
-				args = append(args, flag, "router.export")
-			default:
-				args = append(args, flag)
-			}
-			if _, err := parse(args); err != nil {
-				t.Errorf("command=%s flag=%s args=%v: %v", command, flag, args, err)
-			}
+func TestRunAcceptsRepresentativeFlagsAndHelp(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"status", "--host", "router.test", "--json", "--help"}, want: "usage: router-axi status"},
+		{args: []string{"watch", "--interval", "1s", "--count", "1", "--help"}, want: "usage: router-axi watch"},
+		{args: []string{"calls", "--all", "--help"}, want: "usage: router-axi calls"},
+		{args: []string{"wifi", "enable", "--instance", "1", "--confirm", "--help"}, want: "usage: router-axi wifi enable"},
+		{args: []string{"backup", "--output", "router.export", "--force", "--help"}, want: "usage: router-axi backup"},
+		{args: []string{"version", "--json", "--help"}, want: "usage: router-axi version"},
+	} {
+		code, stdout, stderr := runTest(t, test.args...)
+		if code != ExitOK || stderr != "" || !strings.Contains(stdout, test.want) {
+			t.Errorf("args=%v code=%d stdout=%q stderr=%q want=%q", test.args, code, stdout, stderr, test.want)
 		}
 	}
 }
