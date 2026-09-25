@@ -511,13 +511,6 @@ func TestGuestEmptyAndFailureOutput(t *testing.T) {
 	}
 }
 
-var (
-	guestHelp    = help("guest", "")
-	wifiHelp     = help("wifi", "")
-	forwardsHelp = help("forwards", "")
-	leasesHelp   = help("leases", "")
-)
-
 func TestGuestFlagsAndHelp(t *testing.T) {
 	for _, args := range [][]string{{"guest", "--all"}, {"guest", "--instance", "2"}, {"guest", "enable"}, {"wifi", "guest"}} {
 		code, stdout, _ := runTest(t, args...)
@@ -526,7 +519,7 @@ func TestGuestFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "guest", "--help")
-	if code != ExitOK || stdout != guestHelp || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID and aggregate radio state only; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -651,7 +644,7 @@ func TestWiFiFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "wifi", "--help")
-	if code != ExitOK || stdout != wifiHelp || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi wifi [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi disable --instance 1 --confirm\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -833,7 +826,7 @@ func TestForwardsFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "forwards", "--help")
-	if code != ExitOK || stdout != forwardsHelp || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi forwards [--all] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi forwards; router-axi forwards --all --json\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -1011,7 +1004,7 @@ func TestLeasesFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "leases", "--help")
-	if code != ExitOK || stdout != leasesHelp || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi leases [--all] [--host ADDRESS] [--json] [--help]\nRead-only observed lease metadata from the Hosts table: name, addresses, address source, and remaining lease time. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi leases; router-axi leases --all --json\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
