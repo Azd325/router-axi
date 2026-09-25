@@ -496,6 +496,8 @@ fixture-backed, not inferred from a model name.
 
 ### Guest Wi-Fi inspection
 
+Guest Wi-Fi inspection requires the current checkout; it is not included in v0.1.0.
+
 `guest` is a distinct top-level read command because the existing CLI grammar has
 single-word inspection commands; `wifi` accepts only the established mutation
 actions `enable|disable`. It enumerates every advertised WLANConfiguration service
