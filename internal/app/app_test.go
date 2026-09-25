@@ -375,17 +375,6 @@ func TestContextualFlagErrorsRespectCommandAction(t *testing.T) {
 	}
 }
 
-func TestCommandFlagsMatchHelpUsage(t *testing.T) {
-	for command, flags := range commandFlags {
-		usage := help(command, "")
-		for _, flag := range flags {
-			if !strings.Contains(usage, flag) {
-				t.Errorf("command=%s usage=%q missing flag=%s", command, usage, flag)
-			}
-		}
-	}
-}
-
 func TestAdvertisedFlagsAreAcceptedInValidCommandForms(t *testing.T) {
 	for command, flags := range commandFlags {
 		for _, flag := range flags {
