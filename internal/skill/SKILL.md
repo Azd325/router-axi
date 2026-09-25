@@ -24,11 +24,14 @@ documentation; run the CLI for live router state.
   --count 6` (bounds 1s–1m and 1–3600, no unbounded mode, JSONL with `--json`,
   Ctrl-C exits 130).
 - `calls` — call history (100 entries default, `--all` for the full list).
-- `devices` — connected and known LAN clients (`--all` supported).
-- `leases` — observed Hosts-table lease metadata (`--all` supported).
+- `devices` — connected and known LAN clients (100 entries by default,
+  `--all` for the full list).
+- `leases` — observed Hosts-table lease metadata (100 entries by default,
+  `--all` for the full list).
 - `wifi` — Wi-Fi inspection; `wifi enable|disable` changes a radio.
 - `guest` — documented guest Wi-Fi inspection (public SSID, aggregate state).
-- `forwards` — port-forwarding rules (`--all` supported).
+- `forwards` — port-forwarding rules (100 entries by default, `--all` for the
+  full list).
 - `reboot` — preview router restart; execute once with `--confirm`.
 - `backup` — download the documented configuration export to a file.
 - `skill install` — explicitly install this static skill; `--path DIRECTORY`
