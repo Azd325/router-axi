@@ -519,7 +519,7 @@ func TestGuestFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "guest", "--help")
-	if code != ExitOK || stdout != "usage: router-axi guest [--host ADDRESS] [--json]\n" || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID and aggregate radio state only; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -619,6 +619,23 @@ func TestWiFiClientPrivacyBoundary(t *testing.T) {
 	}
 }
 
+// TestEverySubcommandHelpDepth asserts the AXI help contract: every
+// subcommand help must include a usage line, flags, and concrete examples.
+func TestEverySubcommandHelpDepth(t *testing.T) {
+	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "calls", "devices", "leases", "wifi", "guest", "forwards", "watch", "reboot", "backup"} {
+		text := help(command, "")
+		if !strings.HasPrefix(text, "usage: router-axi "+command) || !strings.Contains(text, "--host ADDRESS") || !strings.Contains(text, "--json") || !strings.Contains(text, "examples: router-axi "+command) && !strings.Contains(text, "Examples: router-axi "+command) {
+			t.Fatalf("help for %s lacks usage, flags, or examples: %q", command, text)
+		}
+	}
+	for _, action := range []string{"enable", "disable"} {
+		text := help("wifi", action)
+		if !strings.HasPrefix(text, "usage: router-axi wifi "+action) || !strings.Contains(text, "--confirm") || !strings.Contains(text, "examples: router-axi wifi "+action) {
+			t.Fatalf("help for wifi %s lacks usage, flags, or examples: %q", action, text)
+		}
+	}
+}
+
 func TestWiFiFlagsAndHelp(t *testing.T) {
 	for _, flag := range []string{"--all", "--reveal", "--ssid"} {
 		code, stdout, _ := runTest(t, "wifi", flag)
@@ -627,8 +644,29 @@ func TestWiFiFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "wifi", "--help")
-	if code != ExitOK || stdout != "usage: router-axi wifi [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm]\n" || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi wifi [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi disable --instance 1 --confirm\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for action, want := range map[string]string{
+		"enable":  "usage: router-axi wifi enable [--instance N] --confirm [--host ADDRESS] [--json] [--help]\nEnables or disables one WLANConfiguration radio. Without --confirm: preview only, nothing changes.\nWith --confirm: idempotent change; the router must confirm the new state. --instance N is required when the router advertises more than one radio; bounds N 1 or greater.\nNo prompts or retries; SSIDs, BSSIDs, and keys are never read or printed.\nexamples: router-axi wifi enable; router-axi wifi enable --instance 1 --confirm; router-axi wifi enable --instance 2 --confirm --json\n",
+		"disable": "usage: router-axi wifi disable [--instance N] --confirm [--host ADDRESS] [--json] [--help]\nEnables or disables one WLANConfiguration radio. Without --confirm: preview only, nothing changes.\nWith --confirm: idempotent change; the router must confirm the new state. --instance N is required when the router advertises more than one radio; bounds N 1 or greater.\nNo prompts or retries; SSIDs, BSSIDs, and keys are never read or printed.\nexamples: router-axi wifi disable; router-axi wifi disable --instance 1 --confirm; router-axi wifi disable --instance 2 --confirm --json\n",
+	} {
+		code, stdout, stderr := runTest(t, "wifi", action, "--help")
+		if code != ExitOK || stdout != want || stderr != "" {
+			t.Fatalf("action=%s code=%d stdout=%q stderr=%q", action, code, stdout, stderr)
+		}
+	}
+}
+
+func TestCallsAndDevicesHelp(t *testing.T) {
+	for command, want := range map[string]string{
+		"calls":   "usage: router-axi calls [--all] [--host ADDRESS] [--json] [--help]\nRead-only call history. Defaults to the 100 most recent entries; --all lists everything. No required arguments.\nexamples: router-axi calls; router-axi calls --all; router-axi calls --all --json\n",
+		"devices": "usage: router-axi devices [--all] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi devices; router-axi devices --all --json\n",
+	} {
+		code, stdout, stderr := runTest(t, command, "--help")
+		if code != ExitOK || stdout != want || stderr != "" {
+			t.Fatalf("command=%s code=%d stdout=%q stderr=%q", command, code, stdout, stderr)
+		}
 	}
 }
 
@@ -809,7 +847,7 @@ func TestForwardsFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "forwards", "--help")
-	if code != ExitOK || stdout != "usage: router-axi forwards [--host ADDRESS] [--json] [--all]\n" || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi forwards [--all] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi forwards; router-axi forwards --all --json\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -987,7 +1025,7 @@ func TestLeasesFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "leases", "--help")
-	if code != ExitOK || stdout != "usage: router-axi leases [--host ADDRESS] [--json] [--all]\n" || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi leases [--all] [--host ADDRESS] [--json] [--help]\nRead-only observed lease metadata from the Hosts table: name, addresses, address source, and remaining lease time. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi leases; router-axi leases --all --json\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }

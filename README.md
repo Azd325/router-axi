@@ -648,13 +648,27 @@ output is compact AXI text; `--json` emits JSON on stdout. Errors are structured
 on stderr in the selected format. `calls` returns at most 100 entries by default,
 reports the omitted count, and accepts `--all` for the complete list.
 
-Exit codes are `0` for success, `1` for local output/internal failure, `2` for
-usage or configuration errors, `3` for authentication failure, `4` when the
-router is unreachable, `5` for unsupported router capabilities, and `6` for a
-router or protocol error. Network failures carry the code `router_unreachable`,
-except that any command using an `https` router origin whose certificate fails
-verification exits `4` with the code `tls_untrusted` and a hint to trust the
-router's certificate on this system; verification is never skipped.
+#### Exit codes
+
+router-axi extends the common CLI convention that `0` means success, `1` an
+internal error, and `2` a usage error with three additional router-domain
+codes. A consumer only needs the rule that **any non-zero exit code means
+failure**; the code classifies why it failed so agents can branch without
+parsing stderr:
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Success, including an already-satisfied `wifi enable\|disable` or a reboot preview. |
+| `1`  | Internal failure, such as a local output or backup-file write error. |
+| `2`  | Usage or configuration error (invalid arguments, missing `--output`, missing passphrase, ambiguous instance). |
+| `3`  | Authentication failure; the router rejected the credentials from `ROUTER_AXI_USERNAME`/`ROUTER_AXI_PASSWORD`. |
+| `4`  | Network failure; the router is unreachable, a request timed out, or its HTTPS certificate failed verification (`tls_untrusted`). |
+| `5`  | Unsupported capability; the router does not advertise or implement the required service or action (`unsupported_capability`). |
+| `6`  | Router or protocol error; the router responded with a fault, malformed data, or did not confirm a requested state. |
+
+`watch` cancellation through Ctrl-C/SIGTERM exits `130`, the conventional
+SIGINT/interrupted status. Error details are structured on stderr in the
+selected output format; exit codes stay authoritative.
 
 The implementation discovers services through `/tr64desc.xml` and invokes only
 read actions, plus the confirmed `wifi enable|disable` and `reboot` mutations

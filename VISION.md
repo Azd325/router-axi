@@ -45,6 +45,9 @@ outcome, not success or permission to repeat. The operator waits for recovery,
 reconnects if necessary, and checks the router manually; no recovery deadline
 or rollback is promised.
 Commands report a machine-readable result and a non-zero exit code on failure.
+Exit codes follow 0 success (including confirmed no-ops), 1 internal, and
+2 usage, extended by 3 authentication, 4 network, 5 unsupported capability,
+and 6 router protocol error; any non-zero exit code always means failure.
 Secrets never appear in normal output, error messages, or debug logs.
 
 ## Honest capability boundaries
