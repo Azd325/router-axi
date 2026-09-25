@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The read-only MVP provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces.
+The read-only MVP provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces.
 
 ## Design constraints
 
@@ -60,6 +60,8 @@ router-axi leases --json
 router-axi leases --all
 router-axi wifi
 router-axi wifi --json
+router-axi guest
+router-axi guest --json
 router-axi wifi enable
 router-axi wifi disable
 router-axi wifi disable --instance 1 --confirm
@@ -83,7 +85,10 @@ description once and, when `DeviceInfo` is advertised, invokes only
 It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
 `wan`, `traffic`, `calls`, `devices`, `leases`, `wifi`, `forwards`, `reboot`, and
-`backup`. For reboot, doctor applies the same target selection as the command (exactly
+`backup`. Doctor does not report a separate `guest` capability: WLANConfiguration
+advertisement alone cannot prove that every instance implements the documented
+`X_AVM-DE_GetWLANExtInfo` discriminator without additional reads, and doctor does
+not perform those reads. For reboot, doctor applies the same target selection as the command (exactly
 one `DeviceConfig:1` service, plus exactly one `DeviceInfo:1` when credentials
 are set), but the result is only a candidate capability: doctor never invokes
 Reboot or verifies reboot permission. For backup,
@@ -489,6 +494,58 @@ documented service identifiers; routers whose `GetInfo` omits the
 frequency-band extension report `band: unknown`. Compatibility is
 fixture-backed, not inferred from a model name.
 
+### Guest Wi-Fi inspection
+
+Guest Wi-Fi inspection requires the current checkout; it is not included in v0.1.0.
+
+`guest` is a distinct top-level read command because the existing CLI grammar has
+single-word inspection commands; `wifi` accepts only the established mutation
+actions `enable|disable`. It enumerates every advertised WLANConfiguration service
+and calls the documented AVM action `X_AVM-DE_GetWLANExtInfo` on each one. An
+instance is a guest network only when `NewX_AVM-DE_APType` is exactly `guest`;
+`normal` is not selected. Service-instance numbers and SSIDs never determine the
+role. The contract is documented in
+[FRITZ! WLANConfiguration v48, pp. 12 and 16](https://fritz.support/resources/TR-064_WLAN_Configuration.pdf),
+which defines `X_AVM-DE_APType` values `normal` and `guest`.
+
+Classification of all advertised WLAN instances completes before guest details are
+read. Each explicit guest is then read with the same documented actions as `wifi`:
+`GetInfo`, `GetChannelInfo`, `GetTotalAssociations`, and `GetBeaconType`. Compact
+output is
+`guests[N]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}`;
+JSON uses the same ordered fields under `guests` followed by `total`. The count in
+the compact header and JSON `total` makes zero, one, and multiple explicit. AVM's
+current mapping documents zero or one logical guest service, whose position may be
+service 2, 3, or 4; the CLI does not assume that limit and reports every instance
+that explicitly identifies itself as `guest`, in advertised numeric service-ID
+order. An empty, completely classified result is
+`guests[0]: no guest Wi-Fi networks found` or `{"guests":[],"total":0}`.
+
+`enabled` and the public broadcast `ssid` come from `GetInfo`; channel, band,
+standard, per-instance associated-client count, and security mode have the same
+normalization as `wifi`. Standard is only the highest active mode documented by
+AVM, not the full supported-mode set. Channel `0` means automatic selection;
+missing or unrecognized documented extensions become `unknown` only where the
+`wifi` contract already permits that (`band` and `standard`). Associated clients is
+a count, never a client list.
+
+The guest discriminator is AVM-specific; generic TR-064 defines multiple SSID
+instances but no guest role. If any WLAN instance lacks the discriminator, omits or
+returns an unknown AP type, or a selected guest lacks any required status action,
+the command fails atomically instead of returning an incomplete list. Invalid-action
+faults are `unsupported_capability` (exit `5`); authentication, network, and
+protocol errors retain the standard exits. There is no positional, SSID, browser,
+model-name, or undocumented fallback. Doctor cannot prove this complete action set
+from the device description alone, so it intentionally has no separate guest
+capability.
+
+SSID is the only network identity returned. `X_AVM-DE_GetWLANExtInfo` may return
+other fields, but the client retains only AP type. It never retrieves or outputs
+passphrases, security keys, BSSID, client MAC addresses, associated-device records,
+or client device/IP details. Tests use synthetic fixtures; hardware guest
+inspection is not validated unless the bounded opt-in live test is run locally.
+No guest enable/disable command or other mutation is provided.
+
 ### Port-forward inspection
 
 `forwards` requires the current checkout; it is not included in v0.1.0.
@@ -611,7 +668,10 @@ Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 documented `X_AVM-DE_OnTel:GetCallList`, and the standard
 `Hosts:GetHostNumberOfEntries` plus zero-based `GetGenericHostEntry(NewIndex)`,
 and `WLANConfiguration:GetInfo`, `GetChannelInfo`, `GetTotalAssociations`, and
-`GetBeaconType`, plus `Layer3Forwarding:GetDefaultConnectionService` and the
+`GetBeaconType`. Guest inspection additionally uses the documented AVM
+`WLANConfiguration:X_AVM-DE_GetWLANExtInfo` action only to read
+`NewX_AVM-DE_APType`, then the same four status actions for explicitly classified
+guest instances. It also uses `Layer3Forwarding:GetDefaultConnectionService` and the
 active `WANIPConnection`/`WANPPPConnection`:
 `GetPortMappingNumberOfEntries` and `GetGenericPortMappingEntry(NewPortMappingIndex)`
 when advertised in their SCPDs. Wi-Fi inspection does not call `GetSecurityKeys` or any other
@@ -638,7 +698,7 @@ command line:
 export ROUTER_AXI_HOST='fritz.box'
 read -rs 'ROUTER_AXI_USERNAME?Router username: '; export ROUTER_AXI_USERNAME; printf '\n'
 read -rs 'ROUTER_AXI_PASSWORD?Router password: '; export ROUTER_AXI_PASSWORD; printf '\n'
-ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^(TestLiveReadOnlyCommands|TestLiveWiFi|TestLiveForwards|TestLiveLeases)$' -count=1
+ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^(TestLiveReadOnlyCommands|TestLiveWiFi|TestLiveGuestWiFi|TestLiveForwards|TestLiveLeases)$' -count=1
 unset ROUTER_AXI_PASSWORD ROUTER_AXI_USERNAME ROUTER_AXI_HOST
 ```
 
@@ -661,8 +721,10 @@ does not create test mappings;
 unsupported enumeration is skipped explicitly, not counted as hardware mapping
 validation. Wi-Fi live reads use only the four actions
 above, including `GetInfo`, and never any key-returning action; missing
-advertisement is checked as unsupported. Ordinary `go test ./...` and all CI environments cannot enable the
-live test.
+advertisement is checked as unsupported. Guest live coverage adds the documented
+AP-type action, has a 30-second deadline, discards returned values, never logs them,
+and skips when complete documented support is unavailable. Ordinary `go test ./...`
+and all CI environments cannot enable the live test.
 
 Live mutation coverage is additionally opt-in and skipped by default: it requires the
 complete live gate above plus `ROUTER_AXI_LIVE_MUTATION_TEST=1`. This enables only

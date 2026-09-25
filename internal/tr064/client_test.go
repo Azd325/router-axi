@@ -61,6 +61,9 @@ var wifiAssociationsFixture string
 //go:embed testdata/wifi-security.xml
 var wifiSecurityFixture string
 
+//go:embed testdata/wifi-ext-info.xml
+var wifiExtInfoFixture string
+
 //go:embed testdata/port-mapping-description.xml
 var portMappingDescriptionFixture string
 
@@ -138,10 +141,11 @@ func wifiFixtureClient(t *testing.T, description string, overrides map[string]wi
 	t.Helper()
 	requests := make(chan string, 100)
 	responses := map[string]string{
-		"GetInfo":              wifiInfoFixture,
-		"GetChannelInfo":       wifiChannelFixture,
-		"GetTotalAssociations": wifiAssociationsFixture,
-		"GetBeaconType":        wifiSecurityFixture,
+		"GetInfo":                 wifiInfoFixture,
+		"GetChannelInfo":          wifiChannelFixture,
+		"GetTotalAssociations":    wifiAssociationsFixture,
+		"GetBeaconType":           wifiSecurityFixture,
+		"X_AVM-DE_GetWLANExtInfo": wifiExtInfoFixture,
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == descriptionPath {
@@ -229,6 +233,101 @@ func TestWiFiEnumeratesNestedInstancesInNumericOrder(t *testing.T) {
 			}
 			if string(encoded) != `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration1","ssid":"synthetic-ap","enabled":true,"channel":0,"band":"5000","standard":"ax","associated_devices":2,"security_mode":"11iandWPA3"}` {
 				t.Fatalf("radio JSON = %s", encoded)
+			}
+		})
+	}
+}
+
+func TestGuestWiFiUsesDocumentedAPTypeAndReportsEveryExplicitGuest(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		guestPaths []string
+		wantIDs    []string
+	}{
+		{name: "none"},
+		{name: "single", guestPaths: []string{"/wifi2"}, wantIDs: []string{wlanIDPrefix + "2"}},
+		{name: "multiple", guestPaths: []string{"/wifi2", "/wifi10"}, wantIDs: []string{wlanIDPrefix + "2", wlanIDPrefix + "10"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			overrides := map[string]wifiResponse{}
+			for _, path := range test.guestPaths {
+				overrides[path+"#X_AVM-DE_GetWLANExtInfo"] = wifiResponse{body: strings.Replace(wifiExtInfoFixture, ">normal<", ">guest<", 1)}
+			}
+			client, requests := wifiFixtureClient(t, wifiDescriptionFixture, overrides)
+			guests, err := client.GuestWiFi(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(guests) != len(test.wantIDs) {
+				t.Fatalf("guests = %#v", guests)
+			}
+			for i, wantID := range test.wantIDs {
+				if guests[i] != (GuestNetwork{ServiceID: wantID, SSID: "synthetic-ap", Enabled: true, Channel: 36, Band: "5000", Standard: "ax", AssociatedClients: 2, SecurityMode: "11iandWPA3"}) {
+					t.Fatalf("guest = %#v", guests[i])
+				}
+				encoded, err := json.Marshal(guests[i])
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(encoded), "synthetic-sensitive") {
+					t.Fatal("guest output leaked discarded WLAN extension data")
+				}
+			}
+			for _, path := range []string{"/wifi1", "/wifi2", "/wifi10"} {
+				if got := <-requests; got != path+"#X_AVM-DE_GetWLANExtInfo" {
+					t.Fatalf("classification request = %q", got)
+				}
+			}
+			for _, path := range test.guestPaths {
+				for _, action := range []string{"GetInfo", "GetChannelInfo", "GetTotalAssociations", "GetBeaconType"} {
+					if got := <-requests; got != path+"#"+action {
+						t.Fatalf("detail request = %q", got)
+					}
+				}
+			}
+			if len(requests) != 0 {
+				t.Fatal("guest inspection sent unexpected actions")
+			}
+		})
+	}
+}
+
+func TestGuestWiFiRejectsUnknownOrMissingAPType(t *testing.T) {
+	for _, replacement := range []string{"<NewX_AVM-DE_APType>private-value</NewX_AVM-DE_APType>", ""} {
+		client, requests := wifiFixtureClient(t, wifiDescriptionFixture, map[string]wifiResponse{
+			"/wifi10#X_AVM-DE_GetWLANExtInfo": {body: strings.Replace(wifiExtInfoFixture, "<NewX_AVM-DE_APType>normal</NewX_AVM-DE_APType>", replacement, 1)},
+		})
+		guests, err := client.GuestWiFi(t.Context())
+		var protocolErr *Error
+		if guests != nil || !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || protocolErr.Operation != "guest" || strings.Contains(fmt.Sprintf("%#v", err), "private-value") {
+			t.Fatalf("guests=%#v error=%#v", guests, err)
+		}
+		if len(requests) != 3 {
+			t.Fatalf("request count = %d", len(requests))
+		}
+	}
+}
+
+func TestGuestWiFiRequiresCompleteDocumentedActionSupport(t *testing.T) {
+	fault := `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><errorCode>401</errorCode><errorDescription>private-value</errorDescription></s:Fault></s:Body></s:Envelope>`
+	for _, test := range []struct {
+		name      string
+		overrides map[string]wifiResponse
+	}{
+		{name: "classification", overrides: map[string]wifiResponse{
+			"/wifi2#X_AVM-DE_GetWLANExtInfo": {body: fault, status: http.StatusInternalServerError},
+		}},
+		{name: "guest detail", overrides: map[string]wifiResponse{
+			"/wifi2#X_AVM-DE_GetWLANExtInfo": {body: strings.Replace(wifiExtInfoFixture, ">normal<", ">guest<", 1)},
+			"/wifi2#GetBeaconType":           {body: fault, status: http.StatusInternalServerError},
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, _ := wifiFixtureClient(t, wifiDescriptionFixture, test.overrides)
+			guests, err := client.GuestWiFi(t.Context())
+			var protocolErr *Error
+			if guests != nil || !errors.As(err, &protocolErr) || protocolErr.Kind != "unsupported" || protocolErr.Operation != "guest" || !strings.Contains(protocolErr.Message, guestRemediation) || strings.Contains(fmt.Sprintf("%#v", err), "private-value") {
+				t.Fatalf("guests=%#v error=%#v", guests, err)
 			}
 		})
 	}

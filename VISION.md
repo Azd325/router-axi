@@ -23,6 +23,8 @@ error rather than silently dropping an observation.
 ## Read before change
 
 Read-only inspection is the default surface.
+Guest Wi-Fi inspection uses only a documented access-point role, exposes the public
+broadcast SSID and aggregate radio state, and never retrieves keys, BSSIDs, or client details.
 A state-changing command shows its intended effect before it executes.
 Disruptive changes require an explicit confirmation flag and never rely on a prompt.
 Mutations are idempotent where the underlying router capability permits it.
