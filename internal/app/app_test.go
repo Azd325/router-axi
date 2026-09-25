@@ -345,6 +345,37 @@ func TestCommandFlagsMatchHelpUsage(t *testing.T) {
 	}
 }
 
+func TestAdvertisedFlagsAreAcceptedInValidCommandForms(t *testing.T) {
+	for command, flags := range commandFlags {
+		for _, flag := range flags {
+			args := []string{command}
+			if command == "wifi" {
+				args = append(args, "enable")
+			}
+			if command == "backup" && flag != "--output" {
+				args = append(args, "--output", "router.export")
+			}
+			switch flag {
+			case "--host":
+				args = append(args, flag, "router.test")
+			case "--interval":
+				args = append(args, flag, "1s")
+			case "--count":
+				args = append(args, flag, "1")
+			case "--instance":
+				args = append(args, flag, "1")
+			case "--output":
+				args = append(args, flag, "router.export")
+			default:
+				args = append(args, flag)
+			}
+			if _, err := parse(args); err != nil {
+				t.Errorf("command=%s flag=%s args=%v: %v", command, flag, args, err)
+			}
+		}
+	}
+}
+
 func TestDoctorJSONIsDeterministic(t *testing.T) {
 	code, stdout, stderr := runTest(t, "doctor", "--json")
 	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"leases":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"},"reboot":{"state":"advertised"},"backup":{"state":"advertised"}}}` + "\n"

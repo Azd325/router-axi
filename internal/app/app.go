@@ -75,6 +75,7 @@ type options struct {
 	interval                        time.Duration
 	count                           int
 	intervalSet, countSet           bool
+	flags                           map[string]bool
 	versionFlag                     bool
 }
 
@@ -361,10 +362,11 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 }
 
 func parse(args []string) (options, error) {
-	opts := options{interval: defaultWatchInterval, count: defaultWatchCount}
+	opts := options{interval: defaultWatchInterval, count: defaultWatchCount, flags: map[string]bool{}}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--interval":
+			opts.flags["--interval"] = true
 			i++
 			if opts.intervalSet || i >= len(args) {
 				return opts, errors.New("--interval requires one duration from 1s to 1m")
@@ -375,6 +377,7 @@ func parse(args []string) (options, error) {
 			}
 			opts.interval, opts.intervalSet = interval, true
 		case "--count":
+			opts.flags["--count"] = true
 			i++
 			if opts.countSet || i >= len(args) {
 				return opts, errors.New("--count requires one integer from 1 to 3600")
@@ -385,14 +388,19 @@ func parse(args []string) (options, error) {
 			}
 			opts.count, opts.countSet = count, true
 		case "--json":
+			opts.flags["--json"] = true
 			opts.json = true
 		case "--help", "-h":
+			opts.flags["--help"] = true
 			opts.help = true
 		case "--all":
+			opts.flags["--all"] = true
 			opts.all = true
 		case "--confirm":
+			opts.flags["--confirm"] = true
 			opts.confirm = true
 		case "--instance":
+			opts.flags["--instance"] = true
 			i++
 			if i >= len(args) || strings.HasPrefix(args[i], "-") {
 				return opts, errors.New("--instance requires a value")
@@ -403,18 +411,21 @@ func parse(args []string) (options, error) {
 			}
 			opts.instance, opts.instanceSet = instance, true
 		case "--host":
+			opts.flags["--host"] = true
 			i++
 			if i >= len(args) || strings.HasPrefix(args[i], "-") {
 				return opts, errors.New("--host requires a value")
 			}
 			opts.host = args[i]
 		case "--output":
+			opts.flags["--output"] = true
 			i++
 			if i >= len(args) || args[i] == "" || strings.HasPrefix(args[i], "-") {
 				return opts, errors.New("--output requires a file path")
 			}
 			opts.output = args[i]
 		case "--force":
+			opts.flags["--force"] = true
 			opts.force = true
 		case "--version", "-v", "-V":
 			opts.versionFlag = true
@@ -438,27 +449,11 @@ func parse(args []string) (options, error) {
 			return opts, errors.New("exactly one command is required")
 		}
 	}
-	if (opts.intervalSet || opts.countSet) && opts.command != "watch" {
-		return opts, errors.New("--interval and --count are valid only with watch")
-	}
-	wifiMutation := opts.command == "wifi" && opts.action != ""
-	if opts.instanceSet && !wifiMutation {
-		return opts, errors.New("--instance is valid only with wifi enable or wifi disable")
-	}
-	if opts.confirm && !wifiMutation && opts.command != "reboot" {
-		return opts, errors.New("--confirm is valid only with reboot, wifi enable, or wifi disable")
-	}
-	if opts.output != "" && opts.command != "backup" {
-		return opts, errors.New("--output is valid only with backup")
-	}
-	if opts.force && opts.command != "backup" {
-		return opts, errors.New("--force is valid only with backup")
+	if err := validateFlagContext(opts); err != nil {
+		return opts, err
 	}
 	if opts.command == "backup" && opts.output == "" && !opts.help {
 		return opts, errors.New("backup requires --output PATH")
-	}
-	if opts.all && opts.command != "calls" && opts.command != "devices" && opts.command != "leases" && opts.command != "forwards" {
-		return opts, errors.New("--all is valid only for calls, devices, leases, or forwards")
 	}
 	return opts, nil
 }
@@ -486,6 +481,32 @@ var commandHelp = map[string]string{
 // commandFlags is the single source of truth for the flags each command
 // accepts in parse(). The unknown-option error hint is derived from it, so
 // the suggested flags cannot drift from the flags parse actually accepts.
+type flagSpec struct {
+	valid   func(options) bool
+	invalid string
+}
+
+func alwaysValid(options) bool { return true }
+
+func wifiMutation(opts options) bool { return opts.command == "wifi" && opts.action != "" }
+
+func rebootOrWiFiMutation(opts options) bool { return opts.command == "reboot" || wifiMutation(opts) }
+
+var flagSpecs = map[string]flagSpec{
+	"--host":     {valid: alwaysValid},
+	"--json":     {valid: alwaysValid},
+	"--help":     {valid: alwaysValid},
+	"--interval": {valid: func(opts options) bool { return opts.command == "watch" }, invalid: "--interval and --count are valid only with watch"},
+	"--count":    {valid: func(opts options) bool { return opts.command == "watch" }, invalid: "--interval and --count are valid only with watch"},
+	"--all": {valid: func(opts options) bool {
+		return opts.command == "calls" || opts.command == "devices" || opts.command == "leases" || opts.command == "forwards"
+	}, invalid: "--all is valid only for calls, devices, leases, or forwards"},
+	"--instance": {valid: wifiMutation, invalid: "--instance is valid only with wifi enable or wifi disable"},
+	"--confirm":  {valid: rebootOrWiFiMutation, invalid: "--confirm is valid only with reboot, wifi enable, or wifi disable"},
+	"--output":   {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--output is valid only with backup"},
+	"--force":    {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--force is valid only with backup"},
+}
+
 var commandFlags = map[string][]string{
 	"doctor":   {"--host", "--json", "--help"},
 	"status":   {"--host", "--json", "--help"},
@@ -501,6 +522,31 @@ var commandFlags = map[string][]string{
 	"wifi":     {"--host", "--json", "--instance", "--confirm", "--help"},
 	"reboot":   {"--host", "--json", "--confirm", "--help"},
 	"backup":   {"--host", "--json", "--output", "--force", "--help"},
+}
+
+func validateFlagContext(opts options) error {
+	command := opts.command
+	if command == "" {
+		command = "status"
+	}
+	flags, ok := commandFlags[command]
+	if !ok {
+		return nil
+	}
+	allowed := make(map[string]bool, len(flags))
+	for _, flag := range flags {
+		allowed[flag] = true
+	}
+	for _, flag := range []string{"--interval", "--count", "--all", "--instance", "--confirm", "--output", "--force", "--host", "--json", "--help"} {
+		if !opts.flags[flag] {
+			continue
+		}
+		spec := flagSpecs[flag]
+		if !allowed[flag] || !spec.valid(opts) {
+			return errors.New(spec.invalid)
+		}
+	}
+	return nil
 }
 
 func usageHint(command string) string {
