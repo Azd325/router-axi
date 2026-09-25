@@ -647,6 +647,27 @@ func TestWiFiFlagsAndHelp(t *testing.T) {
 	if code != ExitOK || stdout != "usage: router-axi wifi [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi disable --instance 1 --confirm\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
+	for action, want := range map[string]string{
+		"enable":  "usage: router-axi wifi enable [--instance N] --confirm [--host ADDRESS] [--json] [--help]\nEnables or disables one WLANConfiguration radio. Without --confirm: preview only, nothing changes.\nWith --confirm: idempotent change; the router must confirm the new state. --instance N is required when the router advertises more than one radio; bounds N 1 or greater.\nNo prompts or retries; SSIDs, BSSIDs, and keys are never read or printed.\nexamples: router-axi wifi enable; router-axi wifi enable --instance 1 --confirm; router-axi wifi enable --instance 2 --confirm --json\n",
+		"disable": "usage: router-axi wifi disable [--instance N] --confirm [--host ADDRESS] [--json] [--help]\nEnables or disables one WLANConfiguration radio. Without --confirm: preview only, nothing changes.\nWith --confirm: idempotent change; the router must confirm the new state. --instance N is required when the router advertises more than one radio; bounds N 1 or greater.\nNo prompts or retries; SSIDs, BSSIDs, and keys are never read or printed.\nexamples: router-axi wifi disable; router-axi wifi disable --instance 1 --confirm; router-axi wifi disable --instance 2 --confirm --json\n",
+	} {
+		code, stdout, stderr := runTest(t, "wifi", action, "--help")
+		if code != ExitOK || stdout != want || stderr != "" {
+			t.Fatalf("action=%s code=%d stdout=%q stderr=%q", action, code, stdout, stderr)
+		}
+	}
+}
+
+func TestCallsAndDevicesHelp(t *testing.T) {
+	for command, want := range map[string]string{
+		"calls":   "usage: router-axi calls [--all] [--host ADDRESS] [--json] [--help]\nRead-only call history. Defaults to the 100 most recent entries; --all lists everything. No required arguments.\nexamples: router-axi calls; router-axi calls --all; router-axi calls --all --json\n",
+		"devices": "usage: router-axi devices [--all] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi devices; router-axi devices --all --json\n",
+	} {
+		code, stdout, stderr := runTest(t, command, "--help")
+		if code != ExitOK || stdout != want || stderr != "" {
+			t.Fatalf("command=%s code=%d stdout=%q stderr=%q", command, code, stdout, stderr)
+		}
+	}
 }
 
 func TestForwardsOutputContract(t *testing.T) {
