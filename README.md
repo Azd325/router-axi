@@ -7,7 +7,7 @@ The read-only MVP provides device information, WAN status, traffic statistics, c
 ## Design constraints
 
 - Compact AXI output by default, with JSON available explicitly.
-- Non-interactive commands, structured errors, and meaningful exit codes.
+- Non-interactive commands with structured data and errors on stdout, plus meaningful exit codes.
 - Read-only behavior by default.
 - Explicit confirmation for disruptive operations.
 - Local operation without telemetry or a hosted account.
@@ -122,8 +122,10 @@ address or call list, infer support from a model name, or emit serial numbers,
 WAN/phone addresses, call data, or credentials. Unsupported optional
 capabilities are a successful diagnosis and include remediation.
 
-Doctor preserves completed checks when diagnosis cannot continue: the partial
-report is written to stdout and a structured error to stderr. Unreachable
+Doctor preserves completed checks when diagnosis cannot continue: compact output
+writes the partial report followed by its structured error on stdout. With `--json`,
+it writes one valid envelope: `{"doctor":<doctor>,"error":<structured error>}`.
+Unreachable
 routers exit `4`, rejected credentials exit `3`, disabled or missing core
 TR-064 support exits `5`, and malformed/router protocol responses exit `6`.
 Both compact AXI and JSON field order are deterministic. JSON consumers must
@@ -201,9 +203,10 @@ These are not instantaneous link speeds or billing measurements. Resets or
 multiple wraps that occur entirely between observations and leave a larger
 counter cannot be detected; the CLI does not claim to reconstruct that traffic.
 
-A failed first sample emits no stdout. Any later failure retains earlier complete
-samples, emits a sanitized structured error on **stderr** in the selected format,
-and terminates immediately; consumers must check the exit status. There are no
+A failed first sample emits a terminal sanitized structured error record on stdout.
+Any later failure retains earlier complete samples, then appends that final record
+and terminates immediately; `--json` remains JSONL, so the terminal record is one
+complete `{"error":...}` line. Consumers must check the exit status. There are no
 skipped failures, partial samples, or polling retries (the normal Digest
 challenge exchange is still allowed). Missing fields are null (`unknown` in compact output); malformed numeric
 fields are protocol errors. Standard exits apply: `2` configuration/usage, `3`
@@ -308,7 +311,7 @@ The mutation contract:
   The preview JSON is
   `{"wifi":{"instance":...,"action":...,"current":...,"intended":...,"preview":true}}`
   and does not include `previous` or `changed`.
-- Errors are structured on stderr with the standard exit codes (`2` usage, `3` auth, `4`
+- Errors are structured on stdout with the standard exit codes (`2` usage, `3` auth, `4`
   network, `5` unsupported — including a router fault 401 on `SetEnable`, `6` protocol when
   the router did not confirm the state). A network failure after `SetEnable` was sent is
   reported as possibly-applied: the change may have reached the router without a response,
@@ -497,8 +500,8 @@ unrecognized values remain `unknown`, never inferred from channel or model.
 `OWETrans`); unrecognized values become `unknown`. It is not a security audit
 or a passphrase check.
 
-Reads are atomic at the command boundary: any instance or action failure leaves
-stdout empty and emits a sanitized structured error with a nonzero exit code.
+Reads are atomic at the command boundary: any instance or action failure emits a
+sanitized structured error on stdout with a nonzero exit code, without result data.
 Missing WLANConfiguration support exits `5` with remediation; invalid required
 values and router faults exit `6`, authentication failure `3`, and network
 failure `4`. No partial list is reported as success. Reads are sequential, not
@@ -653,16 +656,17 @@ This table is not a firewall audit: IPv6 pinholes, exposed-host settings, or
 rules unavailable through these documented actions are outside its scope.
 
 `overview` reads router identity, WAN state, and traffic totals in that fixed
-order. It is atomic: if any read fails, stdout is empty and the command emits
-the failed operation as a structured error on stderr with its normal non-zero
+order. It is atomic: if any read fails, the command emits the failed operation as
+a structured error on stdout with its normal non-zero
 exit code. It never presents a partial overview as successful. JSON output has
 stable `router`, `wan`, and `traffic` objects in that order.
 
 The router defaults to `http://fritz.box:49000`. Override it with `--host ADDRESS` or
 `ROUTER_AXI_HOST`; an address without a port uses TR-064 port `49000` for HTTP or
 `49443` for HTTPS. Credentials are read only from the environment. The default
-output is compact AXI text; `--json` emits JSON on stdout. Errors are structured
-on stderr in the selected format. `calls` returns at most 100 entries by default,
+output is compact AXI text; `--json` emits JSON on stdout. All structured data and
+errors use stdout; stderr is reserved for diagnostics, currently including watch's
+`output_failed` fallback after stdout itself fails. `calls` returns at most 100 entries by default,
 reports the omitted count, and accepts `--all` for the complete list.
 
 `version` prints the CLI version without contacting the router. The bare `--version`, `-v`,
@@ -677,7 +681,7 @@ router-axi extends the common CLI convention that `0` means success, `1` an
 internal error, and `2` a usage error with three additional router-domain
 codes. A consumer only needs the rule that **any non-zero exit code means
 failure**; the code classifies why it failed so agents can branch without
-parsing stderr:
+parsing output text:
 
 | Code | Meaning |
 | ---- | ------- |
@@ -690,8 +694,9 @@ parsing stderr:
 | `6`  | Router or protocol error; the router responded with a fault, malformed data, or did not confirm a requested state. |
 
 `watch` cancellation through Ctrl-C/SIGTERM exits `130`, the conventional
-SIGINT/interrupted status. Error details are structured on stderr in the
-selected output format; exit codes stay authoritative.
+SIGINT/interrupted status. Its terminal structured error is the final stdout
+record in the selected format; exit codes stay authoritative. If writing stdout
+fails, watch instead emits its sanitized `output_failed` diagnostic on stderr.
 
 The implementation discovers services through `/tr64desc.xml` and invokes only
 read actions, plus the confirmed `wifi enable|disable` and `reboot` mutations

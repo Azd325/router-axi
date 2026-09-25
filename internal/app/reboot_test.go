@@ -50,7 +50,7 @@ func TestRebootGrammarBeforeFactory(t *testing.T) {
 			}
 			var stdout, stderr bytes.Buffer
 			code := application.Run(t.Context(), input, &stdout, &stderr)
-			if code != ExitUsage || stdout.Len() != 0 || stderr.Len() == 0 || (jsonOutput && !json.Valid(stderr.Bytes())) {
+			if code != ExitUsage || stderr.Len() != 0 || !strings.Contains(stdout.String(), "error") || (jsonOutput && !json.Valid(stdout.Bytes())) {
 				t.Fatalf("invalid grammar not rejected: %v", args)
 			}
 		}
@@ -80,7 +80,7 @@ func TestRebootConfigurationErrorsArePrivate(t *testing.T) {
 		}
 		var stdout, stderr bytes.Buffer
 		code := application.Run(t.Context(), args, &stdout, &stderr)
-		if code != ExitUsage || stdout.Len() != 0 || strings.Contains(stderr.String(), "synthetic-sensitive") || !strings.Contains(stderr.String(), "invalid_configuration") {
+		if code != ExitUsage || stderr.Len() != 0 || strings.Contains(stdout.String(), "synthetic-sensitive") || !strings.Contains(stdout.String(), "invalid_configuration") {
 			t.Fatal("reboot configuration error was not sanitized")
 		}
 	}
@@ -103,10 +103,10 @@ func TestRebootRejectsSensitiveArguments(t *testing.T) {
 			}
 			var stdout, stderr bytes.Buffer
 			code := application.Run(t.Context(), input, &stdout, &stderr)
-			if code != ExitUsage || stdout.Len() != 0 || stderr.Len() == 0 || strings.Contains(stderr.String(), "synthetic-sensitive") || strings.Contains(stderr.String(), "router.test") {
+			if code != ExitUsage || stderr.Len() != 0 || !strings.Contains(stdout.String(), "error") || strings.Contains(stdout.String(), "synthetic-sensitive") || strings.Contains(stdout.String(), "router.test") {
 				t.Fatal("invalid reboot input was not rejected privately")
 			}
-			if jsonOutput && !json.Valid(stderr.Bytes()) {
+			if jsonOutput && !json.Valid(stdout.Bytes()) {
 				t.Fatal("invalid reboot input error was not JSON")
 			}
 		}
@@ -201,10 +201,10 @@ func TestRebootErrorExitCodes(t *testing.T) {
 			var stdout, stderr bytes.Buffer
 			code := application.Run(t.Context(), args, &stdout, &stderr)
 			server.Close()
-			if code != test.exit || posts != 1 || stdout.Len() != 0 || stderr.Len() == 0 || (jsonOutput && !json.Valid(stderr.Bytes())) {
+			if code != test.exit || posts != 1 || stderr.Len() != 0 || !strings.Contains(stdout.String(), "error") || (jsonOutput && !json.Valid(stdout.Bytes())) {
 				t.Fatalf("reboot failure contract: code=%d posts=%d", code, posts)
 			}
-			if strings.Contains(stderr.String(), "synthetic-sensitive") || strings.Contains(stderr.String(), server.URL) || strings.Contains(stderr.String(), "Envelope") {
+			if strings.Contains(stdout.String(), "synthetic-sensitive") || strings.Contains(stdout.String(), server.URL) || strings.Contains(stdout.String(), "Envelope") {
 				t.Fatal("reboot error leaked discarded response data")
 			}
 		}

@@ -216,6 +216,19 @@ func (f guestReader) GuestWiFi(context.Context) ([]tr064.GuestNetwork, error) {
 	return f.guests, f.err
 }
 
+func assertStructuredError(t *testing.T, stdout, stderr string, jsonOutput bool, contains string) {
+	t.Helper()
+	if stderr != "" {
+		t.Fatalf("error written to stderr: %q", stderr)
+	}
+	if jsonOutput && !json.Valid([]byte(stdout)) {
+		t.Fatalf("invalid JSON error: %q", stdout)
+	}
+	if !strings.Contains(stdout, contains) {
+		t.Fatalf("error output=%q missing=%q", stdout, contains)
+	}
+}
+
 func runTest(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
@@ -329,9 +342,10 @@ func TestVersionAliasesRejectTrailingArguments(t *testing.T) {
 		{args: []string{"-v", "--host", "router.test"}, want: "--version, -v, and -V must be used alone"},
 	} {
 		var stdout, stderr bytes.Buffer
-		if code := application.Run(t.Context(), test.args, &stdout, &stderr); code != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), test.want) {
-			t.Fatalf("args=%v code=%d stdout=%q stderr=%q want=%q", test.args, code, stdout.String(), stderr.String(), test.want)
+		if code := application.Run(t.Context(), test.args, &stdout, &stderr); code != ExitUsage {
+			t.Fatalf("args=%v code=%d", test.args, code)
 		}
+		assertStructuredError(t, stdout.String(), stderr.String(), false, test.want)
 	}
 }
 
@@ -343,10 +357,10 @@ func TestUnknownFlagErrorIsSelfCorrecting(t *testing.T) {
 		{[]string{"backup", "--out"}, []string{"valid flags for backup: --host, --json, --output, --force, --help"}},
 		{[]string{"version", "--bogus"}, []string{"valid flags for version: --json, --help"}},
 	} {
-		code, _, stderr := runTest(t, test.args...)
+		code, stdout, stderr := runTest(t, test.args...)
 		unknown := "unknown option: " + test.args[len(test.args)-1]
-		if code != ExitUsage || !strings.Contains(stderr, unknown) || !strings.Contains(stderr, "  hint: "+test.hint[0]) {
-			t.Fatalf("args=%v code=%d stderr=%q", test.args, code, stderr)
+		if code != ExitUsage || !strings.Contains(stdout, unknown) || !strings.Contains(stdout, "  hint: "+test.hint[0]) || stderr != "" {
+			t.Fatalf("args=%v code=%d stdout=%q stderr=%q", test.args, code, stdout, stderr)
 		}
 	}
 }
@@ -362,15 +376,15 @@ func TestContextualFlagErrorsRespectCommandAction(t *testing.T) {
 		{args: []string{"wifi", "--bogus"}, want: "valid flags for wifi: --host, --json, --help", unwanted: "--instance, --confirm"},
 		{args: []string{"wifi", "enable", "--bogus"}, want: "valid flags for wifi: --host, --json, --instance, --confirm, --help", requireMsg: true},
 	} {
-		code, _, stderr := runTest(t, test.args...)
-		if code != ExitUsage || !strings.Contains(stderr, test.want) {
-			t.Fatalf("args=%v code=%d stderr=%q want=%q", test.args, code, stderr, test.want)
+		code, stdout, stderr := runTest(t, test.args...)
+		if code != ExitUsage || !strings.Contains(stdout, test.want) || stderr != "" {
+			t.Fatalf("args=%v code=%d stdout=%q stderr=%q want=%q", test.args, code, stdout, stderr, test.want)
 		}
-		if test.unwanted != "" && strings.Contains(stderr, test.unwanted) {
-			t.Fatalf("args=%v stderr=%q unexpectedly contains %q", test.args, stderr, test.unwanted)
+		if test.unwanted != "" && strings.Contains(stdout, test.unwanted) {
+			t.Fatalf("args=%v stdout=%q unexpectedly contains %q", test.args, stdout, test.unwanted)
 		}
-		if test.requireMsg && !strings.Contains(stderr, "message: ") {
-			t.Fatalf("args=%v stderr=%q missing structured message", test.args, stderr)
+		if test.requireMsg && !strings.Contains(stdout, "message: ") {
+			t.Fatalf("args=%v stdout=%q missing structured message", test.args, stdout)
 		}
 	}
 }
@@ -415,13 +429,48 @@ func TestDoctorJSONIsDeterministic(t *testing.T) {
 }
 
 func TestDoctorPreservesPartialReportOnFailure(t *testing.T) {
-	application := New(func(Config) (Reader, error) {
-		return fakeReader{err: &tr064.Error{Kind: "auth", Message: "router rejected credentials"}}, nil
-	}, func(string) string { return "" })
-	var stdout, stderr bytes.Buffer
-	code := application.Run(t.Context(), []string{"doctor"}, &stdout, &stderr)
-	if code != ExitAuth || !strings.Contains(stdout.String(), "doctor:\n") || !strings.Contains(stderr.String(), "authentication_failed") {
-		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	for _, jsonOutput := range []bool{false, true} {
+		application := New(func(Config) (Reader, error) {
+			return fakeReader{err: &tr064.Error{Kind: "auth", Message: "router rejected credentials"}}, nil
+		}, func(string) string { return "" })
+		args := []string{"doctor"}
+		if jsonOutput {
+			args = append(args, "--json")
+		}
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), args, &stdout, &stderr)
+		if code != ExitAuth || stderr.Len() != 0 {
+			t.Fatalf("json=%t code=%d stdout=%q stderr=%q", jsonOutput, code, stdout.String(), stderr.String())
+		}
+		if jsonOutput {
+			var envelope struct {
+				Doctor struct {
+					Endpoint     string `json:"endpoint"`
+					Model        string `json:"model"`
+					Capabilities struct {
+						Status struct {
+							State string `json:"state"`
+						} `json:"status"`
+					} `json:"capabilities"`
+				} `json:"doctor"`
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(stdout.Bytes(), &envelope); err != nil {
+				t.Fatalf("json=%t invalid envelope: %v", jsonOutput, err)
+			}
+			if envelope.Doctor.Endpoint != "http://router.test:49000" || envelope.Doctor.Model != "FRITZ!Box 7590 AX" || envelope.Doctor.Capabilities.Status.State != "advertised" {
+				t.Fatalf("json=%t envelope lost the partial report: %s", jsonOutput, stdout.String())
+			}
+			if envelope.Error.Code != "authentication_failed" {
+				t.Fatalf("json=%t envelope error code=%q stdout=%q", jsonOutput, envelope.Error.Code, stdout.String())
+			}
+			continue
+		}
+		if !strings.Contains(stdout.String(), "doctor:\n") || !strings.Contains(stdout.String(), "authentication_failed") {
+			t.Fatalf("stdout=%q", stdout.String())
+		}
 	}
 }
 
@@ -433,15 +482,16 @@ func TestOverviewJSONIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestOverviewFailureProducesNoPartialOutput(t *testing.T) {
+func TestOverviewFailureProducesStructuredError(t *testing.T) {
 	application := New(func(Config) (Reader, error) {
 		return partialReader{}, nil
 	}, func(string) string { return "" })
 	var stdout, stderr bytes.Buffer
 	code := application.Run(t.Context(), []string{"overview"}, &stdout, &stderr)
-	if code != ExitUnsupported || stdout.Len() != 0 || !strings.Contains(stderr.String(), "code: unsupported_capability") {
-		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	if code != ExitUnsupported {
+		t.Fatalf("code=%d", code)
 	}
+	assertStructuredError(t, stdout.String(), stderr.String(), false, "code: unsupported_capability")
 }
 
 func TestCallsAreCompactByDefault(t *testing.T) {
@@ -522,9 +572,10 @@ func TestDevicesCapabilityAbsenceIsExplicit(t *testing.T) {
 	application := New(func(Config) (Reader, error) { return unsupportedDevicesReader{}, nil }, func(string) string { return "" })
 	var stdout, stderr bytes.Buffer
 	code := application.Run(t.Context(), []string{"devices"}, &stdout, &stderr)
-	if code != ExitUnsupported || stdout.Len() != 0 || !strings.Contains(stderr.String(), "code: unsupported_capability") {
-		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	if code != ExitUnsupported {
+		t.Fatalf("code=%d", code)
 	}
+	assertStructuredError(t, stdout.String(), stderr.String(), false, "code: unsupported_capability")
 }
 
 func TestDevicesJSONIsDeterministic(t *testing.T) {
@@ -565,9 +616,9 @@ func TestJSONIsExplicit(t *testing.T) {
 }
 
 func TestUsageAndStructuredErrors(t *testing.T) {
-	code, _, stderr := runTest(t, "delete")
-	if code != ExitUsage || !strings.Contains(stderr, "code: unknown_command") {
-		t.Fatalf("code=%d stderr=%q", code, stderr)
+	code, stdoutText, stderr := runTest(t, "delete")
+	if code != ExitUsage || stderr != "" || !strings.Contains(stdoutText, "code: unknown_command") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdoutText, stderr)
 	}
 
 	var stdout bytes.Buffer
@@ -576,8 +627,8 @@ func TestUsageAndStructuredErrors(t *testing.T) {
 		return fakeReader{err: &tr064.Error{Kind: "auth", Operation: "GetInfo", Message: "router rejected credentials"}}, nil
 	}, func(string) string { return "" })
 	code = application.Run(t.Context(), []string{"status"}, &stdout, &errout)
-	if code != ExitAuth || !strings.Contains(errout.String(), "code: authentication_failed") {
-		t.Fatalf("code=%d stderr=%q", code, errout.String())
+	if code != ExitAuth || errout.Len() != 0 || !strings.Contains(stdout.String(), "code: authentication_failed") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), errout.String())
 	}
 }
 
@@ -655,8 +706,11 @@ func TestGuestEmptyAndFailureOutput(t *testing.T) {
 				if stdout.String() != want || stderr.Len() != 0 {
 					t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 				}
-			} else if stdout.Len() != 0 || stderr.Len() == 0 || strings.Contains(stderr.String(), "must-not-appear") {
-				t.Fatalf("partial output=%q stderr=%q", stdout.String(), stderr.String())
+			} else {
+				assertStructuredError(t, stdout.String(), stderr.String(), jsonOutput, "error")
+				if strings.Contains(stdout.String(), "must-not-appear") {
+					t.Fatalf("stdout=%q leaked discarded guest data", stdout.String())
+				}
 			}
 		}
 	}
@@ -664,9 +718,9 @@ func TestGuestEmptyAndFailureOutput(t *testing.T) {
 
 func TestGuestFlagsAndHelp(t *testing.T) {
 	for _, args := range [][]string{{"guest", "--all"}, {"guest", "--instance", "2"}, {"guest", "enable"}, {"wifi", "guest"}} {
-		code, stdout, _ := runTest(t, args...)
-		if code != ExitUsage || stdout != "" {
-			t.Fatalf("args=%v code=%d stdout=%q", args, code, stdout)
+		code, stdout, stderr := runTest(t, args...)
+		if code != ExitUsage || stderr != "" || !strings.Contains(stdout, "error") {
+			t.Fatalf("args=%v code=%d stdout=%q stderr=%q", args, code, stdout, stderr)
 		}
 	}
 	code, stdout, stderr := runTest(t, "guest", "--help")
@@ -704,8 +758,8 @@ func TestWiFiEmptyAndFailureOutput(t *testing.T) {
 				if stdout.String() != want || stderr.Len() != 0 {
 					t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
 				}
-			} else if stdout.Len() != 0 || stderr.Len() == 0 {
-				t.Fatalf("partial output=%q stderr=%q", stdout.String(), stderr.String())
+			} else {
+				assertStructuredError(t, stdout.String(), stderr.String(), jsonOutput, "error")
 			}
 		}
 	}
@@ -760,9 +814,7 @@ func TestWiFiClientPrivacyBoundary(t *testing.T) {
 				t.Fatalf("action count=%d", len(actions))
 			}
 			if fail {
-				if code != ExitRouter || stdout.Len() != 0 || stderr.Len() == 0 {
-					t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
-				}
+				assertStructuredError(t, stdout.String(), stderr.String(), jsonOutput, "error")
 			} else if code != ExitOK || stderr.Len() != 0 || !strings.Contains(stdout.String(), "synthetic-ap") || !strings.Contains(stdout.String(), "2400") {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
@@ -789,9 +841,9 @@ func TestEverySubcommandHelpDepth(t *testing.T) {
 
 func TestWiFiFlagsAndHelp(t *testing.T) {
 	for _, flag := range []string{"--all", "--reveal", "--ssid"} {
-		code, stdout, _ := runTest(t, "wifi", flag)
-		if code != ExitUsage || stdout != "" {
-			t.Fatalf("flag=%s code=%d stdout=%q", flag, code, stdout)
+		code, stdout, stderr := runTest(t, "wifi", flag)
+		if code != ExitUsage || stderr != "" || !strings.Contains(stdout, "error") {
+			t.Fatalf("flag=%s code=%d stdout=%q stderr=%q", flag, code, stdout, stderr)
 		}
 	}
 	code, stdout, stderr := runTest(t, "wifi", "--help")
@@ -913,9 +965,10 @@ func TestForwardsFailuresAreAtomic(t *testing.T) {
 			}
 			var stdout, stderr bytes.Buffer
 			code := application.Run(t.Context(), args, &stdout, &stderr)
-			if code != test.exit || stdout.Len() != 0 || stderr.Len() == 0 {
-				t.Fatalf("json=%t code=%d stdout=%q stderr=%q", jsonOutput, code, stdout.String(), stderr.String())
+			if code != test.exit {
+				t.Fatalf("json=%t code=%d", jsonOutput, code)
 			}
+			assertStructuredError(t, stdout.String(), stderr.String(), jsonOutput, "error")
 		}
 	}
 }
@@ -980,9 +1033,10 @@ func TestForwardsClientOutputBoundary(t *testing.T) {
 				t.Fatal("forwards output leaked discarded response data")
 			}
 			if fail {
-				if code != ExitRouter || stdout.Len() != 0 || stderr.Len() == 0 {
-					t.Fatal("failed enumeration produced partial success")
+				if code != ExitRouter {
+					t.Fatalf("code=%d", code)
 				}
+				assertStructuredError(t, stdout.String(), stderr.String(), jsonOutput, "error")
 			} else if code != ExitOK || stderr.Len() != 0 || !strings.Contains(stdout.String(), "192.0.2.10") || !strings.Contains(stdout.String(), "synthetic-service") {
 				t.Fatal("successful enumeration did not expose operational fields")
 			}
@@ -992,9 +1046,9 @@ func TestForwardsClientOutputBoundary(t *testing.T) {
 
 func TestForwardsFlagsAndHelp(t *testing.T) {
 	for _, flag := range []string{"--reveal", "--ssid"} {
-		code, stdout, _ := runTest(t, "forwards", flag)
-		if code != ExitUsage || stdout != "" {
-			t.Fatalf("flag=%s code=%d stdout=%q", flag, code, stdout)
+		code, stdout, stderr := runTest(t, "forwards", flag)
+		if code != ExitUsage || stderr != "" || !strings.Contains(stdout, "error") {
+			t.Fatalf("flag=%s code=%d stdout=%q stderr=%q", flag, code, stdout, stderr)
 		}
 	}
 	code, stdout, stderr := runTest(t, "forwards", "--help")
@@ -1006,10 +1060,10 @@ func TestForwardsFlagsAndHelp(t *testing.T) {
 func TestFactoryFailureIsConfigurationError(t *testing.T) {
 	for _, command := range []string{"status", "wifi"} {
 		application := New(func(Config) (Reader, error) { return nil, errors.New("bad address") }, func(string) string { return "" })
-		var stderr bytes.Buffer
-		code := application.Run(t.Context(), []string{command}, &bytes.Buffer{}, &stderr)
-		if code != ExitUsage || !strings.Contains(stderr.String(), "invalid_configuration") || !strings.Contains(stderr.String(), "bad address") {
-			t.Fatalf("command=%s code=%d stderr=%q", command, code, stderr.String())
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), []string{command}, &stdout, &stderr)
+		if code != ExitUsage || stderr.Len() != 0 || !strings.Contains(stdout.String(), "invalid_configuration") || !strings.Contains(stdout.String(), "bad address") {
+			t.Fatalf("command=%s code=%d stdout=%q stderr=%q", command, code, stdout.String(), stderr.String())
 		}
 	}
 }
@@ -1089,9 +1143,10 @@ func TestLeasesErrorsDiscardPartialResults(t *testing.T) {
 			}
 			var stdout, stderr bytes.Buffer
 			code := application.Run(t.Context(), args, &stdout, &stderr)
-			if code != test.exit || stdout.Len() != 0 || stderr.Len() == 0 {
-				t.Fatalf("kind=%s code=%d partial output=%q", test.kind, code, stdout.String())
+			if code != test.exit {
+				t.Fatalf("kind=%s code=%d", test.kind, code)
 			}
+			assertStructuredError(t, stdout.String(), stderr.String(), jsonOutput, "error")
 		}
 	}
 }
@@ -1114,7 +1169,7 @@ func TestLeasesCapabilityAbsenceIsExplicit(t *testing.T) {
 	application := New(func(Config) (Reader, error) { return unsupportedLeasesReader{}, nil }, func(string) string { return "" })
 	var stdout, stderr bytes.Buffer
 	code := application.Run(t.Context(), []string{"leases"}, &stdout, &stderr)
-	if code != ExitUnsupported || stdout.Len() != 0 || !strings.Contains(stderr.String(), "code: unsupported_capability") {
+	if code != ExitUnsupported || stderr.Len() != 0 || !strings.Contains(stdout.String(), "code: unsupported_capability") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -1158,9 +1213,10 @@ func TestLeasesClientOutputBoundary(t *testing.T) {
 				t.Fatal("lease diagnostics leaked discarded response data")
 			}
 			if fail {
-				if code != ExitRouter || stdout.Len() != 0 || stderr.Len() == 0 {
-					t.Fatal("failed host enumeration produced partial success")
+				if code != ExitRouter {
+					t.Fatalf("code=%d", code)
 				}
+				assertStructuredError(t, stdout.String(), stderr.String(), jsonOutput, "error")
 			} else if code != ExitOK || stderr.Len() != 0 || !strings.Contains(stdout.String(), "synthetic, \\\"client\\\"") || !strings.Contains(stdout.String(), "192.0.2.10") || !strings.Contains(stdout.String(), "02:00:00:00:00:10") {
 				t.Fatalf("successful observation did not expose escaped operational fields: %s", stdout.String())
 			}
@@ -1170,9 +1226,9 @@ func TestLeasesClientOutputBoundary(t *testing.T) {
 
 func TestLeasesFlagsAndHelp(t *testing.T) {
 	for _, flag := range []string{"--reveal", "--ssid"} {
-		code, stdout, _ := runTest(t, "leases", flag)
-		if code != ExitUsage || stdout != "" {
-			t.Fatalf("flag=%s code=%d stdout=%q", flag, code, stdout)
+		code, stdout, stderr := runTest(t, "leases", flag)
+		if code != ExitUsage || stderr != "" || !strings.Contains(stdout, "error") {
+			t.Fatalf("flag=%s code=%d stdout=%q stderr=%q", flag, code, stdout, stderr)
 		}
 	}
 	code, stdout, stderr := runTest(t, "leases", "--help")
@@ -1277,8 +1333,8 @@ func TestWiFiMutationRefusesAmbiguousInstance(t *testing.T) {
 		}
 		var stdout, stderr bytes.Buffer
 		code := application.Run(t.Context(), args, &stdout, &stderr)
-		if code != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "ambiguous_instance") {
-			t.Fatalf("json=%t code=%d stderr=%q", jsonOutput, code, stderr.String())
+		if code != ExitUsage || stderr.Len() != 0 || !strings.Contains(stdout.String(), "ambiguous_instance") {
+			t.Fatalf("json=%t code=%d stdout=%q stderr=%q", jsonOutput, code, stdout.String(), stderr.String())
 		}
 	}
 }
@@ -1296,9 +1352,9 @@ func TestWiFiMutationUsageErrors(t *testing.T) {
 		{[]string{"wan", "enable"}, "exactly one command is required"},
 	}
 	for _, test := range tests {
-		_, _, stderr := runTest(t, test.args...)
-		if !strings.Contains(stderr, test.want) {
-			t.Fatalf("args=%v stderr=%q want=%q", test.args, stderr, test.want)
+		_, stdout, stderr := runTest(t, test.args...)
+		if stderr != "" || !strings.Contains(stdout, test.want) {
+			t.Fatalf("args=%v stdout=%q stderr=%q want=%q", test.args, stdout, stderr, test.want)
 		}
 	}
 }
@@ -1319,8 +1375,8 @@ func TestWiFiMutationProtocolAndAuthErrors(t *testing.T) {
 		application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })
 		var stdout, stderr bytes.Buffer
 		code := application.Run(t.Context(), []string{"wifi", "disable", "--confirm"}, &stdout, &stderr)
-		if code != test.exit || stdout.Len() != 0 || !strings.Contains(stderr.String(), test.codeWant) {
-			t.Fatalf("kind=%s code=%d stderr=%q", test.kind, code, stderr.String())
+		if code != test.exit || stderr.Len() != 0 || !strings.Contains(stdout.String(), test.codeWant) {
+			t.Fatalf("kind=%s code=%d stdout=%q stderr=%q", test.kind, code, stdout.String(), stderr.String())
 		}
 	}
 }
@@ -1344,11 +1400,11 @@ func TestStatusDistinguishesUntrustedCertificateFromUnreachableRouter(t *testing
 		var payload struct {
 			Error struct{ Code, Hint string } `json:"error"`
 		}
-		if err := json.Unmarshal(stderr.Bytes(), &payload); err != nil {
+		if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
 			t.Fatal(err)
 		}
-		if code != ExitNetwork || stdout.Len() != 0 || payload.Error.Code != test.code || !strings.Contains(payload.Error.Hint, test.hint) {
-			t.Fatalf("want=%s code=%d stderr=%q", test.code, code, stderr.String())
+		if code != ExitNetwork || stderr.Len() != 0 || payload.Error.Code != test.code || !strings.Contains(payload.Error.Hint, test.hint) {
+			t.Fatalf("want=%s code=%d stdout=%q", test.code, code, stdout.String())
 		}
 	}
 }

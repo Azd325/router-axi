@@ -174,6 +174,26 @@ type backupJSONResult struct {
 	Backup backupResult `json:"backup"`
 }
 
+type errorDetail struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Hint    string `json:"hint,omitempty"`
+}
+
+type errorResult struct {
+	Error errorDetail `json:"error"`
+}
+
+type doctorPartialErrorResult struct {
+	Doctor tr064.Doctor `json:"doctor"`
+	Error  errorDetail  `json:"error"`
+}
+
+type errorSpec struct {
+	exit   int
+	detail errorDetail
+}
+
 type skillResult struct {
 	Path      string `json:"path"`
 	Installed bool   `json:"installed"`
@@ -184,6 +204,8 @@ type skillJSONResult struct {
 }
 
 func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	diagnostics := stderr
+	stderr = stdout
 	opts, err := parse(args)
 	if err != nil {
 		for _, arg := range args {
@@ -240,7 +262,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return writeError(stderr, opts.json, ExitUsage, "invalid_configuration", message, "router-axi help")
 	}
 	if opts.command == "watch" {
-		return runWatch(ctx, reader, opts, stdout, stderr, a.watchSignals)
+		return runWatch(ctx, reader, opts, stdout, diagnostics, a.watchSignals)
 	}
 	if opts.command == "reboot" {
 		result, err := reader.Reboot(ctx, opts.confirm)
@@ -350,9 +372,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if err != nil {
 		if opts.command == "doctor" {
 			if opts.json {
-				if writeJSON(stdout, value) != ExitOK {
-					return ExitInternal
-				}
+				return writeDoctorPartialError(stdout, value.(tr064.Doctor), protocolError(err))
 			} else if writeErr := writeCompact(a, stdout, opts.command, value); writeErr != nil {
 				return ExitInternal
 			}
@@ -821,10 +841,10 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 	return nil
 }
 
-func renderProtocolError(w io.Writer, jsonOutput bool, err error) int {
+func protocolError(err error) errorSpec {
 	var protocolErr *tr064.Error
 	if !errors.As(err, &protocolErr) {
-		return writeError(w, jsonOutput, ExitInternal, "internal_error", err.Error(), "")
+		return errorSpec{ExitInternal, errorDetail{"internal_error", err.Error(), ""}}
 	}
 	switch protocolErr.Kind {
 	case "usage":
@@ -835,30 +855,36 @@ func renderProtocolError(w io.Writer, jsonOutput bool, err error) int {
 		if protocolErr.Operation == "backup" {
 			hint = "router-axi backup --help"
 		}
-		return writeError(w, jsonOutput, ExitUsage, protocolErr.Code, protocolErr.Message, hint)
+		return errorSpec{ExitUsage, errorDetail{protocolErr.Code, protocolErr.Message, hint}}
 	case "auth":
-		return writeError(w, jsonOutput, ExitAuth, "authentication_failed", protocolErr.Message, "set ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD")
+		return errorSpec{ExitAuth, errorDetail{"authentication_failed", protocolErr.Message, "set ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD"}}
 	case "network":
 		if protocolErr.Code == "tls_untrusted" {
-			return writeError(w, jsonOutput, ExitNetwork, "tls_untrusted", protocolErr.Message, "trust the router's HTTPS certificate on this system; verification is never skipped")
+			return errorSpec{ExitNetwork, errorDetail{"tls_untrusted", protocolErr.Message, "trust the router's HTTPS certificate on this system; verification is never skipped"}}
 		}
-		return writeError(w, jsonOutput, ExitNetwork, "router_unreachable", protocolErr.Message, "check --host and local network access")
+		return errorSpec{ExitNetwork, errorDetail{"router_unreachable", protocolErr.Message, "check --host and local network access"}}
 	case "unsupported":
-		return writeError(w, jsonOutput, ExitUnsupported, "unsupported_capability", protocolErr.Message, "")
+		return errorSpec{ExitUnsupported, errorDetail{"unsupported_capability", protocolErr.Message, ""}}
 	default:
-		return writeError(w, jsonOutput, ExitRouter, "router_protocol_error", protocolErr.Message, "")
+		return errorSpec{ExitRouter, errorDetail{"router_protocol_error", protocolErr.Message, ""}}
 	}
+}
+
+func renderProtocolError(w io.Writer, jsonOutput bool, err error) int {
+	spec := protocolError(err)
+	return writeError(w, jsonOutput, spec.exit, spec.detail.Code, spec.detail.Message, spec.detail.Hint)
+}
+
+func writeDoctorPartialError(w io.Writer, doctor tr064.Doctor, spec errorSpec) int {
+	if writeJSON(w, doctorPartialErrorResult{Doctor: doctor, Error: spec.detail}) != ExitOK {
+		return ExitInternal
+	}
+	return spec.exit
 }
 
 func writeError(w io.Writer, jsonOutput bool, exit int, code, message, hint string) int {
 	if jsonOutput {
-		payload := struct {
-			Error struct {
-				Code, Message, Hint string `json:",omitempty"`
-			} `json:"error"`
-		}{}
-		payload.Error.Code, payload.Error.Message, payload.Error.Hint = code, message, hint
-		if writeJSON(w, payload) != ExitOK {
+		if writeJSON(w, errorResult{Error: errorDetail{code, message, hint}}) != ExitOK {
 			return ExitInternal
 		}
 		return exit

@@ -44,28 +44,28 @@ func runWatch(ctx context.Context, reader Reader, opts options, stdout, stderr i
 	var previous *tr064.WatchSnapshot
 	for index := 1; index <= opts.count; index++ {
 		if ctx.Err() != nil {
-			return watchInterrupted(stderr, opts.json)
+			return watchInterrupted(stdout, opts.json)
 		}
 		if index > 1 {
 			if err := waitWatch(ctx, opts.interval); err != nil {
-				return watchInterrupted(stderr, opts.json)
+				return watchInterrupted(stdout, opts.json)
 			}
 		}
 		if ctx.Err() != nil {
-			return watchInterrupted(stderr, opts.json)
+			return watchInterrupted(stdout, opts.json)
 		}
 		sampleCtx, cancel := context.WithTimeout(ctx, watchSampleTimeout)
 		current, err := reader.WatchSnapshot(sampleCtx)
 		timedOut := sampleCtx.Err() != nil
 		cancel()
 		if ctx.Err() != nil {
-			return watchInterrupted(stderr, opts.json)
+			return watchInterrupted(stdout, opts.json)
 		}
 		if timedOut {
-			return writeError(stderr, opts.json, ExitNetwork, "watch_timeout", "watch sample exceeded its 30s deadline; polling stopped", "check router responsiveness before running watch again")
+			return writeError(stdout, opts.json, ExitNetwork, "watch_timeout", "watch sample exceeded its 30s deadline; polling stopped", "check router responsiveness before running watch again")
 		}
 		if err != nil {
-			return watchReadError(stderr, opts.json, index, err)
+			return watchReadError(stdout, opts.json, index, err)
 		}
 		sample := makeWatchSample(index, current, previous)
 		if opts.json {
