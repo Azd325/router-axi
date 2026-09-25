@@ -335,6 +335,30 @@ func TestUnknownFlagErrorIsSelfCorrecting(t *testing.T) {
 	}
 }
 
+func TestContextualFlagErrorsRespectCommandAction(t *testing.T) {
+	for _, test := range []struct {
+		args       []string
+		want       string
+		unwanted   string
+		requireMsg bool
+	}{
+		{args: []string{"version", "--host", "router.test"}, want: "--host is not valid for version", requireMsg: true},
+		{args: []string{"wifi", "--bogus"}, want: "valid flags for wifi: --host, --json, --help", unwanted: "--instance, --confirm"},
+		{args: []string{"wifi", "enable", "--bogus"}, want: "valid flags for wifi: --host, --json, --instance, --confirm, --help", requireMsg: true},
+	} {
+		code, _, stderr := runTest(t, test.args...)
+		if code != ExitUsage || !strings.Contains(stderr, test.want) {
+			t.Fatalf("args=%v code=%d stderr=%q want=%q", test.args, code, stderr, test.want)
+		}
+		if test.unwanted != "" && strings.Contains(stderr, test.unwanted) {
+			t.Fatalf("args=%v stderr=%q unexpectedly contains %q", test.args, stderr, test.unwanted)
+		}
+		if test.requireMsg && !strings.Contains(stderr, "message: ") {
+			t.Fatalf("args=%v stderr=%q missing structured message", test.args, stderr)
+		}
+	}
+}
+
 func TestCommandFlagsMatchHelpUsage(t *testing.T) {
 	for command, flags := range commandFlags {
 		usage := help(command, "")

@@ -181,7 +181,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 				opts.json = true
 			}
 		}
-		return writeError(stderr, opts.json, ExitUsage, "invalid_arguments", err.Error(), usageHint(opts.command))
+		return writeError(stderr, opts.json, ExitUsage, "invalid_arguments", err.Error(), usageHint(opts))
 	}
 	if opts.versionFlag {
 		if _, err := fmt.Fprintln(stdout, a.Version); err != nil {
@@ -545,15 +545,25 @@ func validateFlagContext(opts options) error {
 		}
 		spec := flagSpecs[flag]
 		if !allowed[flag] || !spec.valid(opts) {
-			return errors.New(spec.invalid)
+			message := spec.invalid
+			if message == "" {
+				message = flag + " is not valid for " + opts.command
+			}
+			return errors.New(message)
 		}
 	}
 	return nil
 }
 
-func usageHint(command string) string {
-	if flags, ok := commandFlags[command]; ok {
-		return "valid flags for " + command + ": " + strings.Join(flags, ", ")
+func usageHint(opts options) string {
+	if flags, ok := commandFlags[opts.command]; ok {
+		valid := make([]string, 0, len(flags))
+		for _, flag := range flags {
+			if flagSpecs[flag].valid(opts) {
+				valid = append(valid, flag)
+			}
+		}
+		return "valid flags for " + opts.command + ": " + strings.Join(valid, ", ")
 	}
 	return "router-axi help"
 }
