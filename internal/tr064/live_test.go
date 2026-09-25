@@ -107,6 +107,26 @@ func TestLiveWiFi(t *testing.T) {
 	}
 }
 
+func TestLiveGuestWiFi(t *testing.T) {
+	settings, enabled := liveTestConfig(os.Getenv)
+	if !enabled {
+		t.Skip("live router tests require explicit local opt-in and complete configuration")
+	}
+	client, err := New(settings.host, settings.username, settings.password, nil)
+	if err != nil {
+		t.Fatal("live router configuration was rejected")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	if _, err := client.GuestWiFi(ctx); err != nil {
+		var protocolErr *Error
+		if errors.As(err, &protocolErr) && protocolErr.Kind == "unsupported" {
+			t.Skip("documented guest Wi-Fi identification or complete inspection is unsupported; hardware guest Wi-Fi was not validated")
+		}
+		t.Fatal("guest Wi-Fi live inspection failed")
+	}
+}
+
 func TestLiveForwards(t *testing.T) {
 	settings, enabled := liveTestConfig(os.Getenv)
 	if !enabled {

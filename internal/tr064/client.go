@@ -138,6 +138,17 @@ type Radio struct {
 	SecurityMode      string `json:"security_mode"`
 }
 
+type GuestNetwork struct {
+	ServiceID         string `json:"service_id"`
+	SSID              string `json:"ssid"`
+	Enabled           bool   `json:"enabled"`
+	Channel           uint64 `json:"channel"`
+	Band              string `json:"band"`
+	Standard          string `json:"standard"`
+	AssociatedClients uint64 `json:"associated_clients"`
+	SecurityMode      string `json:"security_mode"`
+}
+
 type Forward struct {
 	Enabled        bool    `json:"enabled"`
 	Protocol       string  `json:"protocol"`
@@ -191,7 +202,7 @@ type soapValues struct {
 	LeaseTimeRemaining                                                       *string
 	FaultCode, FaultDescription                                              string
 	Enable, SSID, Standard                                                   string
-	Channel, FrequencyBand, TotalAssociations, BeaconType                    string
+	Channel, FrequencyBand, TotalAssociations, BeaconType, APType            string
 	PortMappingCount, ExternalPort, PortMappingProtocol                      string
 	InternalPort, InternalClient, PortMappingEnabled, PortMappingDescription string
 	RemoteHost, LeaseDuration                                                *string
@@ -275,6 +286,8 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.TotalAssociations
 		case "NewBeaconType":
 			target = &v.BeaconType
+		case "NewX_AVM-DE_APType":
+			target = &v.APType
 		case "NewPortMappingNumberOfEntries":
 			target = &v.PortMappingCount
 		case "NewRemoteHost":
@@ -479,6 +492,7 @@ const (
 	wlanServicePrefix = "urn:dslforum-org:service:WLANConfiguration:"
 	wlanIDPrefix      = "urn:WLANConfiguration-com:serviceId:WLANConfiguration"
 	wifiRemediation   = "enable the WLANConfiguration TR-064 service or use supported firmware"
+	guestRemediation  = "use firmware that implements documented guest identification and status actions for every WLANConfiguration instance"
 )
 
 // wlanServices returns every advertised WLANConfiguration instance, sorted by
@@ -522,58 +536,113 @@ func (c *Client) WiFi(ctx context.Context) ([]Radio, error) {
 	}
 	radios := make([]Radio, 0, len(services))
 	for _, svc := range services {
-		// GetInfo returns the SSID and the BSSID of the beacon. The SSID is
-		// public beacon data and is reported; the BSSID and every other
-		// returned field are discarded here and never leave the client.
-		info, err := c.actionOnService(ctx, svc, "GetInfo")
-		if err != nil {
-			return nil, wifiError(err)
-		}
-		enabled, err := parseEnable(info.Enable)
+		radio, err := c.readRadio(ctx, svc, "wifi", wifiError)
 		if err != nil {
 			return nil, err
 		}
-		band := "unknown"
-		switch info.FrequencyBand {
-		case "2400", "5000", "6000":
-			band = info.FrequencyBand
-		}
-		standard := "unknown"
-		switch info.Standard {
-		case "b", "g", "n", "ac", "ax", "be":
-			standard = info.Standard
-		}
-		channel, err := c.actionOnService(ctx, svc, "GetChannelInfo")
-		if err != nil {
-			return nil, wifiError(err)
-		}
-		number, err := strconv.ParseUint(strings.TrimSpace(channel.Channel), 10, 8)
-		if err != nil {
-			return nil, &Error{Kind: "protocol", Operation: "wifi", Message: "router returned an invalid Wi-Fi channel"}
-		}
-		associations, err := c.actionOnService(ctx, svc, "GetTotalAssociations")
-		if err != nil {
-			return nil, wifiError(err)
-		}
-		count, err := strconv.ParseUint(strings.TrimSpace(associations.TotalAssociations), 10, 16)
-		if err != nil {
-			return nil, &Error{Kind: "protocol", Operation: "wifi", Message: "router returned an invalid Wi-Fi association count"}
-		}
-		security, err := c.actionOnService(ctx, svc, "GetBeaconType")
-		if err != nil {
-			return nil, wifiError(err)
-		}
-		if security.BeaconType == "" {
-			return nil, &Error{Kind: "protocol", Operation: "wifi", Message: "router omitted the Wi-Fi security mode"}
-		}
-		mode := "unknown"
-		switch security.BeaconType {
-		case "None", "Basic", "WPA", "11i", "WPAand11i", "WPA3", "11iandWPA3", "OWE", "OWETrans":
-			mode = security.BeaconType
-		}
-		radios = append(radios, Radio{svc.ID, info.SSID, enabled, number, band, standard, count, mode})
+		radios = append(radios, radio)
 	}
 	return radios, nil
+}
+
+func (c *Client) GuestWiFi(ctx context.Context) ([]GuestNetwork, error) {
+	services, err := c.wlanServices(ctx)
+	if err != nil {
+		return nil, guestError(err)
+	}
+	guestServices := make([]service, 0, 1)
+	for _, svc := range services {
+		info, err := c.actionOnService(ctx, svc, "X_AVM-DE_GetWLANExtInfo")
+		if err != nil {
+			return nil, guestError(err)
+		}
+		switch strings.TrimSpace(info.APType) {
+		case "normal":
+		case "guest":
+			guestServices = append(guestServices, svc)
+		default:
+			return nil, &Error{Kind: "protocol", Operation: "guest", Message: "router returned an invalid Wi-Fi access-point type"}
+		}
+	}
+	guests := make([]GuestNetwork, 0, len(guestServices))
+	for _, svc := range guestServices {
+		radio, err := c.readRadio(ctx, svc, "guest", guestError)
+		if err != nil {
+			return nil, err
+		}
+		guests = append(guests, GuestNetwork{
+			ServiceID: radio.ServiceID, SSID: radio.SSID, Enabled: radio.Enabled,
+			Channel: radio.Channel, Band: radio.Band, Standard: radio.Standard,
+			AssociatedClients: radio.AssociatedDevices, SecurityMode: radio.SecurityMode,
+		})
+	}
+	return guests, nil
+}
+
+func (c *Client) readRadio(ctx context.Context, svc service, operation string, actionError func(error) *Error) (Radio, error) {
+	info, err := c.actionOnService(ctx, svc, "GetInfo")
+	if err != nil {
+		return Radio{}, actionError(err)
+	}
+	enabled, err := parseEnable(info.Enable)
+	if err != nil {
+		return Radio{}, &Error{Kind: "protocol", Operation: operation, Message: "router returned an invalid Wi-Fi enable state"}
+	}
+	band := "unknown"
+	switch info.FrequencyBand {
+	case "2400", "5000", "6000":
+		band = info.FrequencyBand
+	}
+	standard := "unknown"
+	switch info.Standard {
+	case "b", "g", "n", "ac", "ax", "be":
+		standard = info.Standard
+	}
+	channel, err := c.actionOnService(ctx, svc, "GetChannelInfo")
+	if err != nil {
+		return Radio{}, actionError(err)
+	}
+	number, err := strconv.ParseUint(strings.TrimSpace(channel.Channel), 10, 8)
+	if err != nil {
+		return Radio{}, &Error{Kind: "protocol", Operation: operation, Message: "router returned an invalid Wi-Fi channel"}
+	}
+	associations, err := c.actionOnService(ctx, svc, "GetTotalAssociations")
+	if err != nil {
+		return Radio{}, actionError(err)
+	}
+	count, err := strconv.ParseUint(strings.TrimSpace(associations.TotalAssociations), 10, 16)
+	if err != nil {
+		return Radio{}, &Error{Kind: "protocol", Operation: operation, Message: "router returned an invalid Wi-Fi association count"}
+	}
+	security, err := c.actionOnService(ctx, svc, "GetBeaconType")
+	if err != nil {
+		return Radio{}, actionError(err)
+	}
+	if security.BeaconType == "" {
+		return Radio{}, &Error{Kind: "protocol", Operation: operation, Message: "router omitted the Wi-Fi security mode"}
+	}
+	mode := "unknown"
+	switch security.BeaconType {
+	case "None", "Basic", "WPA", "11i", "WPAand11i", "WPA3", "11iandWPA3", "OWE", "OWETrans":
+		mode = security.BeaconType
+	}
+	return Radio{svc.ID, info.SSID, enabled, number, band, standard, count, mode}, nil
+}
+
+func guestError(err error) *Error {
+	result := &Error{Kind: "protocol", Operation: "guest", Message: "guest Wi-Fi inspection failed"}
+	var protocolErr *Error
+	if errors.As(err, &protocolErr) {
+		result.Kind = protocolErr.Kind
+		result.StatusCode = protocolErr.StatusCode
+		if protocolErr.Kind == "router" && protocolErr.FaultCode == "401" {
+			result.Kind = "unsupported"
+		}
+	}
+	if result.Kind == "unsupported" {
+		result.Message = "router cannot completely identify and inspect guest Wi-Fi through documented actions; " + guestRemediation
+	}
+	return result
 }
 
 func wifiError(err error) *Error {

@@ -125,6 +125,10 @@ func (f fakeReader) WiFi(context.Context) ([]tr064.Radio, error) {
 	return []tr064.Radio{{ServiceID: "urn:WLANConfiguration-com:serviceId:WLANConfiguration1", SSID: "synthetic-ap", Enabled: true, Channel: 6, Band: "2400", Standard: "ax", AssociatedDevices: 2, SecurityMode: "11i"}}, f.err
 }
 
+func (f fakeReader) GuestWiFi(context.Context) ([]tr064.GuestNetwork, error) {
+	return []tr064.GuestNetwork{{ServiceID: "urn:WLANConfiguration-com:serviceId:WLANConfiguration2", SSID: "synthetic-guest", Enabled: true, Channel: 36, Band: "5000", Standard: "ax", AssociatedClients: 1, SecurityMode: "11iandWPA3"}}, f.err
+}
+
 func (f fakeReader) Reboot(_ context.Context, confirm bool) (tr064.RebootResult, error) {
 	return tr064.RebootResult{Endpoint: "http://router.test:49000", Preview: !confirm, Accepted: confirm}, f.err
 }
@@ -191,6 +195,15 @@ func (f wifiReader) WiFi(context.Context) ([]tr064.Radio, error) {
 	return f.radios, f.err
 }
 
+type guestReader struct {
+	fakeReader
+	guests []tr064.GuestNetwork
+}
+
+func (f guestReader) GuestWiFi(context.Context) ([]tr064.GuestNetwork, error) {
+	return f.guests, f.err
+}
+
 func runTest(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
@@ -210,6 +223,7 @@ func TestCompactCommands(t *testing.T) {
 		{"devices", "devices[1]{name,ip_address,mac_address,interface_type,active}:"},
 		{"leases", "leases[2]{name,ip_address,mac_address,address_source,lease_time_remaining,interface_type,active}:"},
 		{"wifi", "radios[1]{service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode}:"},
+		{"guest", "guests[1]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}:"},
 		{"forwards", "forwards[1]{enabled,protocol,external_port,internal_client,internal_port,description,remote_host,lease_duration}:"},
 	}
 	for _, test := range tests {
@@ -402,6 +416,70 @@ func TestWiFiOutputContract(t *testing.T) {
 		if code != ExitOK || stdout != test.want || stderr != "" {
 			t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 		}
+	}
+}
+
+func TestGuestOutputContract(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"guest"}, "guests[1]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration2,synthetic-guest,true,36,5000,ax,1,11iandWPA3\n"},
+		{[]string{"guest", "--json"}, `{"guests":[{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","ssid":"synthetic-guest","enabled":true,"channel":36,"band":"5000","standard":"ax","associated_clients":1,"security_mode":"11iandWPA3"}],"total":1}` + "\n"},
+	} {
+		code, stdout, stderr := runTest(t, test.args...)
+		if code != ExitOK || stdout != test.want || stderr != "" {
+			t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+		}
+	}
+}
+
+func TestGuestEmptyAndFailureOutput(t *testing.T) {
+	for _, jsonOutput := range []bool{false, true} {
+		for _, test := range []struct {
+			kind string
+			exit int
+		}{
+			{"", ExitOK}, {"unsupported", ExitUnsupported}, {"auth", ExitAuth}, {"network", ExitNetwork}, {"protocol", ExitRouter}, {"router", ExitRouter},
+		} {
+			reader := guestReader{}
+			if test.kind != "" {
+				reader.err = &tr064.Error{Kind: test.kind, Message: "guest Wi-Fi inspection failed"}
+				reader.guests = []tr064.GuestNetwork{{SSID: "must-not-appear"}}
+			}
+			application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })
+			args := []string{"guest"}
+			want := "guests[0]: no guest Wi-Fi networks found\n"
+			if jsonOutput {
+				args = append(args, "--json")
+				want = "{\"guests\":[],\"total\":0}\n"
+			}
+			var stdout, stderr bytes.Buffer
+			code := application.Run(t.Context(), args, &stdout, &stderr)
+			if code != test.exit {
+				t.Fatalf("kind=%s code=%d", test.kind, code)
+			}
+			if test.kind == "" {
+				if stdout.String() != want || stderr.Len() != 0 {
+					t.Fatalf("stdout=%q stderr=%q", stdout.String(), stderr.String())
+				}
+			} else if stdout.Len() != 0 || stderr.Len() == 0 || strings.Contains(stderr.String(), "must-not-appear") {
+				t.Fatalf("partial output=%q stderr=%q", stdout.String(), stderr.String())
+			}
+		}
+	}
+}
+
+func TestGuestFlagsAndHelp(t *testing.T) {
+	for _, args := range [][]string{{"guest", "--all"}, {"guest", "--instance", "2"}, {"guest", "enable"}, {"wifi", "guest"}} {
+		code, stdout, _ := runTest(t, args...)
+		if code != ExitUsage || stdout != "" {
+			t.Fatalf("args=%v code=%d stdout=%q", args, code, stdout)
+		}
+	}
+	code, stdout, stderr := runTest(t, "guest", "--help")
+	if code != ExitOK || stdout != "usage: router-axi guest [--host ADDRESS] [--json]\n" || stderr != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
 

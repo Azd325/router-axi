@@ -40,6 +40,7 @@ type Reader interface {
 	Devices(context.Context) ([]tr064.Device, error)
 	Leases(context.Context) ([]tr064.Lease, error)
 	WiFi(context.Context) ([]tr064.Radio, error)
+	GuestWiFi(context.Context) ([]tr064.GuestNetwork, error)
 	WiFiMutation(context.Context, uint64, bool, bool) (tr064.WiFiMutation, error)
 	Forwards(context.Context) ([]tr064.Forward, error)
 	Reboot(context.Context, bool) (tr064.RebootResult, error)
@@ -90,6 +91,11 @@ type leaseResult struct {
 type wifiResult struct {
 	Radios []tr064.Radio `json:"radios"`
 	Total  int           `json:"total"`
+}
+
+type guestResult struct {
+	Guests []tr064.GuestNetwork `json:"guests"`
+	Total  int                  `json:"total"`
 }
 
 type wifiMutationResult struct {
@@ -278,6 +284,13 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 				radios = []tr064.Radio{}
 			}
 			value = wifiResult{Radios: radios, Total: len(radios)}
+		case "guest":
+			var guests []tr064.GuestNetwork
+			guests, err = reader.GuestWiFi(ctx)
+			if guests == nil {
+				guests = []tr064.GuestNetwork{}
+			}
+			value = guestResult{Guests: guests, Total: len(guests)}
 		case "devices":
 			var devices []tr064.Device
 			devices, err = reader.Devices(ctx)
@@ -444,7 +457,7 @@ func parse(args []string) (options, error) {
 }
 
 func validCommand(command string) bool {
-	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "forwards" || command == "reboot" || command == "backup"
+	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "backup"
 }
 
 func help(command, action string) string {
@@ -470,7 +483,7 @@ func help(command, action string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + "\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -545,6 +558,20 @@ func writeCompact(w io.Writer, command string, value any) error {
 		}
 		for _, radio := range result.Radios {
 			if _, err := fmt.Fprintf(w, "  %s,%s,%t,%d,%s,%s,%d,%s\n", toon(radio.ServiceID), toon(radio.SSID), radio.Enabled, radio.Channel, toon(radio.Band), toon(radio.Standard), radio.AssociatedDevices, toon(radio.SecurityMode)); err != nil {
+				return err
+			}
+		}
+	case "guest":
+		result := value.(guestResult)
+		if len(result.Guests) == 0 {
+			_, err := io.WriteString(w, "guests[0]: no guest Wi-Fi networks found\n")
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "guests[%d]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}:\n", len(result.Guests)); err != nil {
+			return err
+		}
+		for _, guest := range result.Guests {
+			if _, err := fmt.Fprintf(w, "  %s,%s,%t,%d,%s,%s,%d,%s\n", toon(guest.ServiceID), toon(guest.SSID), guest.Enabled, guest.Channel, toon(guest.Band), toon(guest.Standard), guest.AssociatedClients, toon(guest.SecurityMode)); err != nil {
 				return err
 			}
 		}
