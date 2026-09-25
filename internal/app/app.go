@@ -498,6 +498,17 @@ func help(command, action string) string {
 	if text, ok := commandHelp[command]; ok {
 		return text
 	}
+	if validCommand(command) {
+		extra := ""
+		if command == "calls" || command == "devices" || command == "leases" || command == "forwards" {
+			extra = " [--all]"
+		}
+		if command == "wifi" {
+			extra = " [enable|disable [--instance N] --confirm]"
+		}
+		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + "\n"
+	}
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
