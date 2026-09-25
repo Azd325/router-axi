@@ -658,7 +658,7 @@ parsing stderr:
 
 | Code | Meaning |
 | ---- | ------- |
-| `0`  | Success, including confirmed no-ops such as an already-satisfied `wifi enable\|disable` or a reboot preview. |
+| `0`  | Success, including an already-satisfied `wifi enable\|disable` or a reboot preview. |
 | `1`  | Internal failure, such as a local output or backup-file write error. |
 | `2`  | Usage or configuration error (invalid arguments, missing `--output`, missing passphrase, ambiguous instance). |
 | `3`  | Authentication failure; the router rejected the credentials from `ROUTER_AXI_USERNAME`/`ROUTER_AXI_PASSWORD`. |
