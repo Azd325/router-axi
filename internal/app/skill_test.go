@@ -43,19 +43,30 @@ func TestSkillFrontmatter(t *testing.T) {
 	if end < 0 {
 		t.Fatal("SKILL.md frontmatter must end with ---")
 	}
-	frontmatter := raw[4:end]
-	if !strings.Contains(frontmatter, "name: router-axi") {
-		t.Fatal("SKILL.md frontmatter must declare the skill name")
+	fields := make(map[string]string)
+	for _, line := range strings.Split(raw[4:end], "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if !ok || strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+			t.Fatalf("invalid frontmatter field %q", line)
+		}
+		key = strings.TrimSpace(key)
+		if _, exists := fields[key]; exists {
+			t.Fatalf("duplicate frontmatter field %q", key)
+		}
+		fields[key] = strings.TrimSpace(value)
 	}
-	if !strings.Contains(frontmatter, "description:") {
-		t.Fatal("SKILL.md frontmatter must declare a trigger-shaped description")
+	if fields["name"] != skill.Name {
+		t.Fatalf("frontmatter name = %q, want %q", fields["name"], skill.Name)
+	}
+	if fields["description"] == "" {
+		t.Fatal("frontmatter description must not be empty")
 	}
 }
 
 func TestSkillInstall(t *testing.T) {
 	dir := t.TempDir()
 	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
-	application.userHomeDir = func() (string, error) { return dir, nil }
+	application.homeDir = func() (string, error) { return dir, nil }
 	var stdout, stderr bytes.Buffer
 	if code := application.Run(t.Context(), []string{"skill", "install"}, &stdout, &stderr); code != ExitOK {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
@@ -77,7 +88,7 @@ func TestSkillInstallPathFlag(t *testing.T) {
 	dir := t.TempDir()
 	var stdout, stderr bytes.Buffer
 	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
-	application.userHomeDir = func() (string, error) { return "", os.ErrNotExist }
+	application.homeDir = func() (string, error) { return "", os.ErrNotExist }
 	code := application.Run(t.Context(), []string{"skill", "install", "--path", dir, "--json"}, &stdout, &stderr)
 	if code != ExitOK {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
@@ -91,10 +102,25 @@ func TestSkillInstallPathFlag(t *testing.T) {
 	}
 }
 
+func TestSkillInstallRejectsUnrelatedFlagsBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	output := filepath.Join(dir, "unexpected")
+	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
+	application.homeDir = func() (string, error) { return dir, nil }
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"skill", "install", "--output", output, "--force"}, &stdout, &stderr)
+	if code != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "--output is valid only with backup") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatalf("unrelated output path was written: %v", err)
+	}
+}
+
 func TestSkillInstallIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
-	application.userHomeDir = func() (string, error) { return dir, nil }
+	application.homeDir = func() (string, error) { return dir, nil }
 	var stdout, stderr bytes.Buffer
 	for round := range 3 {
 		if code := application.Run(t.Context(), []string{"skill", "install"}, &stdout, &stderr); code != ExitOK {
@@ -118,7 +144,7 @@ func TestSkillInstallOverwritesChangedContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
-	application.userHomeDir = func() (string, error) { return dir, nil }
+	application.homeDir = func() (string, error) { return dir, nil }
 	var stdout, stderr bytes.Buffer
 	if code := application.Run(t.Context(), []string{"skill", "install"}, &stdout, &stderr); code != ExitOK {
 		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())

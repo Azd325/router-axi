@@ -23,7 +23,7 @@ documentation; run the CLI for live router state.
 - `watch` — bounded read-only WAN/traffic polling; defaults `--interval 5s
   --count 6` (bounds 1s–1m and 1–3600, no unbounded mode, JSONL with `--json`,
   Ctrl-C exits 130).
-- `calls` — call history (20 entries default, `--all` for the full list).
+- `calls` — call history (100 entries default, `--all` for the full list).
 - `devices` — connected and known LAN clients (`--all` supported).
 - `leases` — observed Hosts-table lease metadata (`--all` supported).
 - `wifi` — Wi-Fi inspection; `wifi enable|disable` changes a radio.

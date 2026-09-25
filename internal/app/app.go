@@ -438,6 +438,7 @@ func parse(args []string) (options, error) {
 			}
 			opts.output = args[i]
 		case "--path":
+			opts.flags["--path"] = true
 			i++
 			if i >= len(args) || args[i] == "" || strings.HasPrefix(args[i], "-") {
 				return opts, errors.New("--path requires a directory")
@@ -541,6 +542,7 @@ var flagSpecs = map[string]flagSpec{
 	"--confirm":  {valid: rebootOrWiFiMutation, invalid: "--confirm is valid only with reboot, wifi enable, or wifi disable"},
 	"--output":   {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--output is valid only with backup"},
 	"--force":    {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--force is valid only with backup"},
+	"--path":     {valid: func(opts options) bool { return opts.command == "skill" && opts.action == "install" }, invalid: "--path is valid only with skill install"},
 }
 
 var commandFlags = map[string][]string{
@@ -558,6 +560,7 @@ var commandFlags = map[string][]string{
 	"wifi":     {"--host", "--json", "--instance", "--confirm", "--help"},
 	"reboot":   {"--host", "--json", "--confirm", "--help"},
 	"backup":   {"--host", "--json", "--output", "--force", "--help"},
+	"skill":    {"--path", "--json", "--help"},
 	"version":  {"--json", "--help"},
 }
 
