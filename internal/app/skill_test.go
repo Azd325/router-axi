@@ -2,6 +2,8 @@ package app
 
 import (
 	"bytes"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/Azd325/router-axi/internal/skill"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -34,32 +37,61 @@ func TestSkillHelpNotStale(t *testing.T) {
 	}
 }
 
-func TestSkillFrontmatter(t *testing.T) {
-	raw := string(skill.Bytes())
-	if !strings.HasPrefix(raw, "---\n") {
-		t.Fatal("SKILL.md must start with a YAML frontmatter block")
+type skillFrontmatter struct {
+	Name        string `yaml:"name"`
+	Description string `yaml:"description"`
+}
+
+func parseSkillFrontmatter(raw []byte) (skillFrontmatter, error) {
+	text := string(raw)
+	if !strings.HasPrefix(text, "---\n") {
+		return skillFrontmatter{}, fmt.Errorf("frontmatter must start with ---")
 	}
-	end := strings.Index(raw, "\n---\n")
+	end := strings.Index(text, "\n---\n")
 	if end < 0 {
-		t.Fatal("SKILL.md frontmatter must end with ---")
+		return skillFrontmatter{}, fmt.Errorf("frontmatter must end with ---")
 	}
-	fields := make(map[string]string)
-	for _, line := range strings.Split(raw[4:end], "\n") {
-		key, value, ok := strings.Cut(line, ":")
-		if !ok || strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
-			t.Fatalf("invalid frontmatter field %q", line)
+	var frontmatter skillFrontmatter
+	decoder := yaml.NewDecoder(strings.NewReader(text[4:end]))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&frontmatter); err != nil {
+		return skillFrontmatter{}, err
+	}
+	if frontmatter.Name == "" || frontmatter.Description == "" {
+		return skillFrontmatter{}, fmt.Errorf("frontmatter name and description must not be empty")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return skillFrontmatter{}, fmt.Errorf("frontmatter contains multiple documents")
 		}
-		key = strings.TrimSpace(key)
-		if _, exists := fields[key]; exists {
-			t.Fatalf("duplicate frontmatter field %q", key)
-		}
-		fields[key] = strings.TrimSpace(value)
+		return skillFrontmatter{}, err
 	}
-	if fields["name"] != skill.Name {
-		t.Fatalf("frontmatter name = %q, want %q", fields["name"], skill.Name)
+	return frontmatter, nil
+}
+
+func TestSkillFrontmatter(t *testing.T) {
+	frontmatter, err := parseSkillFrontmatter(skill.Bytes())
+	if err != nil {
+		t.Fatalf("parse SKILL.md frontmatter: %v", err)
 	}
-	if fields["description"] == "" {
+	if frontmatter.Name != skill.Name {
+		t.Fatalf("frontmatter name = %q, want %q", frontmatter.Name, skill.Name)
+	}
+	if frontmatter.Description == "" {
 		t.Fatal("frontmatter description must not be empty")
+	}
+}
+
+func TestSkillFrontmatterRejectsInvalidYAML(t *testing.T) {
+	for _, raw := range []string{
+		"---\nname: router-axi\ndescription: [unterminated\n---\n",
+		"---\nname: router-axi\ndescription: \"\"\n---\n",
+		"---\nname: router-axi\nunknown: value\ndescription: valid\n---\n",
+	} {
+		if _, err := parseSkillFrontmatter([]byte(raw)); err == nil {
+			t.Fatalf("parseSkillFrontmatter(%q) unexpectedly succeeded", raw)
+		}
 	}
 }
 
