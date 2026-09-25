@@ -19,6 +19,7 @@ type fakeReader struct{ err error }
 type partialReader struct{ fakeReader }
 type manyCallsReader struct{ fakeReader }
 type manyDevicesReader struct{ fakeReader }
+type boundedDevicesReader struct{ count int; fakeReader }
 type emptyDevicesReader struct{ fakeReader }
 type unsupportedDevicesReader struct{ fakeReader }
 type manyLeasesReader struct{ fakeReader }
@@ -26,7 +27,7 @@ type emptyLeasesReader struct{ fakeReader }
 type unsupportedLeasesReader struct{ fakeReader }
 
 func (manyLeasesReader) Leases(context.Context) ([]tr064.Lease, error) {
-	leases := make([]tr064.Lease, 23)
+	leases := make([]tr064.Lease, 103)
 	for i := range leases {
 		remaining := int64(3600)
 		leases[i] = tr064.Lease{IPAddress: fmt.Sprintf("192.0.2.%d", i+1), MACAddress: fmt.Sprintf("02:00:00:00:00:%02x", i+1), AddressSource: "DHCP", LeaseTimeRemaining: &remaining, InterfaceType: "802.11", Active: i == 0}
@@ -52,7 +53,7 @@ func (partialReader) Overview(context.Context) (tr064.Overview, error) {
 }
 
 func (manyCallsReader) Calls(context.Context) ([]tr064.Call, error) {
-	calls := make([]tr064.Call, 23)
+	calls := make([]tr064.Call, 103)
 	for i := range calls {
 		calls[i] = tr064.Call{ID: fmt.Sprint(i + 1), Direction: "incoming", Remote: "123", Date: "10.03.24 12:34", Duration: "0:01"}
 	}
@@ -60,7 +61,7 @@ func (manyCallsReader) Calls(context.Context) ([]tr064.Call, error) {
 }
 
 func (manyDevicesReader) Devices(context.Context) ([]tr064.Device, error) {
-	devices := make([]tr064.Device, 23)
+	devices := make([]tr064.Device, 103)
 	for i := range devices {
 		devices[i] = tr064.Device{IPAddress: fmt.Sprintf("192.0.2.%d", i+1), MACAddress: fmt.Sprintf("02:00:00:00:00:%02x", i+1), InterfaceType: "Ethernet", Active: true}
 	}
@@ -69,6 +70,14 @@ func (manyDevicesReader) Devices(context.Context) ([]tr064.Device, error) {
 
 func (emptyDevicesReader) Devices(context.Context) ([]tr064.Device, error) {
 	return []tr064.Device{}, nil
+}
+
+func (r boundedDevicesReader) Devices(context.Context) ([]tr064.Device, error) {
+	devices := make([]tr064.Device, r.count)
+	for i := range devices {
+		devices[i] = tr064.Device{IPAddress: fmt.Sprintf("192.0.2.%d", i+1), MACAddress: fmt.Sprintf("02:00:00:00:00:%02x", i+1), InterfaceType: "Ethernet", Active: true}
+	}
+	return devices, nil
 }
 
 func (unsupportedDevicesReader) Devices(context.Context) ([]tr064.Device, error) {
@@ -285,13 +294,13 @@ func TestCallsAreCompactByDefault(t *testing.T) {
 	application := New(func(Config) (Reader, error) { return manyCallsReader{}, nil }, func(string) string { return "" })
 	var stdout, stderr bytes.Buffer
 	code := application.Run(t.Context(), []string{"calls"}, &stdout, &stderr)
-	if code != ExitOK || !strings.Contains(stdout.String(), "calls[20]") || !strings.Contains(stdout.String(), "omitted: 3") || !strings.Contains(stdout.String(), "calls --all") {
+	if code != ExitOK || !strings.Contains(stdout.String(), "calls[100]") || !strings.Contains(stdout.String(), "omitted: 3") || !strings.Contains(stdout.String(), "calls --all") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 
 	stdout.Reset()
 	code = application.Run(t.Context(), []string{"calls", "--all"}, &stdout, &stderr)
-	if code != ExitOK || !strings.Contains(stdout.String(), "calls[23]") || strings.Contains(stdout.String(), "omitted:") {
+	if code != ExitOK || !strings.Contains(stdout.String(), "calls[103]") || strings.Contains(stdout.String(), "omitted:") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
@@ -300,14 +309,43 @@ func TestDevicesAreCompactByDefault(t *testing.T) {
 	application := New(func(Config) (Reader, error) { return manyDevicesReader{}, nil }, func(string) string { return "" })
 	var stdout, stderr bytes.Buffer
 	code := application.Run(t.Context(), []string{"devices"}, &stdout, &stderr)
-	if code != ExitOK || !strings.Contains(stdout.String(), "devices[20]") || !strings.Contains(stdout.String(), "omitted: 3") || !strings.Contains(stdout.String(), "devices --all") {
+	if code != ExitOK || !strings.Contains(stdout.String(), "devices[100]") || !strings.Contains(stdout.String(), "omitted: 3") || !strings.Contains(stdout.String(), "devices --all") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 
 	stdout.Reset()
 	code = application.Run(t.Context(), []string{"devices", "--all"}, &stdout, &stderr)
-	if code != ExitOK || !strings.Contains(stdout.String(), "devices[23]") || strings.Contains(stdout.String(), "omitted:") {
+	if code != ExitOK || !strings.Contains(stdout.String(), "devices[103]") || strings.Contains(stdout.String(), "omitted:") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestDefaultListLimitBoundary(t *testing.T) {
+	for _, test := range []struct {
+		count    int
+		header   string
+		omitted  string
+		nextHint string
+	}{
+		{100, "devices[100]", "", ""},
+		{101, "devices[100]", "omitted: 1", "next: router-axi devices --all"},
+	} {
+		application := New(func(Config) (Reader, error) {
+			return boundedDevicesReader{count: test.count}, nil
+		}, func(string) string { return "" })
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), []string{"devices"}, &stdout, &stderr)
+		out := stdout.String()
+		if code != ExitOK || stderr.Len() != 0 || !strings.Contains(out, test.header) {
+			t.Fatalf("count=%d code=%d stdout=%q stderr=%q", test.count, code, out, stderr.String())
+		}
+		if test.omitted == "" {
+			if strings.Contains(out, "omitted:") || strings.Contains(out, "next:") {
+				t.Fatalf("count=%d unexpected truncation hint: %q", test.count, out)
+			}
+		} else if !strings.Contains(out, test.omitted) || !strings.Contains(out, test.nextHint) {
+			t.Fatalf("count=%d missing truncation hint: %q", test.count, out)
+		}
 	}
 }
 
@@ -614,7 +652,7 @@ func TestForwardsOutputContract(t *testing.T) {
 }
 
 func TestForwardsAreBoundedAndEmptyIsExplicit(t *testing.T) {
-	forwards := make([]tr064.Forward, 23)
+	forwards := make([]tr064.Forward, 103)
 	for i := range forwards {
 		forwards[i] = tr064.Forward{Protocol: "TCP", ExternalPort: uint64(8000 + i), InternalClient: fmt.Sprintf("192.0.2.%d", i+1), InternalPort: 80, Description: "synthetic", RemoteHost: "198.51.100.1"}
 	}
@@ -624,10 +662,10 @@ func TestForwardsAreBoundedAndEmptyIsExplicit(t *testing.T) {
 		contains []string
 		absent   string
 	}{
-		{[]string{"forwards"}, []string{"forwards[20]", "omitted: 3", "forwards --all"}, "forwards[23]"},
-		{[]string{"forwards", "--all"}, []string{"forwards[23]"}, "omitted:"},
-		{[]string{"forwards", "--json"}, []string{`"total":23,"omitted":3`}, `"external_port":8020`},
-		{[]string{"forwards", "--all", "--json"}, []string{`"total":23,"omitted":0`, `"external_port":8020`}, ""},
+		{[]string{"forwards"}, []string{"forwards[100]", "omitted: 3", "forwards --all"}, "forwards[103]"},
+		{[]string{"forwards", "--all"}, []string{"forwards[103]"}, "omitted:"},
+		{[]string{"forwards", "--json"}, []string{`"total":103,"omitted":3`}, `"external_port":8102`},
+		{[]string{"forwards", "--all", "--json"}, []string{`"total":103,"omitted":0`, `"external_port":8102`}, ""},
 	} {
 		var out, errout bytes.Buffer
 		code := application.Run(t.Context(), test.args, &out, &errout)
@@ -807,8 +845,8 @@ func TestLeasesAreBounded(t *testing.T) {
 		contains []string
 		absent   string
 	}{
-		{[]string{"leases"}, []string{"leases[20]", "omitted: 3", "leases --all"}, "leases[23]"},
-		{[]string{"leases", "--all"}, []string{"leases[23]"}, "omitted:"},
+		{[]string{"leases"}, []string{"leases[100]", "omitted: 3", "leases --all"}, "leases[103]"},
+		{[]string{"leases", "--all"}, []string{"leases[103]"}, "omitted:"},
 	} {
 		var stdout, stderr bytes.Buffer
 		code := application.Run(t.Context(), test.args, &stdout, &stderr)
@@ -827,10 +865,10 @@ func TestLeasesJSONBounds(t *testing.T) {
 	application := New(func(Config) (Reader, error) { return manyLeasesReader{}, nil }, func(string) string { return "" })
 	for _, all := range []bool{false, true} {
 		args := []string{"leases", "--json"}
-		count := 20
+		count := 100
 		if all {
 			args = append(args, "--all")
-			count = 23
+			count = 103
 		}
 		var stdout, stderr bytes.Buffer
 		code := application.Run(t.Context(), args, &stdout, &stderr)
@@ -838,7 +876,7 @@ func TestLeasesJSONBounds(t *testing.T) {
 		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
 			t.Fatal(err)
 		}
-		if code != ExitOK || stderr.Len() != 0 || len(result.Leases) != count || result.Total != 23 || result.Omitted != 23-count {
+		if code != ExitOK || stderr.Len() != 0 || len(result.Leases) != count || result.Total != 103 || result.Omitted != 103-count {
 			t.Fatal("JSON list bound or aggregate mismatch")
 		}
 	}

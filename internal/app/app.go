@@ -28,6 +28,11 @@ const (
 	ExitRouter      = 6
 )
 
+// defaultListLimit caps rows shown by the calls, devices, leases and forwards
+// list commands unless --all is passed. It is high enough to cover common
+// home-LAN sizes in a single call.
+const defaultListLimit = 100
+
 type Config struct{ Host, Username, Password string }
 type Reader interface {
 	Doctor(context.Context) (tr064.Doctor, error)
@@ -272,8 +277,8 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			calls, err = reader.Calls(ctx)
 			if err == nil {
 				total := len(calls)
-				if !opts.all && len(calls) > 20 {
-					calls = calls[:20]
+				if !opts.all && len(calls) > defaultListLimit {
+					calls = calls[:defaultListLimit]
 				}
 				value = callResult{Calls: calls, Total: total, Omitted: total - len(calls)}
 			}
@@ -296,8 +301,8 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			devices, err = reader.Devices(ctx)
 			if err == nil {
 				total := len(devices)
-				if !opts.all && len(devices) > 20 {
-					devices = devices[:20]
+				if !opts.all && len(devices) > defaultListLimit {
+					devices = devices[:defaultListLimit]
 				}
 				value = deviceResult{Devices: devices, Total: total, Omitted: total - len(devices)}
 			}
@@ -309,8 +314,8 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 					leases = []tr064.Lease{}
 				}
 				total := len(leases)
-				if !opts.all && len(leases) > 20 {
-					leases = leases[:20]
+				if !opts.all && len(leases) > defaultListLimit {
+					leases = leases[:defaultListLimit]
 				}
 				value = leaseResult{Leases: leases, Total: total, Omitted: total - len(leases)}
 			}
@@ -322,8 +327,8 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 					forwards = []tr064.Forward{}
 				}
 				total := len(forwards)
-				if !opts.all && len(forwards) > 20 {
-					forwards = forwards[:20]
+				if !opts.all && len(forwards) > defaultListLimit {
+					forwards = forwards[:defaultListLimit]
 				}
 				value = forwardResult{Forwards: forwards, Total: total, Omitted: total - len(forwards)}
 			}
