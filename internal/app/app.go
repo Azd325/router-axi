@@ -464,8 +464,8 @@ func validCommand(command string) bool {
 	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "backup" || command == "version"
 }
 
-// commandHelp holds the per-command help text for read-only commands:
-// usage line, purpose, flag defaults and bounds, and concrete examples.
+// commandHelp holds dedicated per-command help text: usage line, purpose,
+// flag defaults and bounds, and concrete examples.
 var commandHelp = map[string]string{
 	"doctor":   "usage: router-axi doctor [--host ADDRESS] [--json] [--help]\nOne bounded read-only diagnosis: reachability, TR-064 availability, authentication, model and firmware, and candidate capabilities for every command.\nUnsupported optional capabilities are a successful diagnosis and include remediation; no command's actions are invoked beyond DeviceInfo:GetInfo.\nexamples: router-axi doctor; router-axi doctor --host 192.0.2.1 --json\n",
 	"status":   "usage: router-axi status [--host ADDRESS] [--json] [--help]\nRead-only router identity and firmware; the default command when no command is given.\nexamples: router-axi status; router-axi status --json\n",
