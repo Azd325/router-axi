@@ -44,6 +44,8 @@ export ROUTER_AXI_USERNAME='router-user'
 export ROUTER_AXI_PASSWORD='router-password'
 
 router-axi                 # status is the default view
+router-axi version
+router-axi --version       # also supports -v and -V
 router-axi doctor
 router-axi doctor --json
 router-axi status
@@ -647,6 +649,12 @@ The router defaults to `http://fritz.box:49000`. Override it with `--host ADDRES
 output is compact AXI text; `--json` emits JSON on stdout. Errors are structured
 on stderr in the selected format. `calls` returns at most 100 entries by default,
 reports the omitted count, and accepts `--all` for the complete list.
+
+`version` prints the CLI version without contacting the router. The bare `--version`, `-v`,
+and `-V` aliases print only the version and must be used without other arguments. Compact
+`status` output begins with the executable path and CLI description so callers can identify
+which tool produced the report. When an option is unknown or invalid for a command, the
+usage error includes the valid flags for that command or action form.
 
 #### Exit codes
 

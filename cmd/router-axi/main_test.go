@@ -7,19 +7,23 @@ import (
 )
 
 func TestRunVersion(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	exitCode := run([]string{"version"}, &stdout, &stderr)
-
-	if exitCode != 0 {
-		t.Fatalf("exit code = %d, want 0", exitCode)
-	}
-	if stdout.String() != "version: dev\n" {
-		t.Fatalf("stdout = %q, want %q", stdout.String(), "version: dev\n")
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
+	for _, args := range [][]string{{"version"}, {"--version"}, {"-v"}, {"-V"}} {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		exitCode := run(args, &stdout, &stderr)
+		if exitCode != 0 {
+			t.Fatalf("args=%v exit code = %d, want 0", args, exitCode)
+		}
+		want := "version: dev\n"
+		if args[0] != "version" {
+			want = "dev\n"
+		}
+		if stdout.String() != want {
+			t.Fatalf("args=%v stdout = %q, want %q", args, stdout.String(), want)
+		}
+		if stderr.Len() != 0 {
+			t.Fatalf("args=%v stderr = %q, want empty", args, stderr.String())
+		}
 	}
 }
 

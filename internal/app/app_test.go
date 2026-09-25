@@ -250,8 +250,147 @@ func TestCompactCommands(t *testing.T) {
 
 func TestNoCommandRunsStatus(t *testing.T) {
 	code, stdout, stderr := runTest(t)
-	if code != ExitOK || !strings.HasPrefix(stdout, "router:\n") || stderr != "" {
+	if code != ExitOK || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.HasPrefix(stdout, "bin: ") || !strings.Contains(stdout, "\ndescription: ") {
+		t.Fatalf("status compact output missing self-identification: %q", stdout)
+	}
+	if !strings.Contains(stdout, "\nrouter:\n") {
+		t.Fatalf("status compact output missing router block: %q", stdout)
+	}
+}
+
+func TestStatusCompactIdentifiesTheCLI(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
+	application.executable = func() (string, error) { return "/home/tester/tools/router-axi", nil }
+	application.homeDir = func() (string, error) { return "/home/tester", nil }
+	for _, args := range [][]string{{}, {"status"}} {
+		var stdout, stderr bytes.Buffer
+		if code := application.Run(t.Context(), args, &stdout, &stderr); code != ExitOK || stderr.Len() != 0 {
+			t.Fatalf("args=%v code=%d stderr=%q", args, code, stderr.String())
+		}
+		want := "bin: ~/tools/router-axi\ndescription: " + cliDescription + "\nrouter:\n"
+		if !strings.HasPrefix(stdout.String(), want) {
+			t.Fatalf("args=%v stdout=%q want-prefix=%q", args, stdout.String(), want)
+		}
+	}
+}
+
+func TestStatusJSONKeepsExactShapeWithoutSelfIdentification(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"status", "--json"}, &stdout, &stderr)
+	if code != ExitOK || stderr.Len() != 0 || strings.Contains(stdout.String(), "\"bin\"") || strings.HasPrefix(stdout.String(), "{") == false {
+		t.Fatalf("code=%d stdout=%q", code, stdout.String())
+	}
+	var value map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &value); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := value["manufacturer"]; !ok {
+		t.Fatalf("unexpected status JSON shape: %s", stdout.String())
+	}
+}
+
+func TestVersionFlagsAnswerBeforeRouterWork(t *testing.T) {
+	factoryCalled := false
+	application := New(func(Config) (Reader, error) { factoryCalled = true; return fakeReader{}, nil }, func(string) string { return "" })
+	application.Version = "1.2.3"
+	for _, args := range [][]string{{"--version"}, {"-v"}, {"-V"}, {"version"}} {
+		var stdout, stderr bytes.Buffer
+		if code := application.Run(t.Context(), args, &stdout, &stderr); code != ExitOK || stderr.Len() != 0 {
+			t.Fatalf("args=%v code=%d stderr=%q", args, code, stderr.String())
+		}
+		want := "1.2.3\n"
+		if args[0] == "version" {
+			want = "version: 1.2.3\n"
+		}
+		if stdout.String() != want {
+			t.Fatalf("args=%v stdout=%q want=%q", args, stdout.String(), want)
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	if code := application.Run(t.Context(), []string{"version", "--json"}, &stdout, &stderr); code != ExitOK || stderr.Len() != 0 || stdout.String() != "{\"version\":\"1.2.3\"}\n" {
+		t.Fatalf("version --json code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if factoryCalled {
+		t.Fatal("version fast path contacted the router")
+	}
+}
+
+func TestVersionAliasesRejectTrailingArguments(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"--version", "--bogus"}, want: "unknown option: --bogus"},
+		{args: []string{"-v", "--host", "router.test"}, want: "--version, -v, and -V must be used alone"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := application.Run(t.Context(), test.args, &stdout, &stderr); code != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), test.want) {
+			t.Fatalf("args=%v code=%d stdout=%q stderr=%q want=%q", test.args, code, stdout.String(), stderr.String(), test.want)
+		}
+	}
+}
+
+func TestUnknownFlagErrorIsSelfCorrecting(t *testing.T) {
+	for _, test := range []struct{ args, hint []string }{
+		{[]string{"wan", "--stat"}, []string{"valid flags for wan: --host, --json, --help"}},
+		{[]string{"watch", "--stats"}, []string{"valid flags for watch: --host, --json, --interval, --count, --help"}},
+		{[]string{"wifi", "enable", "--conform"}, []string{"valid flags for wifi: --host, --json, --instance, --confirm, --help"}},
+		{[]string{"backup", "--out"}, []string{"valid flags for backup: --host, --json, --output, --force, --help"}},
+		{[]string{"version", "--bogus"}, []string{"valid flags for version: --json, --help"}},
+	} {
+		code, _, stderr := runTest(t, test.args...)
+		unknown := "unknown option: " + test.args[len(test.args)-1]
+		if code != ExitUsage || !strings.Contains(stderr, unknown) || !strings.Contains(stderr, "  hint: "+test.hint[0]) {
+			t.Fatalf("args=%v code=%d stderr=%q", test.args, code, stderr)
+		}
+	}
+}
+
+func TestContextualFlagErrorsRespectCommandAction(t *testing.T) {
+	for _, test := range []struct {
+		args       []string
+		want       string
+		unwanted   string
+		requireMsg bool
+	}{
+		{args: []string{"version", "--host", "router.test"}, want: "--host is not valid for version", requireMsg: true},
+		{args: []string{"wifi", "--bogus"}, want: "valid flags for wifi: --host, --json, --help", unwanted: "--instance, --confirm"},
+		{args: []string{"wifi", "enable", "--bogus"}, want: "valid flags for wifi: --host, --json, --instance, --confirm, --help", requireMsg: true},
+	} {
+		code, _, stderr := runTest(t, test.args...)
+		if code != ExitUsage || !strings.Contains(stderr, test.want) {
+			t.Fatalf("args=%v code=%d stderr=%q want=%q", test.args, code, stderr, test.want)
+		}
+		if test.unwanted != "" && strings.Contains(stderr, test.unwanted) {
+			t.Fatalf("args=%v stderr=%q unexpectedly contains %q", test.args, stderr, test.unwanted)
+		}
+		if test.requireMsg && !strings.Contains(stderr, "message: ") {
+			t.Fatalf("args=%v stderr=%q missing structured message", test.args, stderr)
+		}
+	}
+}
+
+func TestRunAcceptsRepresentativeFlagsAndHelp(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"status", "--host", "router.test", "--json", "--help"}, want: "usage: router-axi status"},
+		{args: []string{"watch", "--interval", "1s", "--count", "1", "--help"}, want: "usage: router-axi watch"},
+		{args: []string{"calls", "--all", "--help"}, want: "usage: router-axi calls"},
+		{args: []string{"wifi", "enable", "--instance", "1", "--confirm", "--help"}, want: "usage: router-axi wifi enable"},
+		{args: []string{"backup", "--output", "router.export", "--force", "--help"}, want: "usage: router-axi backup"},
+		{args: []string{"version", "--json", "--help"}, want: "usage: router-axi version"},
+	} {
+		code, stdout, stderr := runTest(t, test.args...)
+		if code != ExitOK || stderr != "" || !strings.Contains(stdout, test.want) {
+			t.Errorf("args=%v code=%d stdout=%q stderr=%q want=%q", test.args, code, stdout, stderr, test.want)
+		}
 	}
 }
 

@@ -53,16 +53,18 @@ type Reader interface {
 }
 type Factory func(Config) (Reader, error)
 type App struct {
-	factory Factory
-	getenv  func(string) string
-	Version string
+	factory    Factory
+	getenv     func(string) string
+	Version    string
+	executable func() (string, error)
+	homeDir    func() (string, error)
 	// watchSignals controls whether watch registers real OS signal
 	// handling. Tests inside a synthetic-time bubble disable it.
 	watchSignals bool
 }
 
 func New(factory Factory, getenv func(string) string) *App {
-	return &App{factory: factory, getenv: getenv, Version: "dev", watchSignals: true}
+	return &App{factory: factory, getenv: getenv, Version: "dev", watchSignals: true, executable: os.Executable, homeDir: os.UserHomeDir}
 }
 
 type options struct {
@@ -73,6 +75,8 @@ type options struct {
 	interval                        time.Duration
 	count                           int
 	intervalSet, countSet           bool
+	flags                           map[string]bool
+	versionFlag                     bool
 }
 
 type callResult struct {
@@ -177,17 +181,13 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 				opts.json = true
 			}
 		}
-		hint := "router-axi help"
-		if opts.command == "reboot" {
-			hint = "router-axi reboot [--confirm] [--host ADDRESS] [--json] [--help]"
+		return writeError(stderr, opts.json, ExitUsage, "invalid_arguments", err.Error(), usageHint(opts))
+	}
+	if opts.versionFlag {
+		if _, err := fmt.Fprintln(stdout, a.Version); err != nil {
+			return ExitInternal
 		}
-		if opts.command == "watch" {
-			hint = "router-axi watch --interval 5s --count 6 [--host ADDRESS] [--json]"
-		}
-		if opts.command == "backup" {
-			hint = "router-axi backup --output PATH [--force] [--host ADDRESS] [--json] [--help]"
-		}
-		return writeError(stderr, opts.json, ExitUsage, "invalid_arguments", err.Error(), hint)
+		return ExitOK
 	}
 	if opts.help || opts.command == "help" {
 		if _, err := io.WriteString(stdout, help(opts.command, opts.action)); err != nil {
@@ -340,7 +340,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 				if writeJSON(stdout, value) != ExitOK {
 					return ExitInternal
 				}
-			} else if writeErr := writeCompact(stdout, opts.command, value); writeErr != nil {
+			} else if writeErr := writeCompact(a, stdout, opts.command, value); writeErr != nil {
 				return ExitInternal
 			}
 		}
@@ -355,17 +355,18 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		}
 		return ExitOK
 	}
-	if err := writeCompact(stdout, opts.command, value); err != nil {
+	if err := writeCompact(a, stdout, opts.command, value); err != nil {
 		return ExitInternal
 	}
 	return ExitOK
 }
 
 func parse(args []string) (options, error) {
-	opts := options{interval: defaultWatchInterval, count: defaultWatchCount}
+	opts := options{interval: defaultWatchInterval, count: defaultWatchCount, flags: map[string]bool{}}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--interval":
+			opts.flags["--interval"] = true
 			i++
 			if opts.intervalSet || i >= len(args) {
 				return opts, errors.New("--interval requires one duration from 1s to 1m")
@@ -376,6 +377,7 @@ func parse(args []string) (options, error) {
 			}
 			opts.interval, opts.intervalSet = interval, true
 		case "--count":
+			opts.flags["--count"] = true
 			i++
 			if opts.countSet || i >= len(args) {
 				return opts, errors.New("--count requires one integer from 1 to 3600")
@@ -386,14 +388,19 @@ func parse(args []string) (options, error) {
 			}
 			opts.count, opts.countSet = count, true
 		case "--json":
+			opts.flags["--json"] = true
 			opts.json = true
 		case "--help", "-h":
+			opts.flags["--help"] = true
 			opts.help = true
 		case "--all":
+			opts.flags["--all"] = true
 			opts.all = true
 		case "--confirm":
+			opts.flags["--confirm"] = true
 			opts.confirm = true
 		case "--instance":
+			opts.flags["--instance"] = true
 			i++
 			if i >= len(args) || strings.HasPrefix(args[i], "-") {
 				return opts, errors.New("--instance requires a value")
@@ -404,19 +411,24 @@ func parse(args []string) (options, error) {
 			}
 			opts.instance, opts.instanceSet = instance, true
 		case "--host":
+			opts.flags["--host"] = true
 			i++
 			if i >= len(args) || strings.HasPrefix(args[i], "-") {
 				return opts, errors.New("--host requires a value")
 			}
 			opts.host = args[i]
 		case "--output":
+			opts.flags["--output"] = true
 			i++
 			if i >= len(args) || args[i] == "" || strings.HasPrefix(args[i], "-") {
 				return opts, errors.New("--output requires a file path")
 			}
 			opts.output = args[i]
 		case "--force":
+			opts.flags["--force"] = true
 			opts.force = true
+		case "--version", "-v", "-V":
+			opts.versionFlag = true
 		default:
 			if strings.HasPrefix(args[i], "-") {
 				option, _, _ := strings.Cut(args[i], "=")
@@ -436,37 +448,24 @@ func parse(args []string) (options, error) {
 			return opts, errors.New("exactly one command is required")
 		}
 	}
-	if (opts.intervalSet || opts.countSet) && opts.command != "watch" {
-		return opts, errors.New("--interval and --count are valid only with watch")
+	if opts.versionFlag && len(args) != 1 {
+		return opts, errors.New("--version, -v, and -V must be used alone")
 	}
-	wifiMutation := opts.command == "wifi" && opts.action != ""
-	if opts.instanceSet && !wifiMutation {
-		return opts, errors.New("--instance is valid only with wifi enable or wifi disable")
-	}
-	if opts.confirm && !wifiMutation && opts.command != "reboot" {
-		return opts, errors.New("--confirm is valid only with reboot, wifi enable, or wifi disable")
-	}
-	if opts.output != "" && opts.command != "backup" {
-		return opts, errors.New("--output is valid only with backup")
-	}
-	if opts.force && opts.command != "backup" {
-		return opts, errors.New("--force is valid only with backup")
+	if err := validateFlagContext(opts); err != nil {
+		return opts, err
 	}
 	if opts.command == "backup" && opts.output == "" && !opts.help {
 		return opts, errors.New("backup requires --output PATH")
-	}
-	if opts.all && opts.command != "calls" && opts.command != "devices" && opts.command != "leases" && opts.command != "forwards" {
-		return opts, errors.New("--all is valid only for calls, devices, leases, or forwards")
 	}
 	return opts, nil
 }
 
 func validCommand(command string) bool {
-	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "backup"
+	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "backup" || command == "version"
 }
 
-// commandHelp holds the per-command help text for read-only commands:
-// usage line, purpose, flag defaults and bounds, and concrete examples.
+// commandHelp holds dedicated per-command help text: usage line, purpose,
+// flag defaults and bounds, and concrete examples.
 var commandHelp = map[string]string{
 	"doctor":   "usage: router-axi doctor [--host ADDRESS] [--json] [--help]\nOne bounded read-only diagnosis: reachability, TR-064 availability, authentication, model and firmware, and candidate capabilities for every command.\nUnsupported optional capabilities are a successful diagnosis and include remediation; no command's actions are invoked beyond DeviceInfo:GetInfo.\nexamples: router-axi doctor; router-axi doctor --host 192.0.2.1 --json\n",
 	"status":   "usage: router-axi status [--host ADDRESS] [--json] [--help]\nRead-only router identity and firmware; the default command when no command is given.\nexamples: router-axi status; router-axi status --json\n",
@@ -479,6 +478,96 @@ var commandHelp = map[string]string{
 	"wifi":     "usage: router-axi wifi [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi disable --instance 1 --confirm\n",
 	"guest":    "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID and aggregate radio state only; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n",
 	"forwards": "usage: router-axi forwards [--all] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi forwards; router-axi forwards --all --json\n",
+	"version":  "usage: router-axi version [--json] [--help]\nPrint the router-axi version without contacting the router.\nexamples: router-axi version; router-axi version --json\n",
+}
+
+// commandFlags is the single source of truth for the flags each command
+// accepts in parse(). The unknown-option error hint is derived from it, so
+// the suggested flags cannot drift from the flags parse actually accepts.
+type flagSpec struct {
+	valid   func(options) bool
+	invalid string
+}
+
+func alwaysValid(options) bool { return true }
+
+func wifiMutation(opts options) bool { return opts.command == "wifi" && opts.action != "" }
+
+func rebootOrWiFiMutation(opts options) bool { return opts.command == "reboot" || wifiMutation(opts) }
+
+var flagSpecs = map[string]flagSpec{
+	"--host":     {valid: alwaysValid},
+	"--json":     {valid: alwaysValid},
+	"--help":     {valid: alwaysValid},
+	"--interval": {valid: func(opts options) bool { return opts.command == "watch" }, invalid: "--interval and --count are valid only with watch"},
+	"--count":    {valid: func(opts options) bool { return opts.command == "watch" }, invalid: "--interval and --count are valid only with watch"},
+	"--all": {valid: func(opts options) bool {
+		return opts.command == "calls" || opts.command == "devices" || opts.command == "leases" || opts.command == "forwards"
+	}, invalid: "--all is valid only for calls, devices, leases, or forwards"},
+	"--instance": {valid: wifiMutation, invalid: "--instance is valid only with wifi enable or wifi disable"},
+	"--confirm":  {valid: rebootOrWiFiMutation, invalid: "--confirm is valid only with reboot, wifi enable, or wifi disable"},
+	"--output":   {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--output is valid only with backup"},
+	"--force":    {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--force is valid only with backup"},
+}
+
+var commandFlags = map[string][]string{
+	"doctor":   {"--host", "--json", "--help"},
+	"status":   {"--host", "--json", "--help"},
+	"overview": {"--host", "--json", "--help"},
+	"wan":      {"--host", "--json", "--help"},
+	"traffic":  {"--host", "--json", "--help"},
+	"guest":    {"--host", "--json", "--help"},
+	"watch":    {"--host", "--json", "--interval", "--count", "--help"},
+	"calls":    {"--host", "--json", "--all", "--help"},
+	"devices":  {"--host", "--json", "--all", "--help"},
+	"leases":   {"--host", "--json", "--all", "--help"},
+	"forwards": {"--host", "--json", "--all", "--help"},
+	"wifi":     {"--host", "--json", "--instance", "--confirm", "--help"},
+	"reboot":   {"--host", "--json", "--confirm", "--help"},
+	"backup":   {"--host", "--json", "--output", "--force", "--help"},
+	"version":  {"--json", "--help"},
+}
+
+func validateFlagContext(opts options) error {
+	command := opts.command
+	if command == "" {
+		command = "status"
+	}
+	flags, ok := commandFlags[command]
+	if !ok {
+		return nil
+	}
+	allowed := make(map[string]bool, len(flags))
+	for _, flag := range flags {
+		allowed[flag] = true
+	}
+	for _, flag := range []string{"--interval", "--count", "--all", "--instance", "--confirm", "--output", "--force", "--host", "--json", "--help"} {
+		if !opts.flags[flag] {
+			continue
+		}
+		spec := flagSpecs[flag]
+		if !allowed[flag] || !spec.valid(opts) {
+			message := spec.invalid
+			if message == "" {
+				message = flag + " is not valid for " + opts.command
+			}
+			return errors.New(message)
+		}
+	}
+	return nil
+}
+
+func usageHint(opts options) string {
+	if flags, ok := commandFlags[opts.command]; ok {
+		valid := make([]string, 0, len(flags))
+		for _, flag := range flags {
+			if flagSpecs[flag].valid(opts) {
+				valid = append(valid, flag)
+			}
+		}
+		return "valid flags for " + opts.command + ": " + strings.Join(valid, ", ")
+	}
+	return "router-axi help"
 }
 
 func help(command, action string) string {
@@ -498,6 +587,16 @@ func help(command, action string) string {
 	if text, ok := commandHelp[command]; ok {
 		return text
 	}
+	if validCommand(command) {
+		extra := ""
+		if command == "calls" || command == "devices" || command == "leases" || command == "forwards" {
+			extra = " [--all]"
+		}
+		if command == "wifi" {
+			extra = " [enable|disable [--instance N] --confirm]"
+		}
+		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + " [--help]\n"
+	}
 	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
@@ -510,7 +609,31 @@ func writeJSON(w io.Writer, value any) int {
 	return ExitOK
 }
 
-func writeCompact(w io.Writer, command string, value any) error {
+const cliDescription = "router-axi inspects and operates an AVM FRITZ!Box router over TR-064 with read-only reports and confirmed Wi-Fi, reboot, and backup actions"
+
+func (a *App) selfIdentification() string {
+	bin := "unknown"
+	if path, err := a.executable(); err == nil {
+		home, homeErr := a.homeDir()
+		bin = collapseHome(path, home, homeErr)
+	}
+	return "bin: " + bin + "\ndescription: " + cliDescription + "\n"
+}
+
+func collapseHome(path string, home string, err error) string {
+	if err != nil || home == "" {
+		return path
+	}
+	if path == home {
+		return "~"
+	}
+	if strings.HasPrefix(path, home+string(os.PathSeparator)) {
+		return "~" + path[len(home):]
+	}
+	return path
+}
+
+func writeCompact(a *App, w io.Writer, command string, value any) error {
 	switch command {
 	case "doctor":
 		v := value.(tr064.Doctor)
@@ -530,7 +653,7 @@ func writeCompact(w io.Writer, command string, value any) error {
 		return nil
 	case "status":
 		v := value.(tr064.Status)
-		_, err := fmt.Fprintf(w, "router:\n  manufacturer: %s\n  model: %s\n  software: %s\n  hardware: %s\n  serial: %s\n  uptime: %s\nnext: router-axi wan\n", scalar(v.Manufacturer), scalar(v.Model), scalar(v.Software), scalar(v.Hardware), scalar(v.Serial), duration(v.UptimeSeconds))
+		_, err := fmt.Fprintf(w, a.selfIdentification()+"router:\n  manufacturer: %s\n  model: %s\n  software: %s\n  hardware: %s\n  serial: %s\n  uptime: %s\nnext: router-axi wan\n", scalar(v.Manufacturer), scalar(v.Model), scalar(v.Software), scalar(v.Hardware), scalar(v.Serial), duration(v.UptimeSeconds))
 		return err
 	case "overview":
 		v := value.(tr064.Overview)
