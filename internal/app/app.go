@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Azd325/router-axi/internal/tr064"
 )
@@ -34,6 +35,7 @@ type Reader interface {
 	Overview(context.Context) (tr064.Overview, error)
 	WAN(context.Context) (tr064.WAN, error)
 	Traffic(context.Context) (tr064.Traffic, error)
+	WatchSnapshot(context.Context) (tr064.WatchSnapshot, error)
 	Calls(context.Context) ([]tr064.Call, error)
 	Devices(context.Context) ([]tr064.Device, error)
 	Leases(context.Context) ([]tr064.Lease, error)
@@ -48,10 +50,13 @@ type App struct {
 	factory Factory
 	getenv  func(string) string
 	Version string
+	// watchSignals controls whether watch registers real OS signal
+	// handling. Tests inside a synthetic-time bubble disable it.
+	watchSignals bool
 }
 
 func New(factory Factory, getenv func(string) string) *App {
-	return &App{factory: factory, getenv: getenv, Version: "dev"}
+	return &App{factory: factory, getenv: getenv, Version: "dev", watchSignals: true}
 }
 
 type options struct {
@@ -59,6 +64,9 @@ type options struct {
 	json, help, all, confirm, force bool
 	instance                        uint64
 	instanceSet                     bool
+	interval                        time.Duration
+	count                           int
+	intervalSet, countSet           bool
 }
 
 type callResult struct {
@@ -162,6 +170,9 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		if opts.command == "reboot" {
 			hint = "router-axi reboot [--confirm] [--host ADDRESS] [--json] [--help]"
 		}
+		if opts.command == "watch" {
+			hint = "router-axi watch --interval 5s --count 6 [--host ADDRESS] [--json]"
+		}
 		if opts.command == "backup" {
 			hint = "router-axi backup --output PATH [--force] [--host ADDRESS] [--json] [--help]"
 		}
@@ -199,10 +210,13 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	reader, err := a.factory(Config{Host: host, Username: a.getenv("ROUTER_AXI_USERNAME"), Password: a.getenv("ROUTER_AXI_PASSWORD")})
 	if err != nil {
 		message := err.Error()
-		if opts.command == "reboot" {
+		if opts.command == "reboot" || opts.command == "watch" {
 			message = "invalid router endpoint; use an HTTP or HTTPS host without userinfo, query, fragment, or a non-root path"
 		}
 		return writeError(stderr, opts.json, ExitUsage, "invalid_configuration", message, "router-axi help")
+	}
+	if opts.command == "watch" {
+		return runWatch(ctx, reader, opts, stdout, stderr, a.watchSignals)
 	}
 	if opts.command == "reboot" {
 		result, err := reader.Reboot(ctx, opts.confirm)
@@ -330,9 +344,29 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 }
 
 func parse(args []string) (options, error) {
-	var opts options
+	opts := options{interval: defaultWatchInterval, count: defaultWatchCount}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--interval":
+			i++
+			if opts.intervalSet || i >= len(args) {
+				return opts, errors.New("--interval requires one duration from 1s to 1m")
+			}
+			interval, err := time.ParseDuration(args[i])
+			if err != nil || interval < time.Second || interval > time.Minute {
+				return opts, errors.New("--interval must be a duration from 1s to 1m")
+			}
+			opts.interval, opts.intervalSet = interval, true
+		case "--count":
+			i++
+			if opts.countSet || i >= len(args) {
+				return opts, errors.New("--count requires one integer from 1 to 3600")
+			}
+			count, err := strconv.Atoi(args[i])
+			if err != nil || count < 1 || count > maxWatchCount {
+				return opts, errors.New("--count must be an integer from 1 to 3600; unbounded watch is not supported")
+			}
+			opts.count, opts.countSet = count, true
 		case "--json":
 			opts.json = true
 		case "--help", "-h":
@@ -384,6 +418,9 @@ func parse(args []string) (options, error) {
 			return opts, errors.New("exactly one command is required")
 		}
 	}
+	if (opts.intervalSet || opts.countSet) && opts.command != "watch" {
+		return opts, errors.New("--interval and --count are valid only with watch")
+	}
 	wifiMutation := opts.command == "wifi" && opts.action != ""
 	if opts.instanceSet && !wifiMutation {
 		return opts, errors.New("--instance is valid only with wifi enable or wifi disable")
@@ -407,10 +444,13 @@ func parse(args []string) (options, error) {
 }
 
 func validCommand(command string) bool {
-	return command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "forwards" || command == "reboot" || command == "backup"
+	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "forwards" || command == "reboot" || command == "backup"
 }
 
 func help(command, action string) string {
+	if command == "watch" {
+		return "usage: router-axi watch [--interval DURATION] [--count N] [--host ADDRESS] [--json] [--help]\nRead-only WAN state and traffic samples; defaults: --interval 5s --count 6.\nBounds: interval 1s..1m, count 1..3600; no unbounded mode. First sample is immediate; subsequent reads wait after completion.\n--json streams one object per line (JSONL). Errors stop polling; Ctrl-C/SIGTERM cancel with exit 130.\nexamples: router-axi watch; router-axi watch --interval 2s --count 10 --json\n"
+	}
 	if command == "reboot" {
 		return "usage: router-axi reboot [--confirm] [--host ADDRESS] [--json] [--help]\nWithout --confirm: preview only. With --confirm: restart the router and temporarily interrupt all local services.\nNo prompts, retries, or recovery polling; reboot is not idempotent.\nexamples: router-axi reboot; router-axi reboot --confirm\n"
 	}
@@ -430,7 +470,7 @@ func help(command, action string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + "\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {

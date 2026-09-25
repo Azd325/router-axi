@@ -42,6 +42,9 @@ checklist. Run every command from a clean checkout:
       and `ROUTER_AXI_BACKUP_PASSWORD`, is skipped by default, and never writes
       a backup file; record backup hardware validation as not performed unless
       separately authorized and actually observed.
+      Watch live coverage requires the ordinary live gate, is bounded to two
+      snapshots, and never writes files; record watch hardware validation as
+      not performed unless separately authorized and actually observed.
 - [ ] Create and push the SemVer tag on the checked `main` commit.
 
   ```sh

@@ -50,6 +50,8 @@ router-axi status
 router-axi overview
 router-axi wan
 router-axi traffic
+router-axi watch
+router-axi watch --interval 2s --count 10 --json
 router-axi calls
 router-axi devices
 router-axi devices --json
@@ -122,6 +124,74 @@ faults, malformed or implausibly large host counts, and malformed active states
 remain protocol errors with exit `6`. Names, addresses, and interface types can be empty when the router
 does not know them. `interface_type` is the service's documented interface
 classification, not a physical switch port or inferred connection detail.
+
+### Bounded WAN and traffic watch
+
+`watch` requires the current checkout; it is not in v0.2.0. It is a read-only,
+non-interactive stream, not a daemon. Defaults are **6 samples with a 5s
+interval**. `--count` accepts 1–3600 and `--interval` accepts Go durations from
+1s through 1m (for example `1500ms`). Zero, negative, malformed, out-of-range,
+and duplicate values are usage errors before any router request. These flags
+are watch-only. There is no unbounded mode, no file output, and no background
+poller.
+
+The first read starts immediately. Subsequent reads wait the requested interval
+after the preceding sample is written; reads never overlap or catch up in
+bursts. Each complete sample has a 30s deadline, including discovery and
+Digest authentication. Slow requests therefore lengthen the observation spacing;
+the configured interval is not used as the rate denominator. No wait follows
+the final sample. Ctrl-C or SIGTERM cancels the wait or in-flight read, emits a
+structured `interrupted` error, and exits `130`; no further polling occurs.
+
+Each sample rediscovers services and resolves the active WAN through documented
+`Layer3Forwarding:GetDefaultConnectionService`, using the same identifier matching
+as `forwards`. Ambiguous or absent services fail closed. It then reads only
+`WANIPConnection`/`WANPPPConnection:GetStatusInfo` and the unique
+`WANCommonInterfaceConfig:GetTotalBytesReceived`/`GetTotalBytesSent`. It does not
+read router identity, external addresses, hosts, calls, or Wi-Fi data. No
+mutation, browser endpoint, or model-based capability guess is used. Control
+URLs stay on the router origin and redirects are refused.
+
+`--json` is **JSONL**, one complete object per successful sample, in this field
+order (there is no enclosing array or final summary):
+
+```json
+{"sample":1,"observed_at":"2026-01-02T03:04:05Z","wan_status":"connected","wan_uptime_seconds":100,"total_download_bytes":100,"total_upload_bytes":40,"download_delta_bytes":null,"upload_delta_bytes":null,"download_bytes_per_second":null,"upload_bytes_per_second":null}
+```
+
+Compact output uses one two-line TOON table per sample with a unique key
+`sample_1[1]{observed_at,wan_status,...}:`, then `sample_2`, and so on. Columns
+follow the JSON field order except that the sequence is in the key. Both formats
+use exact integer byte totals and never fabricate a zero: unavailable numeric
+values are explicit `null` in JSON and explicit `unknown` in compact output;
+WAN state and unavailable observation time use `unknown`. Unknown router state strings are not echoed. `observed_at` is UTC
+RFC 3339 with fractional seconds when needed, taken after the final counter
+read. Reads are sequential observations, not an atomic router snapshot.
+
+Deltas are nonnegative **observed counter increases**, and rates are their
+floating-point bytes/second estimates using each direction's actual time between
+completed reads (Go's monotonic clock when available). The first sample has no
+derived values. Missing counters/times, nonpositive elapsed time, counter
+decreases, source changes, non-connected/unknown WAN state, missing uptime, or
+a decrease in WAN uptime suppress affected derived values. A counter decrease
+is not guessed to be a wrap: the next sample starts from the new baseline.
+These are not instantaneous link speeds or billing measurements. Resets or
+multiple wraps that occur entirely between observations and leave a larger
+counter cannot be detected; the CLI does not claim to reconstruct that traffic.
+
+A failed first sample emits no stdout. Any later failure retains earlier complete
+samples, emits a sanitized structured error on **stderr** in the selected format,
+and terminates immediately; consumers must check the exit status. There are no
+skipped failures, partial samples, or polling retries (the normal Digest
+challenge exchange is still allowed). Missing fields are null (`unknown` in compact output); malformed numeric
+fields are protocol errors. Standard exits apply: `2` configuration/usage, `3`
+auth, `4` network (including `tls_untrusted` and `watch_timeout`), `5` unsupported,
+`6` router/protocol; output failure is `output_failed`, exit `1`. Error messages
+discard router addresses, raw fault text, credentials, response bodies, and device
+data. Existing `wan` and `traffic` output contracts are unchanged.
+
+Tests use synthetic fixtures and controlled clocks. Watch is **not
+hardware-validated**; live coverage remains explicitly opt-in and bounded.
 
 ### Observed lease metadata
 
@@ -570,6 +640,14 @@ read -rs 'ROUTER_AXI_USERNAME?Router username: '; export ROUTER_AXI_USERNAME; pr
 read -rs 'ROUTER_AXI_PASSWORD?Router password: '; export ROUTER_AXI_PASSWORD; printf '\n'
 ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^(TestLiveReadOnlyCommands|TestLiveWiFi|TestLiveForwards|TestLiveLeases)$' -count=1
 unset ROUTER_AXI_PASSWORD ROUTER_AXI_USERNAME ROUTER_AXI_HOST
+```
+
+Watch snapshot coverage is also available as `TestLiveWatchSnapshot` under the
+same live gate. It performs at most two read-only snapshots with a 30s overall
+deadline, discards their values, and never writes files. Run without `-v`:
+
+```sh
+ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^TestLiveWatchSnapshot$' -count=1
 ```
 
 Do not add `-v`: the test deliberately reports only command-level failures and

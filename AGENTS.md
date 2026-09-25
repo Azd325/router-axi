@@ -9,7 +9,7 @@
 - Read credentials only from `ROUTER_AXI_USERNAME` and `ROUTER_AXI_PASSWORD`.
 - Never log, commit, or include in fixtures router addresses, serial numbers, call data, credentials, or captured live responses. The export passphrase is read only from `ROUTER_AXI_BACKUP_PASSWORD`; never reuse the login password for it and never log or persist either value.
 - Keep live-router tests opt-in. They require `ROUTER_AXI_LIVE_TEST=1`, explicit credentials and host, and must refuse CI. Live mutation coverage additionally requires `ROUTER_AXI_LIVE_MUTATION_TEST=1`, defaults to skipped, and must restore the original radio state. Those flags must never enable reboot. No live reboot test is provided; any future reboot test requires a distinct dangerous opt-in and must remain skipped by default. Live backup coverage additionally requires `ROUTER_AXI_LIVE_BACKUP_TEST=1` plus `ROUTER_AXI_BACKUP_PASSWORD`, defaults to skipped, and never writes a backup file.
-- Preserve structured errors, exit codes, compact default output, and `--json` field ordering.
+- Preserve structured errors, exit codes, compact default output, and `--json` field ordering. `watch` is finite-only read-only polling: bound samples and intervals, cancel waits and requests on interruption, never poll after failure/exit, and stream JSONL without private addresses or device data. Never infer counter wraps or hide failed samples.
 
 ## Changes
 

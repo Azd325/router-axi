@@ -1437,6 +1437,26 @@ func compareForwards(left, right Forward) int {
 }
 
 func (c *Client) activePortMappingService(ctx context.Context) (service, error) {
+	active, err := c.activeWANService(ctx)
+	if err != nil {
+		var protocolErr *Error
+		if errors.As(err, &protocolErr) && protocolErr.Operation == "forwards" {
+			return service{}, err
+		}
+		return service{}, activeWANError(err)
+	}
+	control, err := c.base.Parse(active.ControlURL)
+	if err != nil || active.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.Fragment != "" {
+		return service{}, &Error{Kind: "protocol", Operation: "forwards", Message: "router advertised an invalid WAN control URL"}
+	}
+	if err := c.advertisesPortMappingActions(ctx, active); err != nil {
+		return service{}, err
+	}
+	active.ControlURL = control.Path
+	return active, nil
+}
+
+func (c *Client) activeWANService(ctx context.Context) (service, error) {
 	services := make([]service, 0)
 	for _, svc := range c.allServices {
 		for _, prefix := range wanMappingPrefixes {
@@ -1451,7 +1471,7 @@ func (c *Client) activePortMappingService(ctx context.Context) (service, error) 
 	}
 	defaultValues, err := c.action(ctx, "urn:dslforum-org:service:Layer3Forwarding:", "GetDefaultConnectionService")
 	if err != nil {
-		return service{}, activeWANError(err)
+		return service{}, err
 	}
 	defaultService := strings.TrimSpace(defaultValues.DefaultConnectionService)
 	if defaultService == "" {
@@ -1466,16 +1486,7 @@ func (c *Client) activePortMappingService(ctx context.Context) (service, error) 
 	if len(matches) != 1 {
 		return service{}, &Error{Kind: "unsupported", Operation: "forwards", Message: "router default WAN service does not name exactly one advertised WAN service; " + forwardsRemediation}
 	}
-	active := matches[0]
-	control, err := c.base.Parse(active.ControlURL)
-	if err != nil || active.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.Fragment != "" {
-		return service{}, &Error{Kind: "protocol", Operation: "forwards", Message: "router advertised an invalid WAN control URL"}
-	}
-	if err := c.advertisesPortMappingActions(ctx, active); err != nil {
-		return service{}, err
-	}
-	active.ControlURL = control.Path
-	return active, nil
+	return matches[0], nil
 }
 
 func activeWANError(err error) *Error {
