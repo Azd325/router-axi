@@ -12,6 +12,22 @@ The read-only MVP provides device information, WAN status, traffic statistics, c
 - Explicit confirmation for disruptive operations.
 - Local operation without telemetry or a hosted account.
 
+## Agent Skill (secondary integration)
+
+AXI recommends complementary session-hook and installable-skill discovery paths.
+This release ships **only the opt-in skill**: it adds no session hook and never
+registers itself automatically. Install it for an agent that supports the
+agentskills.io format:
+
+```sh
+router-axi skill install
+```
+
+The default destination is `~/.agents/skills/router-axi/SKILL.md`; use
+`--path DIRECTORY` for another agent skills parent directory. Repeating the
+same install is a silent no-op. Use either a session hook or this skill when a
+hook is available—one discovery path is sufficient.
+
 See [VISION.md](VISION.md) for the acceptance policy. Contributors should read
 [CONTRIBUTING.md](CONTRIBUTING.md); security reports belong in
 [SECURITY.md](SECURITY.md).

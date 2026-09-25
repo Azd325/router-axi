@@ -394,6 +394,18 @@ func TestRunAcceptsRepresentativeFlagsAndHelp(t *testing.T) {
 	}
 }
 
+func TestTopLevelHelpListsPublicCommands(t *testing.T) {
+	code, stdout, stderr := runTest(t, "help")
+	if code != ExitOK || stderr != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "watch", "calls", "devices", "leases", "wifi", "guest", "forwards", "reboot", "backup", "skill", "version"} {
+		if !strings.Contains(stdout, "\n  "+command+" ") {
+			t.Fatalf("top-level help does not list %q: %q", command, stdout)
+		}
+	}
+}
+
 func TestDoctorJSONIsDeterministic(t *testing.T) {
 	code, stdout, stderr := runTest(t, "doctor", "--json")
 	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"leases":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"},"reboot":{"state":"advertised"},"backup":{"state":"advertised"}}}` + "\n"

@@ -1,0 +1,156 @@
+package app
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/Azd325/router-axi/internal/skill"
+)
+
+const (
+	helpBeginMarker = "<!-- router-axi-help:begin -->"
+	helpEndMarker   = "<!-- router-axi-help:end -->"
+)
+
+func TestSkillHelpNotStale(t *testing.T) {
+	raw := string(skill.Bytes())
+	begin := strings.Index(raw, helpBeginMarker)
+	end := strings.Index(raw, "\n"+helpEndMarker)
+	if begin < 0 || end < 0 || end < begin || !strings.HasPrefix(raw[begin+len(helpBeginMarker):], "\n") {
+		t.Fatalf("SKILL.md is missing well-formed %s/%s markers", helpBeginMarker, helpEndMarker)
+	}
+	block := raw[begin+len(helpBeginMarker)+1 : end]
+	var stdout, stderr bytes.Buffer
+	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
+	if code := application.Run(t.Context(), []string{"help"}, &stdout, &stderr); code != ExitOK || stderr.Len() != 0 {
+		t.Fatalf("router-axi help: exit = %d, stderr = %q", code, stderr.String())
+	}
+	if want := stdout.String(); block != want {
+		t.Fatalf("SKILL.md help block is stale; regenerate it from router-axi help.\nwant:\n%q\ngot:\n%q", want, block)
+	}
+}
+
+func TestSkillFrontmatter(t *testing.T) {
+	raw := string(skill.Bytes())
+	if !strings.HasPrefix(raw, "---\n") {
+		t.Fatal("SKILL.md must start with a YAML frontmatter block")
+	}
+	end := strings.Index(raw, "\n---\n")
+	if end < 0 {
+		t.Fatal("SKILL.md frontmatter must end with ---")
+	}
+	frontmatter := raw[4:end]
+	if !strings.Contains(frontmatter, "name: router-axi") {
+		t.Fatal("SKILL.md frontmatter must declare the skill name")
+	}
+	if !strings.Contains(frontmatter, "description:") {
+		t.Fatal("SKILL.md frontmatter must declare a trigger-shaped description")
+	}
+}
+
+func TestSkillInstall(t *testing.T) {
+	dir := t.TempDir()
+	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
+	application.userHomeDir = func() (string, error) { return dir, nil }
+	var stdout, stderr bytes.Buffer
+	if code := application.Run(t.Context(), []string{"skill", "install"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	path := filepath.Join(dir, ".agents", "skills", skill.Name, "SKILL.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("skill not installed: %v", err)
+	}
+	if !bytes.Equal(data, skill.Bytes()) {
+		t.Fatal("installed SKILL.md differs from the bundled skill")
+	}
+	if want := "skill:\n  path: " + strconv.Quote(path) + "\n  installed: true\n"; stdout.String() != want {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+}
+
+func TestSkillInstallPathFlag(t *testing.T) {
+	dir := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
+	application.userHomeDir = func() (string, error) { return "", os.ErrNotExist }
+	code := application.Run(t.Context(), []string{"skill", "install", "--path", dir, "--json"}, &stdout, &stderr)
+	if code != ExitOK {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	path := filepath.Join(dir, skill.Name, "SKILL.md")
+	if _, err := os.ReadFile(path); err != nil {
+		t.Fatalf("skill not installed under --path: %v", err)
+	}
+	if want := `{"skill":{"path":` + strconv.Quote(path) + `,"installed":true}}` + "\n"; stdout.String() != want {
+		t.Fatalf("unexpected JSON stdout: %q", stdout.String())
+	}
+}
+
+func TestSkillInstallIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
+	application.userHomeDir = func() (string, error) { return dir, nil }
+	var stdout, stderr bytes.Buffer
+	for round := range 3 {
+		if code := application.Run(t.Context(), []string{"skill", "install"}, &stdout, &stderr); code != ExitOK {
+			t.Fatalf("round %d: exit = %d, stderr = %s", round, code, stderr.String())
+		}
+		if round > 0 && (stdout.Len() > 0 || stderr.Len() > 0) {
+			t.Fatalf("repeated install was not a silent no-op: stdout = %q, stderr = %q", stdout.String(), stderr.String())
+		}
+		stdout.Reset()
+		stderr.Reset()
+	}
+}
+
+func TestSkillInstallOverwritesChangedContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".agents", "skills", skill.Name, "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
+	application.userHomeDir = func() (string, error) { return dir, nil }
+	var stdout, stderr bytes.Buffer
+	if code := application.Run(t.Context(), []string{"skill", "install"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("exit = %d, stderr = %s", code, stderr.String())
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(data, skill.Bytes()) {
+		t.Fatalf("stale skill content was not replaced: %v", err)
+	}
+}
+
+func TestSkillUsageErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		code string
+	}{
+		{"missing action", []string{"skill"}, "skill requires the action install"},
+		{"unknown action", []string{"skill", "uninstall"}, "skill accepts one action: install"},
+		{"path outside skill", []string{"wifi", "enable", "--path", "/tmp"}, "--path is valid only with skill install"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, _, stderr := runTest(t, testCase.args...)
+			if !strings.Contains(stderr, testCase.code) {
+				t.Fatalf("stderr = %q, want code %q", stderr, testCase.code)
+			}
+		})
+	}
+}
+
+func TestSkillHelp(t *testing.T) {
+	if code, stdout, _ := runTest(t, "skill", "--help"); code != ExitOK || !strings.Contains(stdout, "usage: router-axi skill install") {
+		t.Fatalf("skill help: exit %d, stdout %q", code, stdout)
+	}
+}
