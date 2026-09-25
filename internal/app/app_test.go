@@ -19,7 +19,10 @@ type fakeReader struct{ err error }
 type partialReader struct{ fakeReader }
 type manyCallsReader struct{ fakeReader }
 type manyDevicesReader struct{ fakeReader }
-type boundedDevicesReader struct{ count int; fakeReader }
+type boundedDevicesReader struct {
+	count int
+	fakeReader
+}
 type emptyDevicesReader struct{ fakeReader }
 type unsupportedDevicesReader struct{ fakeReader }
 type manyLeasesReader struct{ fakeReader }
