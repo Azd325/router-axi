@@ -73,6 +73,7 @@ type options struct {
 	interval                        time.Duration
 	count                           int
 	intervalSet, countSet           bool
+	versionFlag                     bool
 }
 
 type callResult struct {
@@ -188,6 +189,9 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			hint = "router-axi backup --output PATH [--force] [--host ADDRESS] [--json] [--help]"
 		}
 		return writeError(stderr, opts.json, ExitUsage, "invalid_arguments", err.Error(), hint)
+	}
+	if opts.versionFlag {
+		opts.command = "version"
 	}
 	if opts.help || opts.command == "help" {
 		if _, err := io.WriteString(stdout, help(opts.command, opts.action)); err != nil {
@@ -417,6 +421,9 @@ func parse(args []string) (options, error) {
 			opts.output = args[i]
 		case "--force":
 			opts.force = true
+		case "--version", "-v", "-V":
+			opts.versionFlag = true
+			return opts, nil
 		default:
 			if strings.HasPrefix(args[i], "-") {
 				option, _, _ := strings.Cut(args[i], "=")
