@@ -10,9 +10,7 @@ func TestRunVersion(t *testing.T) {
 	for _, args := range [][]string{{"version"}, {"--version"}, {"-v"}, {"-V"}} {
 		var stdout bytes.Buffer
 		var stderr bytes.Buffer
-
 		exitCode := run(args, &stdout, &stderr)
-
 		if exitCode != 0 {
 			t.Fatalf("args=%v exit code = %d, want 0", args, exitCode)
 		}

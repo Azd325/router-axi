@@ -56,13 +56,17 @@ type App struct {
 	factory Factory
 	getenv  func(string) string
 	Version string
+	// executable and homeDir back os.Executable and os.UserHomeDir so the
+	// home-view self-identification is testable.
+	executable func() (string, error)
+	homeDir    func() (string, error)
 	// watchSignals controls whether watch registers real OS signal
 	// handling. Tests inside a synthetic-time bubble disable it.
 	watchSignals bool
 }
 
 func New(factory Factory, getenv func(string) string) *App {
-	return &App{factory: factory, getenv: getenv, Version: "dev", watchSignals: true}
+	return &App{factory: factory, getenv: getenv, Version: "dev", watchSignals: true, executable: os.Executable, homeDir: os.UserHomeDir}
 }
 
 type options struct {
@@ -178,17 +182,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 				opts.json = true
 			}
 		}
-		hint := "router-axi help"
-		if opts.command == "reboot" {
-			hint = "router-axi reboot [--confirm] [--host ADDRESS] [--json] [--help]"
-		}
-		if opts.command == "watch" {
-			hint = "router-axi watch --interval 5s --count 6 [--host ADDRESS] [--json]"
-		}
-		if opts.command == "backup" {
-			hint = "router-axi backup --output PATH [--force] [--host ADDRESS] [--json] [--help]"
-		}
-		return writeError(stderr, opts.json, ExitUsage, "invalid_arguments", err.Error(), hint)
+		return writeError(stderr, opts.json, ExitUsage, "invalid_arguments", err.Error(), usageHint(opts.command))
 	}
 	if opts.versionFlag {
 		opts.command = "version"
@@ -344,7 +338,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 				if writeJSON(stdout, value) != ExitOK {
 					return ExitInternal
 				}
-			} else if writeErr := writeCompact(stdout, opts.command, value); writeErr != nil {
+			} else if writeErr := writeCompact(a, stdout, opts.command, value); writeErr != nil {
 				return ExitInternal
 			}
 		}
@@ -359,7 +353,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		}
 		return ExitOK
 	}
-	if err := writeCompact(stdout, opts.command, value); err != nil {
+	if err := writeCompact(a, stdout, opts.command, value); err != nil {
 		return ExitInternal
 	}
 	return ExitOK
@@ -488,6 +482,36 @@ var commandHelp = map[string]string{
 	"forwards": "usage: router-axi forwards [--all] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi forwards; router-axi forwards --all --json\n",
 }
 
+// commandFlags is the single source of truth for the flags each command
+// accepts in parse(). The unknown-option error hint is derived from it, so
+// the suggested flags cannot drift from the flags parse actually accepts.
+var commandFlags = map[string][]string{
+	"doctor":   {"--host", "--json", "--help"},
+	"status":   {"--host", "--json", "--help"},
+	"overview": {"--host", "--json", "--help"},
+	"wan":      {"--host", "--json", "--help"},
+	"traffic":  {"--host", "--json", "--help"},
+	"guest":    {"--host", "--json", "--help"},
+	"watch":    {"--host", "--json", "--interval", "--count", "--help"},
+	"calls":    {"--host", "--json", "--all", "--help"},
+	"devices":  {"--host", "--json", "--all", "--help"},
+	"leases":   {"--host", "--json", "--all", "--help"},
+	"forwards": {"--host", "--json", "--all", "--help"},
+	"wifi":     {"--host", "--json", "--instance", "--confirm", "--help"},
+	"reboot":   {"--host", "--json", "--confirm", "--help"},
+	"backup":   {"--host", "--json", "--output", "--force", "--help"},
+}
+
+// usageHint builds a self-correcting hint for an invalid_arguments error: it
+// names the valid flags for the command the option was used with, so an
+// agent can correct the call in one turn instead of running --help first.
+func usageHint(command string) string {
+	if flags, ok := commandFlags[command]; ok {
+		return "valid flags for " + command + ": " + strings.Join(flags, ", ")
+	}
+	return "router-axi help"
+}
+
 func help(command, action string) string {
 	if action != "" && command == "wifi" {
 		return "usage: router-axi wifi " + action + " [--instance N] --confirm [--host ADDRESS] [--json] [--help]\nEnables or disables one WLANConfiguration radio. Without --confirm: preview only, nothing changes.\nWith --confirm: idempotent change; the router must confirm the new state. --instance N is required when the router advertises more than one radio; bounds N 1 or greater.\nNo prompts or retries; SSIDs, BSSIDs, and keys are never read or printed.\nexamples: router-axi wifi " + action + "; router-axi wifi " + action + " --instance 1 --confirm; router-axi wifi " + action + " --instance 2 --confirm --json\n"
@@ -502,6 +526,9 @@ func help(command, action string) string {
 	if command == "backup" {
 		return "usage: router-axi backup --output PATH [--force] [--host ADDRESS] [--json] [--help]\nDownloads the documented DeviceConfig:X_AVM-DE_GetConfigFile export to PATH with an atomic owner-only write.\nThe export passphrase is read only from ROUTER_AXI_BACKUP_PASSWORD and is required to restore the file.\nAn existing file is never overwritten without --force; the router origin must be HTTPS (for example --host https://fritz.box:49443) with a locally trusted certificate, so the passphrase never travels in plaintext.\nNo prompts. Examples: router-axi backup --host https://fritz.box:49443 --output fritz.export; router-axi backup --host https://fritz.box:49443 --output fritz.export --force\n"
 	}
+	if action != "" && command == "wifi" {
+		return "usage: router-axi wifi " + action + " [--instance N] --confirm [--host ADDRESS] [--json] [--help]\nEnables or disables one WLANConfiguration radio. Without --confirm: preview only, nothing changes.\nWith --confirm: idempotent change; the router must confirm the new state. --instance N is required when the router advertises more than one radio; bounds N 1 or greater.\nNo prompts or retries; SSIDs, BSSIDs, and keys are never read or printed.\nexamples: router-axi wifi " + action + "; router-axi wifi " + action + " --instance 1 --confirm; router-axi wifi " + action + " --instance 2 --confirm --json\n"
+	}
 	if text, ok := commandHelp[command]; ok {
 		return text
 	}
@@ -513,9 +540,8 @@ func help(command, action string) string {
 		if command == "wifi" {
 			extra = " [enable|disable [--instance N] --confirm]"
 		}
-		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + "\n"
+		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + " [--help]\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
@@ -528,7 +554,34 @@ func writeJSON(w io.Writer, value any) int {
 	return ExitOK
 }
 
-func writeCompact(w io.Writer, command string, value any) error {
+const cliDescription = "router-axi inspects and operates an AVM FRITZ!Box router over TR-064 with read-only reports and confirmed Wi-Fi, reboot, and backup actions"
+
+// selfIdentification returns the two home-view lines that identify the CLI
+// before live data: the absolute path of the running executable with the
+// user home collapsed to ~, and a one-sentence description.
+func (a *App) selfIdentification() string {
+	bin := "unknown"
+	if path, err := a.executable(); err == nil {
+		home, homeErr := a.homeDir()
+		bin = collapseHome(path, home, homeErr)
+	}
+	return "bin: " + bin + "\ndescription: " + cliDescription + "\n"
+}
+
+func collapseHome(path string, home string, err error) string {
+	if err != nil || home == "" {
+		return path
+	}
+	if path == home {
+		return "~"
+	}
+	if strings.HasPrefix(path, home+string(os.PathSeparator)) {
+		return "~" + path[len(home):]
+	}
+	return path
+}
+
+func writeCompact(a *App, w io.Writer, command string, value any) error {
 	switch command {
 	case "doctor":
 		v := value.(tr064.Doctor)
@@ -548,7 +601,7 @@ func writeCompact(w io.Writer, command string, value any) error {
 		return nil
 	case "status":
 		v := value.(tr064.Status)
-		_, err := fmt.Fprintf(w, "router:\n  manufacturer: %s\n  model: %s\n  software: %s\n  hardware: %s\n  serial: %s\n  uptime: %s\nnext: router-axi wan\n", scalar(v.Manufacturer), scalar(v.Model), scalar(v.Software), scalar(v.Hardware), scalar(v.Serial), duration(v.UptimeSeconds))
+		_, err := fmt.Fprintf(w, a.selfIdentification()+"router:\n  manufacturer: %s\n  model: %s\n  software: %s\n  hardware: %s\n  serial: %s\n  uptime: %s\nnext: router-axi wan\n", scalar(v.Manufacturer), scalar(v.Model), scalar(v.Software), scalar(v.Hardware), scalar(v.Serial), duration(v.UptimeSeconds))
 		return err
 	case "overview":
 		v := value.(tr064.Overview)

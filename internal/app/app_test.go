@@ -250,8 +250,94 @@ func TestCompactCommands(t *testing.T) {
 
 func TestNoCommandRunsStatus(t *testing.T) {
 	code, stdout, stderr := runTest(t)
-	if code != ExitOK || !strings.HasPrefix(stdout, "router:\n") || stderr != "" {
+	if code != ExitOK || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	if !strings.HasPrefix(stdout, "bin: ") || !strings.Contains(stdout, "\ndescription: ") {
+		t.Fatalf("status compact output missing self-identification: %q", stdout)
+	}
+	if !strings.Contains(stdout, "\nrouter:\n") {
+		t.Fatalf("status compact output missing router block: %q", stdout)
+	}
+}
+
+func TestStatusCompactIdentifiesTheCLI(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
+	application.executable = func() (string, error) { return "/home/tester/tools/router-axi", nil }
+	application.homeDir = func() (string, error) { return "/home/tester", nil }
+	for _, args := range [][]string{{}, {"status"}} {
+		var stdout, stderr bytes.Buffer
+		if code := application.Run(t.Context(), args, &stdout, &stderr); code != ExitOK || stderr.Len() != 0 {
+			t.Fatalf("args=%v code=%d stderr=%q", args, code, stderr.String())
+		}
+		want := "bin: ~/tools/router-axi\ndescription: " + cliDescription + "\nrouter:\n"
+		if !strings.HasPrefix(stdout.String(), want) {
+			t.Fatalf("args=%v stdout=%q want-prefix=%q", args, stdout.String(), want)
+		}
+	}
+}
+
+func TestStatusJSONKeepsExactShapeWithoutSelfIdentification(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"status", "--json"}, &stdout, &stderr)
+	if code != ExitOK || stderr.Len() != 0 || strings.Contains(stdout.String(), "\"bin\"") || strings.HasPrefix(stdout.String(), "{") == false {
+		t.Fatalf("code=%d stdout=%q", code, stdout.String())
+	}
+	var value map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &value); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := value["manufacturer"]; !ok {
+		t.Fatalf("unexpected status JSON shape: %s", stdout.String())
+	}
+}
+
+func TestVersionFlagsAnswerBeforeRouterWork(t *testing.T) {
+	factoryCalled := false
+	application := New(func(Config) (Reader, error) { factoryCalled = true; return fakeReader{}, nil }, func(string) string { return "" })
+	application.Version = "1.2.3"
+	for _, args := range [][]string{{"--version"}, {"-v"}, {"-V"}, {"version"}, {"-v", "--bogus"}} {
+		var stdout, stderr bytes.Buffer
+		if code := application.Run(t.Context(), args, &stdout, &stderr); code != ExitOK || stderr.Len() != 0 {
+			t.Fatalf("args=%v code=%d stderr=%q", args, code, stderr.String())
+		}
+		if stdout.String() != "version: 1.2.3\n" {
+			t.Fatalf("args=%v stdout=%q", args, stdout.String())
+		}
+	}
+	var stdout, stderr bytes.Buffer
+	if code := application.Run(t.Context(), []string{"version", "--json"}, &stdout, &stderr); code != ExitOK || stderr.Len() != 0 || stdout.String() != "{\"version\":\"1.2.3\"}\n" {
+		t.Fatalf("version --json code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if factoryCalled {
+		t.Fatal("version fast path contacted the router")
+	}
+}
+
+func TestUnknownFlagErrorIsSelfCorrecting(t *testing.T) {
+	for _, test := range []struct{ args, hint []string }{
+		{[]string{"wan", "--stat"}, []string{"valid flags for wan: --host, --json, --help"}},
+		{[]string{"watch", "--stats"}, []string{"valid flags for watch: --host, --json, --interval, --count, --help"}},
+		{[]string{"wifi", "enable", "--conform"}, []string{"valid flags for wifi: --host, --json, --instance, --confirm, --help"}},
+		{[]string{"backup", "--out"}, []string{"valid flags for backup: --host, --json, --output, --force, --help"}},
+	} {
+		code, _, stderr := runTest(t, test.args...)
+		unknown := "unknown option: " + test.args[len(test.args)-1]
+		if code != ExitUsage || !strings.Contains(stderr, unknown) || !strings.Contains(stderr, "  hint: "+test.hint[0]) {
+			t.Fatalf("args=%v code=%d stderr=%q", test.args, code, stderr)
+		}
+	}
+}
+
+func TestCommandFlagsMatchHelpUsage(t *testing.T) {
+	for command, flags := range commandFlags {
+		usage := help(command, "")
+		for _, flag := range flags {
+			if !strings.Contains(usage, flag) {
+				t.Errorf("command=%s usage=%q missing flag=%s", command, usage, flag)
+			}
+		}
 	}
 }
 
