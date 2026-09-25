@@ -524,7 +524,10 @@ reports the omitted count, and accepts `--all` for the complete list.
 Exit codes are `0` for success, `1` for local output/internal failure, `2` for
 usage or configuration errors, `3` for authentication failure, `4` when the
 router is unreachable, `5` for unsupported router capabilities, and `6` for a
-router or protocol error.
+router or protocol error. Network failures carry the code `router_unreachable`,
+except that any command using an `https` router origin whose certificate fails
+verification exits `4` with the code `tls_untrusted` and a hint to trust the
+router's certificate on this system; verification is never skipped.
 
 The implementation discovers services through `/tr64desc.xml` and invokes only
 read actions, plus the confirmed `wifi enable|disable` and `reboot` mutations

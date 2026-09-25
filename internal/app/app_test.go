@@ -1012,3 +1012,31 @@ func TestWiFiMutationProtocolAndAuthErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestStatusDistinguishesUntrustedCertificateFromUnreachableRouter(t *testing.T) {
+	untrusted := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("an untrusted certificate completed a request")
+	}))
+	defer untrusted.Close()
+	unreachable := httptest.NewServer(http.NotFoundHandler())
+	unreachable.Close()
+	for _, test := range []struct {
+		address, code, hint string
+	}{
+		{untrusted.URL, "tls_untrusted", "certificate"},
+		{unreachable.URL, "router_unreachable", "check --host"},
+	} {
+		application := New(func(Config) (Reader, error) { return tr064.New(test.address, "", "", nil) }, func(string) string { return "" })
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), []string{"status", "--json"}, &stdout, &stderr)
+		var payload struct {
+			Error struct{ Code, Hint string } `json:"error"`
+		}
+		if err := json.Unmarshal(stderr.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		if code != ExitNetwork || stdout.Len() != 0 || payload.Error.Code != test.code || !strings.Contains(payload.Error.Hint, test.hint) {
+			t.Fatalf("want=%s code=%d stderr=%q", test.code, code, stderr.String())
+		}
+	}
+}
