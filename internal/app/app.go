@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Azd325/router-axi/internal/skill"
 	"github.com/Azd325/router-axi/internal/tr064"
 )
 
@@ -68,15 +69,15 @@ func New(factory Factory, getenv func(string) string) *App {
 }
 
 type options struct {
-	command, host, action, output   string
-	json, help, all, confirm, force bool
-	instance                        uint64
-	instanceSet                     bool
-	interval                        time.Duration
-	count                           int
-	intervalSet, countSet           bool
-	flags                           map[string]bool
-	versionFlag                     bool
+	command, host, action, output, path string
+	json, help, all, confirm, force     bool
+	instance                            uint64
+	instanceSet                         bool
+	interval                            time.Duration
+	count                               int
+	intervalSet, countSet               bool
+	flags                               map[string]bool
+	versionFlag                         bool
 }
 
 type callResult struct {
@@ -173,6 +174,15 @@ type backupJSONResult struct {
 	Backup backupResult `json:"backup"`
 }
 
+type skillResult struct {
+	Path      string `json:"path"`
+	Installed bool   `json:"installed"`
+}
+
+type skillJSONResult struct {
+	Skill skillResult `json:"skill"`
+}
+
 func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	opts, err := parse(args)
 	if err != nil {
@@ -207,6 +217,9 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			return ExitInternal
 		}
 		return ExitOK
+	}
+	if opts.command == "skill" {
+		return a.runSkill(opts, stdout, stderr)
 	}
 	if !validCommand(opts.command) {
 		return writeError(stderr, opts.json, ExitUsage, "unknown_command", "unknown command: "+opts.command, "router-axi help")
@@ -424,6 +437,13 @@ func parse(args []string) (options, error) {
 				return opts, errors.New("--output requires a file path")
 			}
 			opts.output = args[i]
+		case "--path":
+			opts.flags["--path"] = true
+			i++
+			if i >= len(args) || args[i] == "" || strings.HasPrefix(args[i], "-") {
+				return opts, errors.New("--path requires a directory")
+			}
+			opts.path = args[i]
 		case "--force":
 			opts.flags["--force"] = true
 			opts.force = true
@@ -445,6 +465,13 @@ func parse(args []string) (options, error) {
 			if opts.command == "wifi" && opts.action != "" {
 				return opts, errors.New("wifi accepts one action: enable or disable")
 			}
+			if opts.command == "skill" {
+				if args[i] == "install" && opts.action == "" {
+					opts.action = args[i]
+					continue
+				}
+				return opts, errors.New("skill accepts one action: install")
+			}
 			return opts, errors.New("exactly one command is required")
 		}
 	}
@@ -454,6 +481,13 @@ func parse(args []string) (options, error) {
 	if err := validateFlagContext(opts); err != nil {
 		return opts, err
 	}
+	skillAction := opts.command == "skill" && opts.action != ""
+	if opts.path != "" && !skillAction {
+		return opts, errors.New("--path is valid only with skill install")
+	}
+	if opts.command == "skill" && opts.action == "" && !opts.help {
+		return opts, errors.New("skill requires the action install")
+	}
 	if opts.command == "backup" && opts.output == "" && !opts.help {
 		return opts, errors.New("backup requires --output PATH")
 	}
@@ -461,7 +495,7 @@ func parse(args []string) (options, error) {
 }
 
 func validCommand(command string) bool {
-	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "backup" || command == "version"
+	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "backup" || command == "skill" || command == "version"
 }
 
 // commandHelp holds dedicated per-command help text: usage line, purpose,
@@ -508,6 +542,7 @@ var flagSpecs = map[string]flagSpec{
 	"--confirm":  {valid: rebootOrWiFiMutation, invalid: "--confirm is valid only with reboot, wifi enable, or wifi disable"},
 	"--output":   {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--output is valid only with backup"},
 	"--force":    {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--force is valid only with backup"},
+	"--path":     {valid: func(opts options) bool { return opts.command == "skill" && opts.action == "install" }, invalid: "--path is valid only with skill install"},
 }
 
 var commandFlags = map[string][]string{
@@ -525,6 +560,7 @@ var commandFlags = map[string][]string{
 	"wifi":     {"--host", "--json", "--instance", "--confirm", "--help"},
 	"reboot":   {"--host", "--json", "--confirm", "--help"},
 	"backup":   {"--host", "--json", "--output", "--force", "--help"},
+	"skill":    {"--path", "--json", "--help"},
 	"version":  {"--json", "--help"},
 }
 
@@ -595,9 +631,15 @@ func help(command, action string) string {
 		if command == "wifi" {
 			extra = " [enable|disable [--instance N] --confirm]"
 		}
+		if command == "skill" {
+			if action != "" {
+				return "usage: router-axi skill install [--path DIRECTORY] [--json] [--help]\nInstalls the bundled router-axi Agent Skill (SKILL.md) for the current agent.\nThe default destination is the user agent skills directory; --path selects another parent directory.\nRepeated installs with identical content are silent no-ops. This command is the only installation path; nothing is registered automatically.\nexamples: router-axi skill install; router-axi skill install --path ~/.agents/skills\n"
+			}
+			return "usage: router-axi skill install [--path DIRECTORY] [--json] [--help]\n"
+		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + " [--help]\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -872,6 +914,33 @@ func (a *App) runBackup(ctx context.Context, reader Reader, opts options, stdout
 		return writeJSON(stdout, backupJSONResult{Backup: result})
 	}
 	if _, err := fmt.Fprintf(stdout, "backup:\n  path: %s\n  bytes: %d\n  sha256: %s\nnext: %s\n", strconv.Quote(result.Path), result.Bytes, result.SHA256, backupNext); err != nil {
+		return ExitInternal
+	}
+	return ExitOK
+}
+
+func (a *App) runSkill(opts options, stdout, stderr io.Writer) int {
+	dir := opts.path
+	if dir == "" {
+		home, err := a.homeDir()
+		if err != nil {
+			return writeError(stderr, opts.json, ExitInternal, "skill_install_failed", "could not determine the user home directory", "pass --path DIRECTORY with the agent skills parent directory")
+		}
+		dir = filepath.Join(home, ".agents", "skills")
+	}
+	path := filepath.Join(dir, skill.Name, "SKILL.md")
+	written, err := skill.Install(path)
+	if err != nil {
+		return writeError(stderr, opts.json, ExitInternal, "skill_install_failed", "the skill file could not be written to the requested path", "check the destination directory and permissions")
+	}
+	if !written {
+		return ExitOK
+	}
+	result := skillResult{Path: path, Installed: true}
+	if opts.json {
+		return writeJSON(stdout, skillJSONResult{Skill: result})
+	}
+	if _, err := fmt.Fprintf(stdout, "skill:\n  path: %s\n  installed: %t\n", strconv.Quote(result.Path), result.Installed); err != nil {
 		return ExitInternal
 	}
 	return ExitOK

@@ -12,6 +12,20 @@ The read-only MVP provides device information, WAN status, traffic statistics, c
 - Explicit confirmation for disruptive operations.
 - Local operation without telemetry or a hosted account.
 
+## Agent Skill (secondary integration)
+
+This release ships an **opt-in skill** that never registers itself
+automatically. Install it for an agent that supports the
+agentskills.io format:
+
+```sh
+router-axi skill install
+```
+
+The default destination is `~/.agents/skills/router-axi/SKILL.md`; use
+`--path DIRECTORY` for another agent skills parent directory. Repeating the
+same install is a silent no-op.
+
 See [VISION.md](VISION.md) for the acceptance policy. Contributors should read
 [CONTRIBUTING.md](CONTRIBUTING.md); security reports belong in
 [SECURITY.md](SECURITY.md).
@@ -64,6 +78,7 @@ router-axi wifi
 router-axi wifi --json
 router-axi guest
 router-axi guest --json
+router-axi skill install
 router-axi wifi enable
 router-axi wifi disable
 router-axi wifi disable --instance 1 --confirm

@@ -14,6 +14,8 @@ Empty results state that zero results were found.
 Commands include relevant aggregate state when it removes a follow-up query.
 Each successful command suggests the next valid operation when one is useful.
 Help is concise, consistent, and available at every command level.
+An installable Agent Skill may provide explicit, on-demand discovery without
+ambient registration or per-session token cost.
 Read-only watch streams are finite by default with hard polling bounds, explicit
 unknown values, observation timestamps, and JSONL for streaming consumers.
 Derived rates describe observed counter increases, not inferred traffic across
