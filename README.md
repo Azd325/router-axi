@@ -118,7 +118,7 @@ router provides one, `ip_address`, `mac_address`, `interface_type`, and
 `active`. The MAC address is the stable identifier when the router provides
 one; router-assigned table indexes are not exposed because they are not stable.
 Entries are sorted by MAC address, then IP address and name. Compact and JSON
-output return at most 20 entries by default and accept `--all`; compact output
+output return at most 100 entries by default and accept `--all`; compact output
 reports omitted entries, while JSON includes `total` and `omitted`. Empty output
 is `devices[0]: no devices found` in compact form and
 `{"devices":[],"total":0,"omitted":0}` in JSON.
@@ -241,7 +241,7 @@ fail explicitly. Firmware returning no useful lease metadata still yields
 honest host observations rather than fabricated leases.
 
 Entries are sorted by MAC address (case-insensitive), then IP address and name.
-Both formats show 20 entries by default, with `--all` for the complete inspected
+Both formats show 100 entries by default, with `--all` for the complete inspected
 list. JSON always includes `total` and `omitted`; compact output reports omitted
 entries and suggests `leases --all`. Empty output is
 `leases[0]: no host observations found` or
@@ -603,7 +603,7 @@ Results sort by protocol, numeric external port, remote host, internal target,
 numeric internal port, enabled state (false first), description, then lease
 (absent before present). Identical records are retained; service IDs and
 transient table indexes are not exposed. Output is limited to
-20 entries by default. `--all` returns the complete inspected list; compact
+100 entries by default. `--all` returns the complete inspected list; compact
 output reports `omitted` and suggests `forwards --all`, while JSON always
 includes `total` and `omitted`. Empty output is
 `forwards[0]: no port forwards found` or
@@ -645,7 +645,7 @@ The router defaults to `http://fritz.box:49000`. Override it with `--host ADDRES
 `ROUTER_AXI_HOST`; an address without a port uses TR-064 port `49000` for HTTP or
 `49443` for HTTPS. Credentials are read only from the environment. The default
 output is compact AXI text; `--json` emits JSON on stdout. Errors are structured
-on stderr in the selected format. `calls` returns at most 20 entries by default,
+on stderr in the selected format. `calls` returns at most 100 entries by default,
 reports the omitted count, and accepts `--all` for the complete list.
 
 Exit codes are `0` for success, `1` for local output/internal failure, `2` for
