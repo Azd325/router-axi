@@ -18,6 +18,14 @@ const liveTestFlag = "ROUTER_AXI_LIVE_TEST"
 const liveMutationTestFlag = "ROUTER_AXI_LIVE_MUTATION_TEST"
 const liveMutationInstanceFlag = "ROUTER_AXI_WIFI_INSTANCE"
 
+// liveBackupTestFlag is an additional explicit opt-in for live configuration
+// export coverage. It is deliberately separate from liveTestFlag and is
+// never honored on CI or in ordinary test runs. The live backup test never
+// writes a backup file: it exercises the documented action and download and
+// discards the payload.
+const liveBackupTestFlag = "ROUTER_AXI_LIVE_BACKUP_TEST"
+const backupPassphraseFlag = "ROUTER_AXI_BACKUP_PASSWORD"
+
 type liveTestSettings struct {
 	host, username, password string
 }
@@ -156,6 +164,74 @@ func TestLiveLeases(t *testing.T) {
 		if lease.LeaseTimeRemaining != nil && (*lease.LeaseTimeRemaining <= 0 || *lease.LeaseTimeRemaining >= 2147483647) {
 			t.Fatal("lease observation returned a non-finite or invalid remaining time")
 		}
+	}
+}
+
+func TestLiveBackupSafetyGate(t *testing.T) {
+	tests := []struct {
+		name   string
+		values map[string]string
+		want   bool
+	}{
+		{name: "ordinary test", values: map[string]string{}},
+		{name: "live gate only", values: map[string]string{liveTestFlag: "1", "ROUTER_AXI_HOST": "router.test", "ROUTER_AXI_USERNAME": "user", "ROUTER_AXI_PASSWORD": "password", backupPassphraseFlag: "passphrase"}},
+		{name: "backup flag alone", values: map[string]string{liveBackupTestFlag: "1", backupPassphraseFlag: "passphrase"}},
+		{name: "wrong backup flag", values: map[string]string{liveTestFlag: "1", liveBackupTestFlag: "true", "ROUTER_AXI_HOST": "router.test", "ROUTER_AXI_USERNAME": "user", "ROUTER_AXI_PASSWORD": "password", backupPassphraseFlag: "passphrase"}},
+		{name: "missing passphrase", values: map[string]string{liveTestFlag: "1", liveBackupTestFlag: "1", "ROUTER_AXI_HOST": "router.test", "ROUTER_AXI_USERNAME": "user", "ROUTER_AXI_PASSWORD": "password"}},
+		{name: "CI is always blocked", values: map[string]string{liveTestFlag: "1", liveBackupTestFlag: "1", "CI": "true", "ROUTER_AXI_HOST": "router.test", "ROUTER_AXI_USERNAME": "user", "ROUTER_AXI_PASSWORD": "password", backupPassphraseFlag: "passphrase"}},
+		{name: "explicit local opt-in", values: map[string]string{liveTestFlag: "1", liveBackupTestFlag: "1", "ROUTER_AXI_HOST": "router.test", "ROUTER_AXI_USERNAME": "user", "ROUTER_AXI_PASSWORD": "password", backupPassphraseFlag: "passphrase"}, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, got := liveBackupConfig(func(key string) string { return test.values[key] })
+			if got != test.want {
+				t.Fatalf("enabled = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func liveBackupConfig(getenv func(string) string) (liveTestSettings, string, bool) {
+	settings, enabled := liveTestConfig(getenv)
+	if !enabled || getenv(liveBackupTestFlag) != "1" {
+		return liveTestSettings{}, "", false
+	}
+	passphrase := getenv(backupPassphraseFlag)
+	if passphrase == "" {
+		return liveTestSettings{}, "", false
+	}
+	return settings, passphrase, true
+}
+
+func TestLiveBackup(t *testing.T) {
+	settings, passphrase, enabled := liveBackupConfig(os.Getenv)
+	if !enabled {
+		t.Skip("live backup coverage requires ROUTER_AXI_LIVE_TEST=1 plus ROUTER_AXI_LIVE_BACKUP_TEST=1, complete configuration, and ROUTER_AXI_BACKUP_PASSWORD")
+	}
+	client, err := New(settings.host, settings.username, settings.password, nil)
+	if err != nil {
+		t.Fatal("live router configuration was rejected")
+	}
+	// The export payload is deliberately neither written to disk nor logged:
+	// this test reports only pass/fail at the command level.
+	export, err := client.ConfigExport(t.Context(), passphrase)
+	if err != nil {
+		var protocolErr *Error
+		if errors.As(err, &protocolErr) {
+			if protocolErr.Kind == "unsupported" {
+				t.Skip("DeviceConfig:X_AVM-DE_GetConfigFile is unsupported; the hardware export was not validated")
+			}
+			if protocolErr.Code == "backup_requires_https" {
+				t.Skip("live backup requires an https ROUTER_AXI_HOST; the hardware export was not validated")
+			}
+			if protocolErr.Code == tlsUntrustedCode {
+				t.Skip("the router certificate is not trusted locally; the hardware export was not validated")
+			}
+		}
+		t.Fatal("the live configuration export failed")
+	}
+	if len(export) == 0 || int64(len(export)) > maxConfigExportBytes {
+		t.Fatal("the live configuration export returned an invalid payload")
 	}
 }
 

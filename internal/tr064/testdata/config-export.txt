@@ -1,0 +1,3 @@
+**** SYNTHETIC ROUTER-AXI TEST EXPORT ****
+synthetic-configuration-export-content
+**** END OF SYNTHETIC EXPORT ****

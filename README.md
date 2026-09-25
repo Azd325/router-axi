@@ -62,6 +62,7 @@ router-axi wifi enable
 router-axi wifi disable
 router-axi wifi disable --instance 1 --confirm
 router-axi reboot          # preview only; restart requires --confirm
+router-axi backup --host https://fritz.box:49443 --output fritz.export
 router-axi forwards
 router-axi forwards --json
 router-axi forwards --all
@@ -79,11 +80,14 @@ description once and, when `DeviceInfo` is advertised, invokes only
 `DeviceInfo:GetInfo` to verify authentication and obtain model and firmware.
 It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
-`wan`, `traffic`, `calls`, `devices`, `leases`, `wifi`, `forwards`, and `reboot`.
-For reboot, doctor applies the same target selection as the command (exactly
+`wan`, `traffic`, `calls`, `devices`, `leases`, `wifi`, `forwards`, `reboot`, and
+`backup`. For reboot, doctor applies the same target selection as the command (exactly
 one `DeviceConfig:1` service, plus exactly one `DeviceInfo:1` when credentials
 are set), but the result is only a candidate capability: doctor never invokes
-Reboot or verifies reboot permission. For leases,
+Reboot or verifies reboot permission. For backup,
+doctor requires exactly one `DeviceConfig:1` and never invokes
+`X_AVM-DE_GetConfigFile`; like the other capabilities it is only a candidate
+and proves no export permission. For leases,
 Hosts advertisement is a candidate capability, not proof of meaningful lease
 metadata; doctor does not read the host table. For forwards,
 WANIPConnection or WANPPPConnection service advertisement is only a candidate
@@ -283,6 +287,77 @@ its authentication read. Tests use synthetic servers only. No live reboot test
 is provided or run; existing live-test flags cannot reboot a router. Reboot
 acceptance and recovery are **not hardware-validated**.
 
+### Configuration backup
+
+`backup` requires the current checkout. It uses only the documented
+[FRITZ! DeviceConfig v11, §2.8](https://fritz.support/resources/TR-064_Device_Config.pdf)
+action `urn:dslforum-org:service:DeviceConfig:1`
+`X_AVM-DE_GetConfigFile`, with the input argument `NewX_AVM-DE_Password` and the
+output argument `NewX_AVM-DE_ConfigFileUrl`, followed by a download of that
+returned URL. Like every other documented read, the action and the download use
+the standard TR-064 Digest handshake when credentials are configured. The
+action requires configuration rights. No factory reset, no
+`X_AVM-DE_SetConfigFile`, no configuration upload, no browser scraping, and no
+undocumented endpoint is used; `backup` never modifies the router.
+
+The **export passphrase is read only from `ROUTER_AXI_BACKUP_PASSWORD`**. It is
+never accepted as an argument, never read from `ROUTER_AXI_PASSWORD` or any
+other variable, and never echoed in output, errors, or JSON. The passphrase is
+required to restore the export, so keep it with the file. The router login
+credentials keep their existing `ROUTER_AXI_USERNAME` and
+`ROUTER_AXI_PASSWORD` variables and are used only for the documented TR-064
+authentication.
+
+`backup` **requires an HTTPS router origin**, because the action request
+carries the export passphrase in its SOAP body and Digest authentication does
+not protect that body. Pass `--host https://fritz.box:49443` (or set
+`ROUTER_AXI_HOST` to an `https://` origin) and trust the router certificate on
+the local system. A plaintext origin, including the default `fritz.box`, is
+refused with `backup_requires_https` (exit `2`) before any request is sent.
+
+The download URL is a one-time router-generated address that is valid for less
+than 30 seconds and is never printed or logged. AVM's DeviceConfig reference
+requires the URL to be HTTPS secured with the TR-064 certificate, while the
+Remote Access reference shows an HTTP example URL; the CLI follows the
+stricter document and **refuses plaintext downloads**, redirects at every
+stage, and URLs that are not on the router host, carry user information, or
+carry a query or fragment. Certificate verification is never skipped: a router
+whose certificate is not trusted by the local system fails closed with the
+`tls_untrusted` remediation instead of downloading the export in the clear.
+
+The local file contract:
+
+- `--output PATH` is required and names the destination explicitly; the export
+  is never written to a default location, `stdout`, or a temporary directory.
+- The destination is validated before the router is contacted. A path that
+  names a directory, ends in a path separator, or has no existing parent
+  directory is a usage error (exit `2`).
+- The write is atomic: the export is written to an owner-only (`0600`)
+  temporary file in the destination directory, flushed, then linked into
+  place. A failed export leaves no file and no temporary file behind.
+- An existing file is never overwritten without `--force`. Without `--force`
+  the final write is an atomic no-replace operation, so even a file that
+  appears between the preflight check and the write survives untouched.
+  That operation is a hard link; a filesystem without hard-link support
+  (for example FAT/exFAT or some network mounts) fails with
+  `backup_link_unsupported`, and `--force` writes with an atomic rename
+  instead.
+- Output is metadata only: compact `path`, `bytes`, and `sha256`, or
+  `{"backup":{"path":"…","bytes":…,"sha256":"…"}}` in JSON. The export
+  contents, the passphrase, and the download URL never appear in output,
+  errors, or logs.
+
+Missing or duplicate `DeviceConfig` services, an unsafe control URL, and an
+invalid-action fault exit `5` with service/firmware remediation; rejected
+credentials exit `3`; transport failures `4`; malformed responses, refused
+HTTPS URLs, and other router faults `6`; unusable destinations, a plaintext
+router origin, and a missing passphrase exit `2`; local write failures,
+including `backup_link_unsupported`, exit `1`. An untrusted router
+certificate exits `4` with the code `tls_untrusted`. The export is bounded at 64 MiB; larger downloads are a
+protocol error. Compatibility is fixture-backed with synthetic servers only;
+the FRITZ!Box export flow is **not hardware-validated**, and `backup` does not
+verify that the export can be restored.
+
 ### Wi-Fi inspection
 
 Wi-Fi inspection requires the current checkout; it is not included in v0.1.0.
@@ -449,12 +524,16 @@ reports the omitted count, and accepts `--all` for the complete list.
 Exit codes are `0` for success, `1` for local output/internal failure, `2` for
 usage or configuration errors, `3` for authentication failure, `4` when the
 router is unreachable, `5` for unsupported router capabilities, and `6` for a
-router or protocol error.
+router or protocol error. Network failures carry the code `router_unreachable`,
+except that any command using an `https` router origin whose certificate fails
+verification exits `4` with the code `tls_untrusted` and a hint to trust the
+router's certificate on this system; verification is never skipped.
 
 The implementation discovers services through `/tr64desc.xml` and invokes only
 read actions, plus the confirmed `wifi enable|disable` and `reboot` mutations
 described above, which invoke only the documented `WLANConfiguration:SetEnable`
-and `DeviceConfig:Reboot` respectively.
+and `DeviceConfig:Reboot` respectively, and the documented
+`DeviceConfig:X_AVM-DE_GetConfigFile` export described above.
 Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 `DeviceInfo:GetInfo`, `WANIPConnection` or
 `WANPPPConnection:GetStatusInfo` and `GetExternalIPAddress`,
@@ -526,6 +605,24 @@ from a host connected to the router over wired LAN — if the test host reaches 
 through the radio being toggled, the connection drops mid-test and neither verification nor
 restore can reach the router. The test reports only pass/fail; hardware validation of the
 change direction is only meaningful when the router confirms both changes.
+
+Live backup coverage is additionally opt-in and skipped by default: it requires the
+complete live gate above plus `ROUTER_AXI_LIVE_BACKUP_TEST=1` and an exported
+`ROUTER_AXI_BACKUP_PASSWORD`. The test invokes the documented
+`DeviceConfig:X_AVM-DE_GetConfigFile` action and its one-time HTTPS download,
+then **discards the payload**: it never writes a backup file anywhere and never
+logs the export, the download URL, or the passphrase. It reports only
+pass/fail, and skips explicitly when `ROUTER_AXI_HOST` is not an `https://`
+origin, the action is unsupported, or the router certificate is not trusted
+locally; the ordinary live-read and mutation flags
+can never trigger an export.
+
+```sh
+export ROUTER_AXI_BACKUP_PASSWORD='export-passphrase'
+ROUTER_AXI_LIVE_TEST=1 ROUTER_AXI_LIVE_BACKUP_TEST=1 \
+  go test ./internal/tr064 -run 'TestLiveBackup$' -count=1
+unset ROUTER_AXI_BACKUP_PASSWORD
+```
 
 ## License
 
