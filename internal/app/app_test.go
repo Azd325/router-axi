@@ -511,6 +511,13 @@ func TestGuestEmptyAndFailureOutput(t *testing.T) {
 	}
 }
 
+var (
+	guestHelp    = help("guest", "")
+	wifiHelp     = help("wifi", "")
+	forwardsHelp = help("forwards", "")
+	leasesHelp   = help("leases", "")
+)
+
 func TestGuestFlagsAndHelp(t *testing.T) {
 	for _, args := range [][]string{{"guest", "--all"}, {"guest", "--instance", "2"}, {"guest", "enable"}, {"wifi", "guest"}} {
 		code, stdout, _ := runTest(t, args...)
@@ -519,7 +526,7 @@ func TestGuestFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "guest", "--help")
-	if code != ExitOK || stdout != "usage: router-axi guest [--host ADDRESS] [--json]\n" || stderr != "" {
+	if code != ExitOK || stdout != guestHelp || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -619,6 +626,23 @@ func TestWiFiClientPrivacyBoundary(t *testing.T) {
 	}
 }
 
+// TestEverySubcommandHelpDepth asserts the AXI help contract: every
+// subcommand help must include a usage line, flags, and concrete examples.
+func TestEverySubcommandHelpDepth(t *testing.T) {
+	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "calls", "devices", "leases", "wifi", "guest", "forwards", "watch", "reboot", "backup"} {
+		text := help(command, "")
+		if !strings.HasPrefix(text, "usage: router-axi "+command) || !strings.Contains(text, "--host ADDRESS") || !strings.Contains(text, "--json") || !strings.Contains(text, "examples: router-axi "+command) && !strings.Contains(text, "Examples: router-axi "+command) {
+			t.Fatalf("help for %s lacks usage, flags, or examples: %q", command, text)
+		}
+	}
+	for _, action := range []string{"enable", "disable"} {
+		text := help("wifi", action)
+		if !strings.HasPrefix(text, "usage: router-axi wifi "+action) || !strings.Contains(text, "--confirm") || !strings.Contains(text, "examples: router-axi wifi "+action) {
+			t.Fatalf("help for wifi %s lacks usage, flags, or examples: %q", action, text)
+		}
+	}
+}
+
 func TestWiFiFlagsAndHelp(t *testing.T) {
 	for _, flag := range []string{"--all", "--reveal", "--ssid"} {
 		code, stdout, _ := runTest(t, "wifi", flag)
@@ -627,7 +651,7 @@ func TestWiFiFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "wifi", "--help")
-	if code != ExitOK || stdout != "usage: router-axi wifi [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm]\n" || stderr != "" {
+	if code != ExitOK || stdout != wifiHelp || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -809,7 +833,7 @@ func TestForwardsFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "forwards", "--help")
-	if code != ExitOK || stdout != "usage: router-axi forwards [--host ADDRESS] [--json] [--all]\n" || stderr != "" {
+	if code != ExitOK || stdout != forwardsHelp || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -987,7 +1011,7 @@ func TestLeasesFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "leases", "--help")
-	if code != ExitOK || stdout != "usage: router-axi leases [--host ADDRESS] [--json] [--all]\n" || stderr != "" {
+	if code != ExitOK || stdout != leasesHelp || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }

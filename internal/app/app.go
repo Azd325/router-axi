@@ -465,7 +465,27 @@ func validCommand(command string) bool {
 	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "backup"
 }
 
+// commandHelp holds the per-command help text for read-only commands:
+// usage line, purpose, flag defaults and bounds, and concrete examples.
+var commandHelp = map[string]string{
+	"doctor":   "usage: router-axi doctor [--host ADDRESS] [--json] [--help]\nOne bounded read-only diagnosis: reachability, TR-064 availability, authentication, model and firmware, and candidate capabilities for every command.\nUnsupported optional capabilities are a successful diagnosis and include remediation; no command's actions are invoked beyond DeviceInfo:GetInfo.\nexamples: router-axi doctor; router-axi doctor --host 192.0.2.1 --json\n",
+	"status":   "usage: router-axi status [--host ADDRESS] [--json] [--help]\nRead-only router identity and firmware; the default command when no command is given.\nexamples: router-axi status; router-axi status --json\n",
+	"overview": "usage: router-axi overview [--host ADDRESS] [--json] [--help]\nRead-only combined view: router identity, WAN state, and traffic totals in one read.\nexamples: router-axi overview; router-axi overview --json\n",
+	"wan":      "usage: router-axi wan [--host ADDRESS] [--json] [--help]\nRead-only internet connection state: status, external address, IP family, uptime, and last error.\nexamples: router-axi wan; router-axi wan --json\n",
+	"traffic":  "usage: router-axi traffic [--host ADDRESS] [--json] [--help]\nRead-only total downloaded and uploaded byte counters with the observation time.\nexamples: router-axi traffic; router-axi traffic --json\n",
+	"calls":    "usage: router-axi calls [--all] [--host ADDRESS] [--json] [--help]\nRead-only call history. Defaults to the 20 most recent entries; --all lists everything. No required arguments.\nexamples: router-axi calls; router-axi calls --all; router-axi calls --all --json\n",
+	"devices":  "usage: router-axi devices [--all] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 20 entries; --all lists everything. No required arguments.\nexamples: router-axi devices; router-axi devices --all --json\n",
+	"leases":   "usage: router-axi leases [--all] [--host ADDRESS] [--json] [--help]\nRead-only observed lease metadata from the Hosts table: name, addresses, address source, and remaining lease time. Defaults to 20 entries; --all lists everything. No required arguments.\nexamples: router-axi leases; router-axi leases --all --json\n",
+	"wifi":     "usage: router-axi wifi [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi disable --instance 1 --confirm\n",
+	"guest":    "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID and aggregate radio state only; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n",
+	"forwards": "usage: router-axi forwards [--all] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 20 entries; --all lists everything. No required arguments.\nexamples: router-axi forwards; router-axi forwards --all --json\n",
+}
+
 func help(command, action string) string {
+	if action != "" && command == "wifi" {
+		return "usage: router-axi wifi " + action + " [--instance N] --confirm [--host ADDRESS] [--json] [--help]\nEnables or disables one WLANConfiguration radio. Without --confirm: preview only, nothing changes.\nWith --confirm: idempotent change; the router must confirm the new state. --instance N is required when the router advertises more than one radio; bounds N 1 or greater.\nNo prompts or retries; SSIDs, BSSIDs, and keys are never read or printed.\nexamples: router-axi wifi " + action + "; router-axi wifi " + action + " --instance 1 --confirm; router-axi wifi " + action + " --instance 2 --confirm --json\n"
+	}
+
 	if command == "watch" {
 		return "usage: router-axi watch [--interval DURATION] [--count N] [--host ADDRESS] [--json] [--help]\nRead-only WAN state and traffic samples; defaults: --interval 5s --count 6.\nBounds: interval 1s..1m, count 1..3600; no unbounded mode. First sample is immediate; subsequent reads wait after completion.\n--json streams one object per line (JSONL). Errors stop polling; Ctrl-C/SIGTERM cancel with exit 130.\nexamples: router-axi watch; router-axi watch --interval 2s --count 10 --json\n"
 	}
@@ -475,10 +495,10 @@ func help(command, action string) string {
 	if command == "backup" {
 		return "usage: router-axi backup --output PATH [--force] [--host ADDRESS] [--json] [--help]\nDownloads the documented DeviceConfig:X_AVM-DE_GetConfigFile export to PATH with an atomic owner-only write.\nThe export passphrase is read only from ROUTER_AXI_BACKUP_PASSWORD and is required to restore the file.\nAn existing file is never overwritten without --force; the router origin must be HTTPS (for example --host https://fritz.box:49443) with a locally trusted certificate, so the passphrase never travels in plaintext.\nNo prompts. Examples: router-axi backup --host https://fritz.box:49443 --output fritz.export; router-axi backup --host https://fritz.box:49443 --output fritz.export --force\n"
 	}
-	if action != "" && command == "wifi" {
-		return "usage: router-axi wifi " + action + " [--instance N] --confirm [--host ADDRESS] [--json]\n"
-	}
 	if validCommand(command) {
+		if text, ok := commandHelp[command]; ok {
+			return text
+		}
 		extra := ""
 		if command == "calls" || command == "devices" || command == "leases" || command == "forwards" {
 			extra = " [--all]"
