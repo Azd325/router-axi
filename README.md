@@ -162,9 +162,9 @@ order (there is no enclosing array or final summary):
 Compact output uses one two-line TOON table per sample with a unique key
 `sample_1[1]{observed_at,wan_status,...}:`, then `sample_2`, and so on. Columns
 follow the JSON field order except that the sequence is in the key. Both formats
-use exact integer byte totals and explicit `null` for unavailable numeric values,
-never a fabricated zero; WAN state and unavailable observation time use
-`unknown`. Unknown router state strings are not echoed. `observed_at` is UTC
+use exact integer byte totals and never fabricate a zero: unavailable numeric
+values are explicit `null` in JSON and explicit `unknown` in compact output;
+WAN state and unavailable observation time use `unknown`. Unknown router state strings are not echoed. `observed_at` is UTC
 RFC 3339 with fractional seconds when needed, taken after the final counter
 read. Reads are sequential observations, not an atomic router snapshot.
 
@@ -183,7 +183,7 @@ A failed first sample emits no stdout. Any later failure retains earlier complet
 samples, emits a sanitized structured error on **stderr** in the selected format,
 and terminates immediately; consumers must check the exit status. There are no
 skipped failures, partial samples, or polling retries (the normal Digest
-challenge exchange is still allowed). Missing fields are null; malformed numeric
+challenge exchange is still allowed). Missing fields are null (`unknown` in compact output); malformed numeric
 fields are protocol errors. Standard exits apply: `2` configuration/usage, `3`
 auth, `4` network (including `tls_untrusted` and `watch_timeout`), `5` unsupported,
 `6` router/protocol; output failure is `output_failed`, exit `1`. Error messages

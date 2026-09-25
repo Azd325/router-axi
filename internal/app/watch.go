@@ -155,14 +155,14 @@ func writeWatchSample(w io.Writer, sample watchSample) error {
 
 func watchUint(value *uint64) string {
 	if value == nil {
-		return "null"
+		return "unknown"
 	}
 	return strconv.FormatUint(*value, 10)
 }
 
 func watchRate(value *float64) string {
 	if value == nil {
-		return "null"
+		return "unknown"
 	}
 	return strconv.FormatFloat(*value, 'f', -1, 64)
 }

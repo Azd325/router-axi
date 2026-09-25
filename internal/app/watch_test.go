@@ -89,7 +89,7 @@ func TestWatchJSONLAndCompactContract(t *testing.T) {
 		}
 		var out, stderr bytes.Buffer
 		code := watchApp(reader).Run(t.Context(), args, &out, &stderr)
-		want := "sample_1[1]{observed_at,wan_status,wan_uptime_seconds,total_download_bytes,total_upload_bytes,download_delta_bytes,upload_delta_bytes,download_bytes_per_second,upload_bytes_per_second}:\n  \"2026-01-02T03:04:05Z\",connected,100,100,40,null,null,null,null\n"
+		want := "sample_1[1]{observed_at,wan_status,wan_uptime_seconds,total_download_bytes,total_upload_bytes,download_delta_bytes,upload_delta_bytes,download_bytes_per_second,upload_bytes_per_second}:\n  \"2026-01-02T03:04:05Z\",connected,100,100,40,unknown,unknown,unknown,unknown\n"
 		if jsonOutput {
 			want = "{\"sample\":1,\"observed_at\":\"2026-01-02T03:04:05Z\",\"wan_status\":\"connected\",\"wan_uptime_seconds\":100,\"total_download_bytes\":100,\"total_upload_bytes\":40,\"download_delta_bytes\":null,\"upload_delta_bytes\":null,\"download_bytes_per_second\":null,\"upload_bytes_per_second\":null}\n"
 		}
@@ -100,14 +100,21 @@ func TestWatchJSONLAndCompactContract(t *testing.T) {
 }
 
 func TestWatchUnknownValues(t *testing.T) {
-	reader := &watchReader{read: func(context.Context, int) (tr064.WatchSnapshot, error) { return tr064.WatchSnapshot{}, nil }}
-	var out, stderr bytes.Buffer
-	if code := watchApp(reader).Run(t.Context(), []string{"watch", "--count", "1", "--json"}, &out, &stderr); code != 0 {
-		t.Fatal(code)
-	}
-	want := "{\"sample\":1,\"observed_at\":\"unknown\",\"wan_status\":\"unknown\",\"wan_uptime_seconds\":null,\"total_download_bytes\":null,\"total_upload_bytes\":null,\"download_delta_bytes\":null,\"upload_delta_bytes\":null,\"download_bytes_per_second\":null,\"upload_bytes_per_second\":null}\n"
-	if out.String() != want {
-		t.Fatal(out.String())
+	for _, jsonOutput := range []bool{false, true} {
+		reader := &watchReader{read: func(context.Context, int) (tr064.WatchSnapshot, error) { return tr064.WatchSnapshot{}, nil }}
+		args := []string{"watch", "--count", "1"}
+		want := "sample_1[1]{observed_at,wan_status,wan_uptime_seconds,total_download_bytes,total_upload_bytes,download_delta_bytes,upload_delta_bytes,download_bytes_per_second,upload_bytes_per_second}:\n  \"unknown\",unknown,unknown,unknown,unknown,unknown,unknown,unknown,unknown\n"
+		if jsonOutput {
+			args = append(args, "--json")
+			want = "{\"sample\":1,\"observed_at\":\"unknown\",\"wan_status\":\"unknown\",\"wan_uptime_seconds\":null,\"total_download_bytes\":null,\"total_upload_bytes\":null,\"download_delta_bytes\":null,\"upload_delta_bytes\":null,\"download_bytes_per_second\":null,\"upload_bytes_per_second\":null}\n"
+		}
+		var out, stderr bytes.Buffer
+		if code := watchApp(reader).Run(t.Context(), args, &out, &stderr); code != 0 {
+			t.Fatal(code)
+		}
+		if out.String() != want {
+			t.Fatal(out.String())
+		}
 	}
 }
 
