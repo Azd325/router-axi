@@ -297,7 +297,7 @@ func TestVersionFlagsAnswerBeforeRouterWork(t *testing.T) {
 	factoryCalled := false
 	application := New(func(Config) (Reader, error) { factoryCalled = true; return fakeReader{}, nil }, func(string) string { return "" })
 	application.Version = "1.2.3"
-	for _, args := range [][]string{{"--version"}, {"-v"}, {"-V"}, {"version"}, {"-v", "--bogus"}} {
+	for _, args := range [][]string{{"--version"}, {"-v"}, {"-V"}, {"version"}} {
 		var stdout, stderr bytes.Buffer
 		if code := application.Run(t.Context(), args, &stdout, &stderr); code != ExitOK || stderr.Len() != 0 {
 			t.Fatalf("args=%v code=%d stderr=%q", args, code, stderr.String())
@@ -316,6 +316,22 @@ func TestVersionFlagsAnswerBeforeRouterWork(t *testing.T) {
 	}
 	if factoryCalled {
 		t.Fatal("version fast path contacted the router")
+	}
+}
+
+func TestVersionAliasesRejectTrailingArguments(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" })
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{args: []string{"--version", "--bogus"}, want: "unknown option: --bogus"},
+		{args: []string{"-v", "--host", "router.test"}, want: "--version, -v, and -V must be used alone"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := application.Run(t.Context(), test.args, &stdout, &stderr); code != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), test.want) {
+			t.Fatalf("args=%v code=%d stdout=%q stderr=%q want=%q", test.args, code, stdout.String(), stderr.String(), test.want)
+		}
 	}
 }
 

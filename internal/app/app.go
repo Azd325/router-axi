@@ -429,7 +429,6 @@ func parse(args []string) (options, error) {
 			opts.force = true
 		case "--version", "-v", "-V":
 			opts.versionFlag = true
-			return opts, nil
 		default:
 			if strings.HasPrefix(args[i], "-") {
 				option, _, _ := strings.Cut(args[i], "=")
@@ -448,6 +447,9 @@ func parse(args []string) (options, error) {
 			}
 			return opts, errors.New("exactly one command is required")
 		}
+	}
+	if opts.versionFlag && len(args) != 1 {
+		return opts, errors.New("--version, -v, and -V must be used alone")
 	}
 	if err := validateFlagContext(opts); err != nil {
 		return opts, err
