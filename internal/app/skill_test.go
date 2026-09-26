@@ -141,7 +141,7 @@ func TestSkillInstallRejectsUnrelatedFlagsBeforeWriting(t *testing.T) {
 	application.homeDir = func() (string, error) { return dir, nil }
 	var stdout, stderr bytes.Buffer
 	code := application.Run(t.Context(), []string{"skill", "install", "--output", output, "--force"}, &stdout, &stderr)
-	if code != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "--output is valid only with backup") {
+	if code != ExitUsage || stderr.Len() != 0 || !strings.Contains(stdout.String(), "--output is valid only with backup") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if _, err := os.Stat(output); !os.IsNotExist(err) {
@@ -199,9 +199,9 @@ func TestSkillUsageErrors(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, _, stderr := runTest(t, testCase.args...)
-			if !strings.Contains(stderr, testCase.code) {
-				t.Fatalf("stderr = %q, want code %q", stderr, testCase.code)
+			_, stdout, stderr := runTest(t, testCase.args...)
+			if stderr != "" || !strings.Contains(stdout, testCase.code) {
+				t.Fatalf("stdout = %q, stderr = %q, want code %q", stdout, stderr, testCase.code)
 			}
 		})
 	}

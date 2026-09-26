@@ -130,7 +130,7 @@ func TestWatchBoundsBeforeFactory(t *testing.T) {
 	application := New(func(Config) (Reader, error) { t.Fatal("factory called for invalid grammar"); return nil, nil }, func(string) string { return "" })
 	for _, args := range cases {
 		var out, stderr bytes.Buffer
-		if code := application.Run(t.Context(), append(args, "--json"), &out, &stderr); code != ExitUsage || out.Len() != 0 || !json.Valid(bytes.TrimSpace(stderr.Bytes())) {
+		if code := application.Run(t.Context(), append(args, "--json"), &out, &stderr); code != ExitUsage || stderr.Len() != 0 || !json.Valid(bytes.TrimSpace(out.Bytes())) {
 			t.Fatalf("args=%v code=%d out=%s err=%s", args, code, out.String(), stderr.String())
 		}
 	}
@@ -250,14 +250,21 @@ func TestWatchReadFailures(t *testing.T) {
 					}
 					var out, stderr bytes.Buffer
 					code := watchApp(reader).Run(t.Context(), args, &out, &stderr)
-					if code != test.code || reader.calls != failAt || !strings.Contains(stderr.String(), test.marker) || strings.Contains(out.String()+stderr.String(), "private") {
-						t.Fatalf("code=%d calls=%d error=%s", code, reader.calls, stderr.String())
+					if code != test.code || reader.calls != failAt || stderr.Len() != 0 || !strings.Contains(out.String(), test.marker) || strings.Contains(out.String(), "private") {
+						t.Fatalf("code=%d calls=%d output=%s stderr=%s", code, reader.calls, out.String(), stderr.String())
 					}
-					if (failAt == 1) != (out.Len() == 0) {
-						t.Fatal("partial sample emitted or previous output lost")
-					}
-					if jsonOutput && !json.Valid(bytes.TrimSpace(stderr.Bytes())) {
-						t.Fatal("error is not JSON")
+					if jsonOutput {
+						lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+						if len(lines) != failAt || !json.Valid([]byte(lines[len(lines)-1])) {
+							t.Fatal("watch error is not a terminal JSONL record")
+						}
+					} else {
+						// Compact output keeps every completed sample before the final error
+						// record; a failed first sample writes no sample table at all.
+						samples := strings.Count(out.String(), "sample_")
+						if samples != failAt-1 {
+							t.Fatalf("completed samples=%d output=%s", samples, out.String())
+						}
 					}
 					time.Sleep(time.Minute)
 					if reader.calls != failAt {
@@ -295,8 +302,14 @@ func TestWatchCancellationAndDeadline(t *testing.T) {
 				if phase == "deadline" {
 					want, marker = ExitNetwork, "watch_timeout"
 				}
-				if code != want || !strings.Contains(stderr.String(), marker) {
-					t.Fatalf("code=%d error=%s", code, stderr.String())
+				lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+				if code != want || stderr.Len() != 0 || len(lines) == 0 || !json.Valid([]byte(lines[len(lines)-1])) || !strings.Contains(lines[len(lines)-1], marker) {
+					t.Fatalf("code=%d output=%s stderr=%s", code, out.String(), stderr.String())
+				}
+				for _, line := range lines[:len(lines)-1] {
+					if !json.Valid([]byte(line)) {
+						t.Fatalf("stdout is not JSONL: %s", out.String())
+					}
 				}
 				wantCalls := 1
 				if phase == "before" {
@@ -337,7 +350,7 @@ func TestWatchInvalidHostRedacted(t *testing.T) {
 	application := New(func(Config) (Reader, error) { return nil, errors.New("private endpoint") }, func(string) string { return "" })
 	var out, stderr bytes.Buffer
 	code := application.Run(t.Context(), []string{"watch", "--host", "http://synthetic.invalid", "--json"}, &out, &stderr)
-	if code != ExitUsage || out.Len() != 0 || strings.Contains(stderr.String(), "private") {
+	if code != ExitUsage || stderr.Len() != 0 || strings.Contains(out.String(), "private") || !json.Valid(bytes.TrimSpace(out.Bytes())) {
 		t.Fatal("configuration error leaked")
 	}
 }
@@ -394,7 +407,7 @@ func TestWatchSignals(t *testing.T) {
 				}
 				err = cmd.Wait()
 				var exit *exec.ExitError
-				if !errors.As(err, &exit) || exit.ExitCode() != ExitInterrupted || len(rest) != 0 || !strings.Contains(stderr.String(), "interrupted") {
+				if !errors.As(err, &exit) || exit.ExitCode() != ExitInterrupted || stderr.Len() != 0 || !json.Valid(bytes.TrimSpace(rest)) || !strings.Contains(string(rest), "interrupted") {
 					t.Fatalf("exit=%v trailing=%q err=%s", err, rest, stderr.String())
 				}
 			})

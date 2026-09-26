@@ -7,7 +7,7 @@ It owns exactly one thing: an agent-ergonomic CLI over supported router capabili
 ## Agent-facing interface
 
 Every command is non-interactive and scriptable.
-Commands return compact structured text by default and JSON when explicitly requested.
+Commands return compact structured text by default and JSON when explicitly requested; stdout carries both structured results and errors, while stderr is reserved for diagnostics (currently watch's `output_failed` fallback after stdout fails).
 Lists expose only the fields needed for identification and decision-making by default.
 Large bodies are truncated with their omitted size and a clear full-content escape hatch.
 Empty results state that zero results were found.
@@ -20,7 +20,7 @@ Read-only watch streams are finite by default with hard polling bounds, explicit
 unknown values, observation timestamps, and JSONL for streaming consumers.
 Derived rates describe observed counter increases, not inferred traffic across
 resets. Cancellation stops polling; a failed sample terminates with a structured
-error rather than silently dropping an observation.
+error rather than silently dropping an observation. Watch JSON is JSONL: successful sample objects remain on stdout and a terminal structured error is the final JSON line.
 
 ## Read before change
 
@@ -46,7 +46,7 @@ and never retries or polls after initiation. A lost response is an uncertain
 outcome, not success or permission to repeat. The operator waits for recovery,
 reconnects if necessary, and checks the router manually; no recovery deadline
 or rollback is promised.
-Commands report a machine-readable result and a non-zero exit code on failure.
+Commands report a machine-readable result or structured error on stdout and a non-zero exit code on failure. Doctor keeps completed compact checks followed by the error; its JSON partial failure is one `{"doctor":<doctor>,"error":<structured error>}` object.
 Exit codes follow 0 success (including confirmed no-ops), 1 internal, and
 2 usage, extended by 3 authentication, 4 network, 5 unsupported capability,
 and 6 router protocol error; any non-zero exit code always means failure.

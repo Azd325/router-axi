@@ -59,8 +59,11 @@ documentation; run the CLI for live router state.
 Compact AXI text by default (`key:` blocks, or `list[N]{columns}:` tables);
 `--json` emits JSON on stdout with stable field order. Empty results state
 zero results explicitly. Successful commands suggest the next operation with
-`next:`. Errors are structured on stderr in the selected format with `code`,
-`message`, and usually `hint`; JSON consumers must also check the exit code.
+`next:`. Structured results and errors use stdout in the selected format;
+stderr is reserved for diagnostics, including watch's `output_failed` fallback
+when stdout itself fails. Errors have `code`, `message`, and usually `hint`;
+JSON consumers must also check the exit code. Watch appends a terminal
+structured error record to stdout when polling fails.
 
 ## Exit codes
 

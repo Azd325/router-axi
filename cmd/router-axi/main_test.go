@@ -36,10 +36,10 @@ func TestRunUnknownCommand(t *testing.T) {
 	if exitCode == 0 {
 		t.Fatal("exit code = 0, want non-zero")
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
+	if !strings.Contains(stdout.String(), "code: unknown_command") {
+		t.Fatalf("stdout = %q, want structured error code", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "code: unknown_command") {
-		t.Fatalf("stderr = %q, want structured error code", stderr.String())
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
 	}
 }

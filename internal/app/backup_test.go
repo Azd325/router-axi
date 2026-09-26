@@ -98,7 +98,7 @@ func TestBackupGrammarBeforeFactory(t *testing.T) {
 			}
 			var stdout, stderr bytes.Buffer
 			code := application.Run(t.Context(), input, &stdout, &stderr)
-			if code != ExitUsage || stdout.Len() != 0 || stderr.Len() == 0 || (jsonOutput && !json.Valid(stderr.Bytes())) {
+			if code != ExitUsage || stderr.Len() != 0 || (jsonOutput && !json.Valid(stdout.Bytes())) || !strings.Contains(stdout.String(), "error") {
 				t.Fatalf("invalid grammar not rejected: %v", args)
 			}
 		}
@@ -131,10 +131,10 @@ func TestBackupPassphraseIsEnvironmentOnly(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	path := filepath.Join(t.TempDir(), "fritz.export")
 	code := application.Run(t.Context(), []string{"backup", "--output", path}, &stdout, &stderr)
-	if code != ExitUsage || stdout.Len() != 0 || exported || !strings.Contains(stderr.String(), "backup_passphrase_missing") || !strings.Contains(stderr.String(), "ROUTER_AXI_BACKUP_PASSWORD") {
+	if code != ExitUsage || stderr.Len() != 0 || exported || !strings.Contains(stdout.String(), "backup_passphrase_missing") || !strings.Contains(stdout.String(), "ROUTER_AXI_BACKUP_PASSWORD") {
 		t.Fatalf("code=%d exported=%t stderr=%q", code, exported, stderr.String())
 	}
-	if strings.Contains(stderr.String(), "private-login-password") {
+	if strings.Contains(stdout.String(), "private-login-password") {
 		t.Fatal("the login password leaked into the backup error")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -161,7 +161,7 @@ func TestBackupNeverOverwritesWithoutForce(t *testing.T) {
 		t.Fatal(err)
 	}
 	code, stdout, stderr := runBackupTest(t, func(string) string { return "" }, "backup", "--output", path)
-	if code != ExitUsage || stdout != "" || !strings.Contains(stderr, "output_exists") || !strings.Contains(stderr, "--force") {
+	if code != ExitUsage || stderr != "" || !strings.Contains(stdout, "output_exists") || !strings.Contains(stdout, "--force") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	content, err := os.ReadFile(path)
@@ -188,7 +188,7 @@ func TestBackupWritesAtomically(t *testing.T) {
 		return fakeReader{err: &tr064.Error{Kind: "network", Operation: "backup", Message: "router could not be reached during the configuration export"}}, nil
 	}, backupTestGetenv(nil))
 	var stdout, stderr bytes.Buffer
-	if code := application.Run(t.Context(), []string{"backup", "--output", path}, &stdout, &stderr); code != ExitNetwork || stdout.Len() != 0 {
+	if code := application.Run(t.Context(), []string{"backup", "--output", path}, &stdout, &stderr); code != ExitNetwork || stderr.Len() != 0 || !strings.Contains(stdout.String(), "router_unreachable") {
 		t.Fatalf("code=%d stdout=%q", code, stdout.String())
 	}
 	entries, err := os.ReadDir(dir)
@@ -220,7 +220,7 @@ func TestBackupOverwriteRaceIsRefused(t *testing.T) {
 	}, backupTestGetenv(nil))
 	var stdout, stderr bytes.Buffer
 	code := application.Run(t.Context(), []string{"backup", "--output", path}, &stdout, &stderr)
-	if code != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "output_exists") {
+	if code != ExitUsage || stderr.Len() != 0 || !strings.Contains(stdout.String(), "output_exists") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	content, err := os.ReadFile(path)
@@ -259,7 +259,7 @@ func TestBackupRejectsUnsafeOutputPaths(t *testing.T) {
 			application := New(func(Config) (Reader, error) { return fakeReader{}, nil }, backupTestGetenv(nil))
 			var stdout, stderr bytes.Buffer
 			code := application.Run(t.Context(), args, &stdout, &stderr)
-			if code != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), test.want) {
+			if code != ExitUsage || stderr.Len() != 0 || !strings.Contains(stdout.String(), test.want) {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 			}
 		})
@@ -277,7 +277,7 @@ func TestBackupWriteFailureIsSanitized(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 	code, stdout, stderr := runBackupTest(t, func(string) string { return "" }, "backup", "--output", path)
-	if code != ExitInternal || stdout != "" || !strings.Contains(stderr, "backup_write_failed") || strings.Contains(stderr, syntheticBackupPayload) {
+	if code != ExitInternal || stderr != "" || !strings.Contains(stdout, "backup_write_failed") || strings.Contains(stdout, syntheticBackupPayload) {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -365,7 +365,7 @@ func TestBackupClientFailuresAreSanitized(t *testing.T) {
 	})
 	var stdout, stderr bytes.Buffer
 	code := application.Run(t.Context(), []string{"backup", "--output", path, "--host", server.URL}, &stdout, &stderr)
-	if code != ExitRouter || stdout.Len() != 0 || stderr.Len() == 0 {
+	if code != ExitRouter || stderr.Len() != 0 || !strings.Contains(stdout.String(), "router_protocol_error") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if strings.Contains(stdout.String()+stderr.String(), "synthetic-sensitive") || strings.Contains(stdout.String()+stderr.String(), backupTestPassphrase) || strings.Contains(stdout.String()+stderr.String(), server.URL) {
@@ -391,7 +391,7 @@ func TestBackupRefusesPlaintextOriginBeforeContactingRouter(t *testing.T) {
 		}
 		var stdout, stderr bytes.Buffer
 		code := application.Run(t.Context(), args, &stdout, &stderr)
-		if code != ExitUsage || stdout.Len() != 0 || !strings.Contains(stderr.String(), "backup_requires_https") || !strings.Contains(stderr.String(), "--host https://") || strings.Contains(stderr.String(), backupTestPassphrase) {
+		if code != ExitUsage || stderr.Len() != 0 || !strings.Contains(stdout.String(), "backup_requires_https") || !strings.Contains(stdout.String(), "--host https://") || strings.Contains(stdout.String(), backupTestPassphrase) {
 			t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 		}
 	}
@@ -414,10 +414,10 @@ func TestBackupReportsUntrustedCertificate(t *testing.T) {
 	var payload struct {
 		Error struct{ Code, Message, Hint string } `json:"error"`
 	}
-	if err := json.Unmarshal(stderr.Bytes(), &payload); err != nil {
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if code != ExitNetwork || stdout.Len() != 0 || payload.Error.Code != "tls_untrusted" || !strings.Contains(payload.Error.Hint, "certificate") {
+	if code != ExitNetwork || stderr.Len() != 0 || payload.Error.Code != "tls_untrusted" || !strings.Contains(payload.Error.Hint, "certificate") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -436,7 +436,7 @@ func TestBackupReportsUnsupportedHardLinks(t *testing.T) {
 			dir := t.TempDir()
 			path := filepath.Join(dir, "fritz.export")
 			code, stdout, stderr := runBackupTest(t, nil, "backup", "--output", path)
-			if code != ExitInternal || stdout != "" || !strings.Contains(stderr, "backup_link_unsupported") || !strings.Contains(stderr, "--force") {
+			if code != ExitInternal || stderr != "" || !strings.Contains(stdout, "backup_link_unsupported") || !strings.Contains(stdout, "--force") {
 				t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 			}
 			entries, err := os.ReadDir(dir)
