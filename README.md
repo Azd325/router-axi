@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The read-only MVP provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces.
+The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, reboot, and configuration export.
 
 ## Design constraints
 
