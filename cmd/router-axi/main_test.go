@@ -2,9 +2,35 @@ package main
 
 import (
 	"bytes"
+	"runtime/debug"
 	"strings"
 	"testing"
 )
+
+func TestBuildVersionUsesTaggedModuleVersion(t *testing.T) {
+	original := readBuildInfo
+	t.Cleanup(func() { readBuildInfo = original })
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "v0.4.0"}}, true
+	}
+	if got := buildVersion(); got != "v0.4.0" {
+		t.Fatalf("buildVersion() = %q, want v0.4.0", got)
+	}
+}
+
+func TestBuildVersionFallsBackToLinkerVersion(t *testing.T) {
+	originalReadBuildInfo, originalVersion := readBuildInfo, version
+	t.Cleanup(func() {
+		readBuildInfo, version = originalReadBuildInfo, originalVersion
+	})
+	version = "dev"
+	readBuildInfo = func() (*debug.BuildInfo, bool) {
+		return &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true
+	}
+	if got := buildVersion(); got != "dev" {
+		t.Fatalf("buildVersion() = %q, want dev", got)
+	}
+}
 
 func TestRunVersion(t *testing.T) {
 	for _, args := range [][]string{{"version"}, {"--version"}, {"-v"}, {"-V"}} {

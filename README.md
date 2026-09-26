@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The read-only MVP provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces.
+The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, reboot, and configuration export.
 
 ## Design constraints
 
@@ -32,10 +32,10 @@ See [VISION.md](VISION.md) for the acceptance policy. Contributors should read
 
 ## Installation
 
-Install v0.1.0 with Go:
+Install v0.4.0 with Go:
 
 ```sh
-go install github.com/Azd325/router-axi/cmd/router-axi@v0.1.0
+go install github.com/Azd325/router-axi/cmd/router-axi@v0.4.0
 ```
 
 This installs `router-axi` in `GOBIN`, or in `GOPATH/bin` when `GOBIN` is not
@@ -151,8 +151,7 @@ classification, not a physical switch port or inferred connection detail.
 
 ### Bounded WAN and traffic watch
 
-`watch` requires the current checkout; it is not in v0.2.0. It is a read-only,
-non-interactive stream, not a daemon. Defaults are **6 samples with a 5s
+`watch` is a read-only, non-interactive stream, not a daemon. Defaults are **6 samples with a 5s
 interval**. `--count` accepts 1–3600 and `--interval` accepts Go durations from
 1s through 1m (for example `1500ms`). Zero, negative, malformed, out-of-range,
 and duplicate values are usage errors before any router request. These flags
@@ -328,7 +327,7 @@ or verify mutation support.
 
 ### Router reboot
 
-`reboot` requires the current checkout. It uses only the documented
+`reboot` uses only the documented
 [FRITZ! DeviceConfig v11, §2.6](https://fritz.support/resources/TR-064_Device_Config.pdf)
 `urn:dslforum-org:service:DeviceConfig:1` action `Reboot`, with **no input or
 output arguments**, at the control URL from the TR-064 device description.
@@ -384,7 +383,7 @@ acceptance and recovery are **not hardware-validated**.
 
 ### Configuration backup
 
-`backup` requires the current checkout. It uses only the documented
+`backup` uses only the documented
 [FRITZ! DeviceConfig v11, §2.8](https://fritz.support/resources/TR-064_Device_Config.pdf)
 action `urn:dslforum-org:service:DeviceConfig:1`
 `X_AVM-DE_GetConfigFile`, with the input argument `NewX_AVM-DE_Password` and the
@@ -455,8 +454,6 @@ verify that the export can be restored.
 
 ### Wi-Fi inspection
 
-Wi-Fi inspection requires the current checkout; it is not included in v0.1.0.
-
 `wifi` enumerates every advertised WLANConfiguration service instance, including
 logical guest access points; an instance is not necessarily a physical radio.
 It returns all instances, sorted by the numeric suffix of their advertised
@@ -516,8 +513,6 @@ fixture-backed, not inferred from a model name.
 
 ### Guest Wi-Fi inspection
 
-Guest Wi-Fi inspection requires the current checkout; it is not included in v0.1.0.
-
 `guest` is a distinct top-level read command because the existing CLI grammar has
 single-word inspection commands; `wifi` accepts only the established mutation
 actions `enable|disable`. It enumerates every advertised WLANConfiguration service
@@ -568,8 +563,7 @@ No guest enable/disable command or other mutation is provided.
 
 ### Port-forward inspection
 
-`forwards` requires the current checkout; it is not included in v0.1.0.
-It reads all mappings, including disabled ones, from the router’s active WAN
+`forwards` reads all mappings, including disabled ones, from the router’s active WAN
 service, resolved through the documented
 `Layer3Forwarding:GetDefaultConnectionService` action, which returns the
 default connection’s service identifier. FRITZ! routers return that identifier
