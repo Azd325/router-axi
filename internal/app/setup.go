@@ -1,6 +1,8 @@
 package app
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +18,11 @@ type setupResult struct {
 	Agent   string `json:"agent"`
 	State   string `json:"state"`
 	Command string `json:"command,omitempty"`
+}
+
+type ownerRecord struct {
+	Command     string `json:"command"`
+	ContentHash string `json:"content_hash"`
 }
 
 type hookLocation struct {
@@ -138,7 +145,7 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
-func manageHookJSON(action string, location hookLocation, command, owner string) (setupResult, error) {
+func manageHookJSON(action string, location hookLocation, command string, owner ownerRecord) (setupResult, error) {
 	root := map[string]any{}
 	data, err := os.ReadFile(location.path)
 	if err != nil && !os.IsNotExist(err) {
@@ -146,6 +153,9 @@ func manageHookJSON(action string, location hookLocation, command, owner string)
 	}
 	if len(data) > 0 && json.Unmarshal(data, &root) != nil {
 		return setupResult{}, errors.New("managed hook configuration is not valid JSON")
+	}
+	if !ownerMatches(owner, data) {
+		owner = ownerRecord{}
 	}
 	if root == nil {
 		return setupResult{}, errors.New("managed hook configuration must be a JSON object")
@@ -186,7 +196,7 @@ func manageHookJSON(action string, location hookLocation, command, owner string)
 	case "check":
 		return setupResult{Agent: location.agent, State: state, Command: command}, nil
 	case "install":
-		if owner == "" && hasSessionMarker(entries) {
+		if owner.Command == "" && hasSessionMarker(entries) {
 			return setupResult{}, errors.New("managed session hook has no owner record; refuse ambiguous configuration")
 		}
 		entry := map[string]any{"matcher": "", "hooks": []any{map[string]any{"type": "command", "command": command}}}
@@ -218,14 +228,14 @@ func manageHookJSON(action string, location hookLocation, command, owner string)
 	if action == "uninstall" {
 		removeMarker(location.markerPath)
 	} else if action == "install" {
-		if err := writeOwner(location.markerPath, command); err != nil {
+		if err := writeOwner(location.markerPath, ownerRecord{Command: command, ContentHash: contentHash(append(encoded, '\n'))}); err != nil {
 			return setupResult{}, err
 		}
 	}
 	return setupResult{Agent: location.agent, State: state, Command: command}, nil
 }
 
-func isManagedHook(value any, owner string) bool {
+func isManagedHook(value any, owner ownerRecord) bool {
 	entry, ok := value.(map[string]any)
 	if !ok || len(entry) != 2 || entry["matcher"] != "" {
 		return false
@@ -242,8 +252,8 @@ func isManagedHook(value any, owner string) bool {
 	return ok && isManagedCommand(command, owner)
 }
 
-func isManagedCommand(command, owner string) bool {
-	return owner != "" && command == owner
+func isManagedCommand(command string, owner ownerRecord) bool {
+	return owner.Command != "" && command == owner.Command
 }
 
 func hasSessionMarker(entries []any) bool {
@@ -318,10 +328,13 @@ func ensureOpenCodeDependency(path string) error {
 	return atomicWrite(path, append(encoded, '\n'), 0o600)
 }
 
-func manageOpenCodePlugin(action string, location hookLocation, command, owner string) (setupResult, error) {
+func manageOpenCodePlugin(action string, location hookLocation, command string, owner ownerRecord) (setupResult, error) {
 	data, err := os.ReadFile(location.path)
 	if err != nil && !os.IsNotExist(err) {
 		return setupResult{}, err
+	}
+	if !ownerMatches(owner, data) {
+		owner = ownerRecord{}
 	}
 	managed := isManagedOpenCodePlugin(data, owner)
 	if len(data) > 0 && !managed {
@@ -355,7 +368,7 @@ func manageOpenCodePlugin(action string, location hookLocation, command, owner s
 		if err := atomicWrite(location.path, []byte(plugin), 0o600); err != nil {
 			return setupResult{}, err
 		}
-		if err := writeOwner(location.markerPath, command); err != nil {
+		if err := writeOwner(location.markerPath, ownerRecord{Command: command, ContentHash: contentHash([]byte(plugin))}); err != nil {
 			return setupResult{}, err
 		}
 		return setupResult{Agent: location.agent, State: "installed", Command: command}, nil
@@ -364,7 +377,7 @@ func manageOpenCodePlugin(action string, location hookLocation, command, owner s
 	}
 }
 
-func isManagedOpenCodePlugin(data []byte, owner string) bool {
+func isManagedOpenCodePlugin(data []byte, owner ownerRecord) bool {
 	content := string(data)
 	prefix := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport type { Plugin } from \"@opencode-ai/plugin\";\n\nconst injected = new Set<string>();\n\nexport const RouterAxiPlugin: Plugin = async () => ({\n  \"experimental.chat.system.transform\": async (input, output) => {\n    if (input.sessionID && injected.has(input.sessionID)) return;\n    const context = execFileSync("
 	suffix := ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    if (input.sessionID) injected.add(input.sessionID);\n    output.system.push(context);\n  },\n});\n\nexport default RouterAxiPlugin;\n"
@@ -405,26 +418,36 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	return os.Rename(tmpPath, path)
 }
 
-func readOwner(path string) (string, error) {
+func readOwner(path string) (ownerRecord, error) {
 	data, err := os.ReadFile(path)
 	if err == nil {
-		owner := strings.TrimSpace(string(data))
-		if owner == "" {
-			return "", errors.New("managed session owner record is empty")
-		}
-		if !strings.HasSuffix(owner, "# "+sessionHookMarker) {
-			return "", nil
+		var owner ownerRecord
+		if json.Unmarshal(data, &owner) != nil || owner.Command == "" || owner.ContentHash == "" {
+			return ownerRecord{}, nil
 		}
 		return owner, nil
 	}
 	if os.IsNotExist(err) {
-		return "", nil
+		return ownerRecord{}, nil
 	}
-	return "", err
+	return ownerRecord{}, err
 }
 
-func writeOwner(path, owner string) error {
-	return atomicWrite(path, []byte(owner+"\n"), 0o600)
+func writeOwner(path string, owner ownerRecord) error {
+	data, err := json.Marshal(owner)
+	if err != nil {
+		return err
+	}
+	return atomicWrite(path, append(data, '\n'), 0o600)
+}
+
+func ownerMatches(owner ownerRecord, data []byte) bool {
+	return owner.Command != "" && owner.ContentHash != "" && owner.ContentHash == contentHash(data)
+}
+
+func contentHash(data []byte) string {
+	digest := sha256.Sum256(data)
+	return hex.EncodeToString(digest[:])
 }
 
 func removeMarker(path string) {
