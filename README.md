@@ -14,7 +14,7 @@ The current release provides device information, WAN status, traffic statistics,
 
 ## Agent integrations
 
-Session integrations are explicit opt-in and add only a compact **offline** dashboard at session start; they never contact the router, read credentials, or register automatically. Install, inspect, or remove the managed integration for Claude Code, Codex, OpenCode, or all three:
+Session integrations are explicit opt-in and add only a compact **offline** dashboard to agent sessions; they never contact the router, read credentials, or register automatically. Install, inspect, or remove the managed integration for Claude Code, Codex, OpenCode, or all three:
 
 ```sh
 router-axi setup install --agent all
