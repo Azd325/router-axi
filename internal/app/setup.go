@@ -218,7 +218,12 @@ func isManagedHook(value any) bool {
 		return false
 	}
 	command, ok := hook["command"].(string)
-	return ok && strings.HasSuffix(command, " # "+sessionHookMarker)
+	return ok && isManagedCommand(command)
+}
+
+func isManagedCommand(command string) bool {
+	const suffix = "' session dashboard # " + sessionHookMarker
+	return strings.HasPrefix(command, "'") && strings.HasSuffix(command, suffix) && len(command) > len(suffix)
 }
 
 func manageOpenCodePlugin(action string, location hookLocation, command string) (setupResult, error) {
@@ -246,7 +251,7 @@ func manageOpenCodePlugin(action string, location hookLocation, command string) 
 		}
 		return setupResult{Agent: location.agent, State: "removed"}, nil
 	case "install":
-		plugin := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport { Plugin } from \"@opencode/plugin\";\n\nexport default Plugin.define({\n  id: \"router-axi-session\",\n  async setup(ctx) {\n    const context = execFileSync(" + jsonStringCommand(command) + ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    await ctx.session.hook(\"context\", (event) => {\n      event.system.push({ type: \"text\", text: context });\n    });\n  },\n});\n"
+		plugin := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport { Plugin } from \"@opencode/plugin\";\n\nexport default Plugin.define({\n  id: \"router-axi-session\",\n  async setup(ctx) {\n    const injected = new Set();\n    const context = execFileSync(" + jsonStringCommand(command) + ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    await ctx.session.hook(\"context\", (event) => {\n      if (injected.has(event.sessionID)) return;\n      injected.add(event.sessionID);\n      event.system.push({ type: \"text\", text: context });\n    });\n  },\n});\n"
 		if err := atomicWrite(location.path, []byte(plugin), 0o600); err != nil {
 			return setupResult{}, err
 		}
@@ -258,12 +263,14 @@ func manageOpenCodePlugin(action string, location hookLocation, command string) 
 
 func isManagedOpenCodePlugin(data []byte) bool {
 	content := string(data)
-	return strings.HasPrefix(content, "// "+sessionHookMarker+"\nimport { execFileSync } from \"node:child_process\";\n") &&
-		strings.Contains(content, "import { Plugin } from \"@opencode/plugin\";") &&
-		strings.Contains(content, "export default Plugin.define({") &&
-		strings.Contains(content, "await ctx.session.hook(\"context\", (event) => {") &&
-		strings.Contains(content, "event.system.push({ type: \"text\", text: context });") &&
-		strings.HasSuffix(content, "});\n")
+	prefix := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport { Plugin } from \"@opencode/plugin\";\n\nexport default Plugin.define({\n  id: \"router-axi-session\",\n  async setup(ctx) {\n    const injected = new Set();\n    const context = execFileSync("
+	suffix := ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    await ctx.session.hook(\"context\", (event) => {\n      if (injected.has(event.sessionID)) return;\n      injected.add(event.sessionID);\n      event.system.push({ type: \"text\", text: context });\n    });\n  },\n});\n"
+	if !strings.HasPrefix(content, prefix) || !strings.HasSuffix(content, suffix) {
+		return false
+	}
+	encodedCommand := strings.TrimSuffix(strings.TrimPrefix(content, prefix), suffix)
+	var command string
+	return json.Unmarshal([]byte(encodedCommand), &command) == nil && isManagedCommand(command)
 }
 
 func jsonStringCommand(value string) string {

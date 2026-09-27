@@ -31,13 +31,6 @@ func TestSetupInstallCheckAndUninstall(t *testing.T) {
 		if !strings.Contains(stdout.String(), "state: installed") {
 			t.Fatalf("install %s stdout=%q", agent, stdout.String())
 		}
-		if agent == "opencode" {
-			pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "router-axi", "index.ts")
-			plugin, err := os.ReadFile(pluginPath)
-			if err != nil || !bytes.Contains(plugin, []byte("export default Plugin.define({")) || !bytes.Contains(plugin, []byte(`ctx.session.hook("context"`)) {
-				t.Fatalf("OpenCode V2 plugin: err=%v content=%q", err, plugin)
-			}
-		}
 		stdout.Reset()
 		if code := application.Run(t.Context(), []string{"setup", "check", "--agent", agent}, &stdout, &stderr); code != ExitOK || !strings.Contains(stdout.String(), "state: installed") {
 			t.Fatalf("check %s: code=%d stdout=%q", agent, code, stdout.String())
@@ -126,12 +119,28 @@ func TestSetupRejectsIncompatibleHookValuesAndUnmanagedMarker(t *testing.T) {
 	if code := application.Run(t.Context(), []string{"setup", "install", "--agent", "claude"}, &stdout, &stderr); code != ExitInternal {
 		t.Fatalf("incompatible hooks: code=%d stdout=%q", code, stdout.String())
 	}
-	if err := os.WriteFile(path, []byte(`{"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"keep router-axi-session-hook"}]}]}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"keep-me # router-axi-session-hook"}]}]}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	stdout.Reset()
 	if code := application.Run(t.Context(), []string{"setup", "uninstall", "--agent", "claude"}, &stdout, &stderr); code != ExitOK || !strings.Contains(stdout.String(), "state: missing") {
 		t.Fatalf("unmanaged marker: code=%d stdout=%q", code, stdout.String())
+	}
+}
+
+func TestSetupRejectsSpoofedOpenCodeMarker(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".config", "opencode", "plugins", "router-axi", "index.ts")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("// "+sessionHookMarker+"\nexport default function unrelated() {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application := setupApp(t, home)
+	var stdout, stderr bytes.Buffer
+	if code := application.Run(t.Context(), []string{"setup", "check", "--agent", "opencode"}, &stdout, &stderr); code != ExitInternal || !strings.Contains(stdout.String(), "occupied by unmanaged content") {
+		t.Fatalf("spoofed plugin: code=%d stdout=%q", code, stdout.String())
 	}
 }
 
