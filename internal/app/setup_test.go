@@ -147,6 +147,12 @@ func TestSetupRollsBackWhenOwnerRecordCannotBeWritten(t *testing.T) {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
 			t.Fatalf("install %s left artifact: err=%v", agent, err)
 		}
+		if agent == "opencode" {
+			manifest := filepath.Join(home, ".config", "opencode", "package.json")
+			if _, err := os.Stat(manifest); !os.IsNotExist(err) {
+				t.Fatalf("install %s left manifest: err=%v", agent, err)
+			}
+		}
 	}
 }
 

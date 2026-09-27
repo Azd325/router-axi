@@ -395,17 +395,27 @@ func manageOpenCodePlugin(action string, location hookLocation, command string, 
 		removeMarker(location.markerPath)
 		return setupResult{Agent: location.agent, State: "removed"}, nil
 	case "install":
+		manifestData, manifestErr := os.ReadFile(location.manifestPath)
+		manifestExists := manifestErr == nil
+		if manifestErr != nil && !os.IsNotExist(manifestErr) {
+			return setupResult{}, manifestErr
+		}
 		if err := ensureOpenCodeDependency(location.manifestPath); err != nil {
 			return setupResult{}, err
 		}
 		plugin := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport type { Plugin } from \"@opencode-ai/plugin\";\n\nconst injected = new Set<string>();\n\nexport const RouterAxiPlugin: Plugin = async () => ({\n  \"experimental.chat.system.transform\": async (input, output) => {\n    if (input.sessionID && injected.has(input.sessionID)) return;\n    const context = execFileSync(" + jsonStringCommand(command) + ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    if (input.sessionID) injected.add(input.sessionID);\n    output.system.push(context);\n  },\n});\n\nexport default RouterAxiPlugin;\n"
 		if err := atomicWrite(location.path, []byte(plugin), 0o600); err != nil {
+			if restoreErr := restoreFile(location.manifestPath, manifestData, manifestExists); restoreErr != nil {
+				return setupResult{}, fmt.Errorf("write plugin: %w; rollback manifest: %v", err, restoreErr)
+			}
 			return setupResult{}, err
 		}
 		_, shapeHash, _ := openCodePluginParts([]byte(plugin))
 		if err := writeOwner(location.markerPath, ownerRecord{Command: command, ShapeHash: shapeHash}); err != nil {
-			if restoreErr := restoreFile(location.path, data, len(data) > 0); restoreErr != nil {
-				return setupResult{}, fmt.Errorf("write managed session owner: %w; rollback plugin: %v", err, restoreErr)
+			pluginErr := restoreFile(location.path, data, len(data) > 0)
+			manifestErr := restoreFile(location.manifestPath, manifestData, manifestExists)
+			if pluginErr != nil || manifestErr != nil {
+				return setupResult{}, fmt.Errorf("write managed session owner: %w; rollback plugin: %v; rollback manifest: %v", err, pluginErr, manifestErr)
 			}
 			return setupResult{}, err
 		}
