@@ -19,8 +19,9 @@ type setupResult struct {
 }
 
 type hookLocation struct {
-	agent string
-	path  string
+	agent        string
+	path         string
+	manifestPath string
 }
 
 func (a *App) runSession(opts options, stdout io.Writer) int {
@@ -94,7 +95,8 @@ func (a *App) setupAgent(action, agent string) (setupResult, error) {
 	case "codex":
 		location.path = filepath.Join(home, ".codex", "hooks.json")
 	case "opencode":
-		location.path = filepath.Join(home, ".config", "opencode", "plugins", "router-axi", "index.ts")
+		location.path = filepath.Join(home, ".config", "opencode", "plugins", "router-axi.ts")
+		location.manifestPath = filepath.Join(home, ".config", "opencode", "package.json")
 	}
 	if agent == "opencode" {
 		if action == "install" {
@@ -223,10 +225,67 @@ func isManagedHook(value any) bool {
 
 func isManagedCommand(command string) bool {
 	const suffix = "' session dashboard # " + sessionHookMarker
-	return strings.HasPrefix(command, "'") && strings.HasSuffix(command, suffix) && len(command) > len(suffix)
+	if !strings.HasPrefix(command, "'") || !strings.HasSuffix(command, suffix) {
+		return false
+	}
+	encodedPath := strings.TrimSuffix(strings.TrimPrefix(command, "'"), suffix)
+	path := strings.ReplaceAll(encodedPath, "'\\''", "'")
+	return filepath.Base(path) == "router-axi" || filepath.Base(path) == ".router-axi"
+}
+
+func openCodeDependency(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(data, &root); err != nil || root == nil {
+		return false, errors.New("OpenCode package.json is not a JSON object")
+	}
+	dependencies, ok := root["dependencies"].(map[string]any)
+	if !ok {
+		return false, nil
+	}
+	_, ok = dependencies["@opencode-ai/plugin"].(string)
+	return ok, nil
+}
+
+func ensureOpenCodeDependency(path string) error {
+	root := map[string]any{}
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if len(data) > 0 && (json.Unmarshal(data, &root) != nil || root == nil) {
+		return errors.New("OpenCode package.json is not a JSON object")
+	}
+	dependencies, ok := root["dependencies"].(map[string]any)
+	if !ok {
+		if _, exists := root["dependencies"]; exists {
+			return errors.New("OpenCode package.json has incompatible dependencies")
+		}
+		dependencies = map[string]any{}
+		root["dependencies"] = dependencies
+	}
+	if _, ok := dependencies["@opencode-ai/plugin"].(string); ok {
+		return nil
+	}
+	dependencies["@opencode-ai/plugin"] = "^1.18.30"
+	encoded, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(path, append(encoded, '\n'), 0o600)
 }
 
 func manageOpenCodePlugin(action string, location hookLocation, command string) (setupResult, error) {
+	dependency, err := openCodeDependency(location.manifestPath)
+	if err != nil {
+		return setupResult{}, err
+	}
 	data, err := os.ReadFile(location.path)
 	if err != nil && !os.IsNotExist(err) {
 		return setupResult{}, err
@@ -238,7 +297,7 @@ func manageOpenCodePlugin(action string, location hookLocation, command string) 
 	switch action {
 	case "check":
 		state := "missing"
-		if managed {
+		if managed && dependency {
 			state = "installed"
 		}
 		return setupResult{Agent: location.agent, State: state, Command: command}, nil
@@ -251,7 +310,10 @@ func manageOpenCodePlugin(action string, location hookLocation, command string) 
 		}
 		return setupResult{Agent: location.agent, State: "removed"}, nil
 	case "install":
-		plugin := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport { Plugin } from \"@opencode/plugin\";\n\nexport default Plugin.define({\n  id: \"router-axi-session\",\n  async setup(ctx) {\n    const injected = new Set();\n    const context = execFileSync(" + jsonStringCommand(command) + ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    await ctx.session.hook(\"context\", (event) => {\n      if (injected.has(event.sessionID)) return;\n      injected.add(event.sessionID);\n      event.system.push({ type: \"text\", text: context });\n    });\n  },\n});\n"
+		if err := ensureOpenCodeDependency(location.manifestPath); err != nil {
+			return setupResult{}, err
+		}
+		plugin := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport type { Plugin } from \"@opencode-ai/plugin\";\n\nconst injected = new Set<string>();\n\nexport const RouterAxiPlugin: Plugin = async () => ({\n  \"experimental.chat.system.transform\": async (input, output) => {\n    if (input.sessionID && injected.has(input.sessionID)) return;\n    const context = execFileSync(" + jsonStringCommand(command) + ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    if (input.sessionID) injected.add(input.sessionID);\n    output.system.push(context);\n  },\n});\n\nexport default RouterAxiPlugin;\n"
 		if err := atomicWrite(location.path, []byte(plugin), 0o600); err != nil {
 			return setupResult{}, err
 		}
@@ -263,8 +325,8 @@ func manageOpenCodePlugin(action string, location hookLocation, command string) 
 
 func isManagedOpenCodePlugin(data []byte) bool {
 	content := string(data)
-	prefix := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport { Plugin } from \"@opencode/plugin\";\n\nexport default Plugin.define({\n  id: \"router-axi-session\",\n  async setup(ctx) {\n    const injected = new Set();\n    const context = execFileSync("
-	suffix := ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    await ctx.session.hook(\"context\", (event) => {\n      if (injected.has(event.sessionID)) return;\n      injected.add(event.sessionID);\n      event.system.push({ type: \"text\", text: context });\n    });\n  },\n});\n"
+	prefix := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport type { Plugin } from \"@opencode-ai/plugin\";\n\nconst injected = new Set<string>();\n\nexport const RouterAxiPlugin: Plugin = async () => ({\n  \"experimental.chat.system.transform\": async (input, output) => {\n    if (input.sessionID && injected.has(input.sessionID)) return;\n    const context = execFileSync("
+	suffix := ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    if (input.sessionID) injected.add(input.sessionID);\n    output.system.push(context);\n  },\n});\n\nexport default RouterAxiPlugin;\n"
 	if !strings.HasPrefix(content, prefix) || !strings.HasSuffix(content, suffix) {
 		return false
 	}

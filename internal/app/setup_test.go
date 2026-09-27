@@ -31,6 +31,13 @@ func TestSetupInstallCheckAndUninstall(t *testing.T) {
 		if !strings.Contains(stdout.String(), "state: installed") {
 			t.Fatalf("install %s stdout=%q", agent, stdout.String())
 		}
+		if agent == "opencode" {
+			manifest := filepath.Join(home, ".config", "opencode", "package.json")
+			data, err := os.ReadFile(manifest)
+			if err != nil || !bytes.Contains(data, []byte(`"@opencode-ai/plugin"`)) {
+				t.Fatalf("OpenCode dependency metadata: %s, %v", data, err)
+			}
+		}
 		stdout.Reset()
 		if code := application.Run(t.Context(), []string{"setup", "check", "--agent", agent}, &stdout, &stderr); code != ExitOK || !strings.Contains(stdout.String(), "state: installed") {
 			t.Fatalf("check %s: code=%d stdout=%q", agent, code, stdout.String())
@@ -119,7 +126,7 @@ func TestSetupRejectsIncompatibleHookValuesAndUnmanagedMarker(t *testing.T) {
 	if code := application.Run(t.Context(), []string{"setup", "install", "--agent", "claude"}, &stdout, &stderr); code != ExitInternal {
 		t.Fatalf("incompatible hooks: code=%d stdout=%q", code, stdout.String())
 	}
-	if err := os.WriteFile(path, []byte(`{"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"keep-me # router-axi-session-hook"}]}]}}`), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(`{"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"'/unrelated/script' session dashboard # router-axi-session-hook"}]}]}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	stdout.Reset()
@@ -130,7 +137,7 @@ func TestSetupRejectsIncompatibleHookValuesAndUnmanagedMarker(t *testing.T) {
 
 func TestSetupRejectsSpoofedOpenCodeMarker(t *testing.T) {
 	home := t.TempDir()
-	path := filepath.Join(home, ".config", "opencode", "plugins", "router-axi", "index.ts")
+	path := filepath.Join(home, ".config", "opencode", "plugins", "router-axi.ts")
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
