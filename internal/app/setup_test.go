@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,6 +71,60 @@ func TestSetupPreservesUnrelatedClaudeHooksAndRepairsPath(t *testing.T) {
 	data, err = os.ReadFile(path)
 	if err != nil || !bytes.Contains(data, []byte("/new/router-axi")) || bytes.Contains(data, []byte("/opt/router-axi/router-axi")) {
 		t.Fatalf("managed path was not repaired: %s, %v", data, err)
+	}
+}
+
+func TestSetupCheckAndUninstallDoNotRequireExecutable(t *testing.T) {
+	application := setupApp(t, t.TempDir())
+	var stdout, stderr bytes.Buffer
+	if code := application.Run(t.Context(), []string{"setup", "install", "--agent", "claude"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("install: code=%d stdout=%q", code, stdout.String())
+	}
+	application.executable = func() (string, error) { return "", os.ErrNotExist }
+	stdout.Reset()
+	if code := application.Run(t.Context(), []string{"setup", "check", "--agent", "claude"}, &stdout, &stderr); code != ExitOK || !strings.Contains(stdout.String(), "state: installed") {
+		t.Fatalf("check: code=%d stdout=%q", code, stdout.String())
+	}
+	stdout.Reset()
+	if code := application.Run(t.Context(), []string{"setup", "uninstall", "--agent", "claude"}, &stdout, &stderr); code != ExitOK || !strings.Contains(stdout.String(), "state: removed") {
+		t.Fatalf("uninstall: code=%d stdout=%q", code, stdout.String())
+	}
+}
+
+func TestSetupAllJSONIsOneDocument(t *testing.T) {
+	application := setupApp(t, t.TempDir())
+	var stdout, stderr bytes.Buffer
+	if code := application.Run(t.Context(), []string{"setup", "check", "--agent", "all", "--json"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("check: code=%d stdout=%q", code, stdout.String())
+	}
+	var result struct {
+		Setup []setupResult `json:"setup"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || len(result.Setup) != 3 {
+		t.Fatalf("invalid aggregate: err=%v stdout=%q", err, stdout.String())
+	}
+}
+
+func TestSetupRejectsIncompatibleHookValuesAndUnmanagedMarker(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"hooks":{"SessionStart":"keep"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application := setupApp(t, home)
+	var stdout, stderr bytes.Buffer
+	if code := application.Run(t.Context(), []string{"setup", "install", "--agent", "claude"}, &stdout, &stderr); code != ExitInternal {
+		t.Fatalf("incompatible hooks: code=%d stdout=%q", code, stdout.String())
+	}
+	if err := os.WriteFile(path, []byte(`{"hooks":{"SessionStart":[{"matcher":"","hooks":[{"type":"command","command":"keep router-axi-session-hook"}]}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if code := application.Run(t.Context(), []string{"setup", "uninstall", "--agent", "claude"}, &stdout, &stderr); code != ExitOK || !strings.Contains(stdout.String(), "state: missing") {
+		t.Fatalf("unmanaged marker: code=%d stdout=%q", code, stdout.String())
 	}
 }
 

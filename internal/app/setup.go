@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,10 +16,6 @@ type setupResult struct {
 	Agent   string `json:"agent"`
 	State   string `json:"state"`
 	Command string `json:"command,omitempty"`
-}
-
-type setupJSONResult struct {
-	Setup setupResult `json:"setup"`
 }
 
 type hookLocation struct {
@@ -53,17 +48,18 @@ func (a *App) runSetup(opts options, stdout io.Writer) int {
 	if opts.action == "" {
 		return writeError(stdout, opts.json, ExitUsage, "invalid_arguments", "setup requires one action: install, check, or uninstall", "router-axi setup --help")
 	}
+	results := make([]setupResult, 0, len(agents))
 	for _, agent := range agents {
 		result, err := a.setupAgent(opts.action, agent)
 		if err != nil {
 			return writeError(stdout, opts.json, ExitInternal, "setup_failed", err.Error(), "router-axi setup check --agent "+agent)
 		}
-		if opts.json {
-			if code := writeJSON(stdout, setupJSONResult{Setup: result}); code != ExitOK {
-				return code
-			}
-			continue
-		}
+		results = append(results, result)
+	}
+	if opts.json {
+		return writeJSON(stdout, map[string]any{"setup": results})
+	}
+	for _, result := range results {
 		if _, err := fmt.Fprintf(stdout, "setup:\n  agent: %s\n  state: %s\n", result.Agent, result.State); err != nil {
 			return ExitInternal
 		}
@@ -100,12 +96,22 @@ func (a *App) setupAgent(action, agent string) (setupResult, error) {
 	case "opencode":
 		location.path = filepath.Join(home, ".config", "opencode", "plugins", "router-axi.ts")
 	}
-	command, err := a.sessionCommand()
-	if err != nil {
-		return setupResult{}, err
-	}
 	if agent == "opencode" {
-		return manageOpenCodePlugin(action, location, command)
+		if action == "install" {
+			command, err := a.sessionCommand()
+			if err != nil {
+				return setupResult{}, err
+			}
+			return manageOpenCodePlugin(action, location, command)
+		}
+		return manageOpenCodePlugin(action, location, "")
+	}
+	command := ""
+	if action == "install" {
+		command, err = a.sessionCommand()
+		if err != nil {
+			return setupResult{}, err
+		}
 	}
 	return manageHookJSON(action, location, command)
 }
@@ -131,15 +137,31 @@ func manageHookJSON(action string, location hookLocation, command string) (setup
 	if len(data) > 0 && json.Unmarshal(data, &root) != nil {
 		return setupResult{}, errors.New("managed hook configuration is not valid JSON")
 	}
-	hooks, _ := root["hooks"].(map[string]any)
-	if hooks == nil {
-		hooks = map[string]any{}
-		root["hooks"] = hooks
+	if root == nil {
+		return setupResult{}, errors.New("managed hook configuration must be a JSON object")
 	}
-	entries, _ := hooks["SessionStart"].([]any)
+	hooksValue, hooksPresent := root["hooks"]
+	if hooksPresent {
+		if _, ok := hooksValue.(map[string]any); !ok {
+			return setupResult{}, errors.New("managed hook configuration has incompatible hooks value")
+		}
+	} else {
+		hooksValue = map[string]any{}
+	}
+	hooks := hooksValue.(map[string]any)
+	root["hooks"] = hooks
+	entriesValue, entriesPresent := hooks["SessionStart"]
+	entries := []any(nil)
+	if entriesPresent {
+		var ok bool
+		entries, ok = entriesValue.([]any)
+		if !ok {
+			return setupResult{}, errors.New("managed hook configuration has incompatible SessionStart value")
+		}
+	}
 	managed := make([]int, 0, 1)
 	for i, entry := range entries {
-		if strings.Contains(fmt.Sprint(entry), sessionHookMarker) {
+		if isManagedHook(entry) {
 			managed = append(managed, i)
 		}
 	}
@@ -182,12 +204,29 @@ func manageHookJSON(action string, location hookLocation, command string) (setup
 	return setupResult{Agent: location.agent, State: state, Command: command}, nil
 }
 
+func isManagedHook(value any) bool {
+	entry, ok := value.(map[string]any)
+	if !ok || len(entry) != 2 || entry["matcher"] != "" {
+		return false
+	}
+	hooks, ok := entry["hooks"].([]any)
+	if !ok || len(hooks) != 1 {
+		return false
+	}
+	hook, ok := hooks[0].(map[string]any)
+	if !ok || len(hook) != 2 || hook["type"] != "command" {
+		return false
+	}
+	command, ok := hook["command"].(string)
+	return ok && strings.HasSuffix(command, " # "+sessionHookMarker)
+}
+
 func manageOpenCodePlugin(action string, location hookLocation, command string) (setupResult, error) {
 	data, err := os.ReadFile(location.path)
 	if err != nil && !os.IsNotExist(err) {
 		return setupResult{}, err
 	}
-	managed := bytes.Contains(data, []byte(sessionHookMarker))
+	managed := isManagedOpenCodePlugin(data)
 	if len(data) > 0 && !managed {
 		return setupResult{}, errors.New("OpenCode plugin path is occupied by unmanaged content")
 	}
@@ -207,7 +246,7 @@ func manageOpenCodePlugin(action string, location hookLocation, command string) 
 		}
 		return setupResult{Agent: location.agent, State: "removed"}, nil
 	case "install":
-		plugin := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\n\nexport default function routerAxi() {\n  return {\n    \"experimental.chat.system.transform\": async (_input, output) => {\n      try {\n        const context = execFileSync(" + jsonStringCommand(command) + ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n        output.system += `\\n${context}`;\n      } catch {}\n    },\n  };\n}\n"
+		plugin := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\n\nexport default function routerAxi() {\n  return {\n    \"experimental.chat.system.transform\": async (_input, output) => {\n      try {\n        const context = execFileSync(" + jsonStringCommand(command) + ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n        output.system.push(`\\n${context}`);\n      } catch {}\n    },\n  };\n}\n"
 		if err := atomicWrite(location.path, []byte(plugin), 0o600); err != nil {
 			return setupResult{}, err
 		}
@@ -215,6 +254,14 @@ func manageOpenCodePlugin(action string, location hookLocation, command string) 
 	default:
 		return setupResult{}, errors.New("setup accepts one action: install, check, or uninstall")
 	}
+}
+
+func isManagedOpenCodePlugin(data []byte) bool {
+	content := string(data)
+	return strings.HasPrefix(content, "// "+sessionHookMarker+"\nimport { execFileSync } from \"node:child_process\";\n") &&
+		strings.Contains(content, "export default function routerAxi() {") &&
+		strings.Contains(content, "output.system.push(`\\n${context}`);") &&
+		strings.HasSuffix(content, "\n}\n")
 }
 
 func jsonStringCommand(value string) string {
