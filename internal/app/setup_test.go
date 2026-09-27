@@ -125,6 +125,31 @@ func TestSetupUninstallOpenCodeIgnoresMalformedManifest(t *testing.T) {
 	}
 }
 
+func TestSetupRollsBackWhenOwnerRecordCannotBeWritten(t *testing.T) {
+	home := t.TempDir()
+	application := setupApp(t, home)
+	for _, agent := range []string{"claude", "opencode"} {
+		marker := filepath.Join(home, "."+agent, ".router-axi-session-hook")
+		if agent == "opencode" {
+			marker = filepath.Join(home, ".config", "opencode", "plugins", ".router-axi-session-hook")
+		}
+		if err := os.MkdirAll(marker, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		var stdout, stderr bytes.Buffer
+		if code := application.Run(t.Context(), []string{"setup", "install", "--agent", agent}, &stdout, &stderr); code != ExitInternal {
+			t.Fatalf("install %s: code=%d stdout=%q", agent, code, stdout.String())
+		}
+		path := filepath.Join(home, "."+agent, "settings.json")
+		if agent == "opencode" {
+			path = filepath.Join(home, ".config", "opencode", "plugins", "router-axi.ts")
+		}
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("install %s left artifact: err=%v", agent, err)
+		}
+	}
+}
+
 func TestSetupCheckAndUninstallDoNotRequireExecutable(t *testing.T) {
 	application := setupApp(t, t.TempDir())
 	var stdout, stderr bytes.Buffer

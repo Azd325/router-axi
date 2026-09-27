@@ -234,6 +234,9 @@ func manageHookJSON(action string, location hookLocation, command string, owner 
 		removeMarker(location.markerPath)
 	} else if action == "install" {
 		if err := writeOwner(location.markerPath, ownerRecord{Command: command, ShapeHash: shapeHash}); err != nil {
+			if restoreErr := restoreFile(location.path, data, len(data) > 0); restoreErr != nil {
+				return setupResult{}, fmt.Errorf("write managed session owner: %w; rollback configuration: %v", err, restoreErr)
+			}
 			return setupResult{}, err
 		}
 	}
@@ -401,6 +404,9 @@ func manageOpenCodePlugin(action string, location hookLocation, command string, 
 		}
 		_, shapeHash, _ := openCodePluginParts([]byte(plugin))
 		if err := writeOwner(location.markerPath, ownerRecord{Command: command, ShapeHash: shapeHash}); err != nil {
+			if restoreErr := restoreFile(location.path, data, len(data) > 0); restoreErr != nil {
+				return setupResult{}, fmt.Errorf("write managed session owner: %w; rollback plugin: %v", err, restoreErr)
+			}
 			return setupResult{}, err
 		}
 		return setupResult{Agent: location.agent, State: "installed", Command: command}, nil
@@ -489,4 +495,14 @@ func contentHash(data []byte) string {
 
 func removeMarker(path string) {
 	_ = os.Remove(path)
+}
+
+func restoreFile(path string, data []byte, existed bool) error {
+	if !existed {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return atomicWrite(path, data, 0o600)
 }
