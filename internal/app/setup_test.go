@@ -31,6 +31,13 @@ func TestSetupInstallCheckAndUninstall(t *testing.T) {
 		if !strings.Contains(stdout.String(), "state: installed") {
 			t.Fatalf("install %s stdout=%q", agent, stdout.String())
 		}
+		if agent == "opencode" {
+			pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "router-axi", "index.ts")
+			plugin, err := os.ReadFile(pluginPath)
+			if err != nil || !bytes.Contains(plugin, []byte("export default Plugin.define({")) || !bytes.Contains(plugin, []byte(`ctx.session.hook("context"`)) {
+				t.Fatalf("OpenCode V2 plugin: err=%v content=%q", err, plugin)
+			}
+		}
 		stdout.Reset()
 		if code := application.Run(t.Context(), []string{"setup", "check", "--agent", agent}, &stdout, &stderr); code != ExitOK || !strings.Contains(stdout.String(), "state: installed") {
 			t.Fatalf("check %s: code=%d stdout=%q", agent, code, stdout.String())

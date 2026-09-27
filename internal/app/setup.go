@@ -94,7 +94,7 @@ func (a *App) setupAgent(action, agent string) (setupResult, error) {
 	case "codex":
 		location.path = filepath.Join(home, ".codex", "hooks.json")
 	case "opencode":
-		location.path = filepath.Join(home, ".config", "opencode", "plugins", "router-axi.ts")
+		location.path = filepath.Join(home, ".config", "opencode", "plugins", "router-axi", "index.ts")
 	}
 	if agent == "opencode" {
 		if action == "install" {
@@ -246,7 +246,7 @@ func manageOpenCodePlugin(action string, location hookLocation, command string) 
 		}
 		return setupResult{Agent: location.agent, State: "removed"}, nil
 	case "install":
-		plugin := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\n\nexport default function routerAxi() {\n  return {\n    \"experimental.chat.system.transform\": async (_input, output) => {\n      try {\n        const context = execFileSync(" + jsonStringCommand(command) + ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n        output.system.push(`\\n${context}`);\n      } catch {}\n    },\n  };\n}\n"
+		plugin := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport { Plugin } from \"@opencode/plugin\";\n\nexport default Plugin.define({\n  id: \"router-axi-session\",\n  async setup(ctx) {\n    const context = execFileSync(" + jsonStringCommand(command) + ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    await ctx.session.hook(\"context\", (event) => {\n      event.system.push({ type: \"text\", text: context });\n    });\n  },\n});\n"
 		if err := atomicWrite(location.path, []byte(plugin), 0o600); err != nil {
 			return setupResult{}, err
 		}
@@ -259,9 +259,11 @@ func manageOpenCodePlugin(action string, location hookLocation, command string) 
 func isManagedOpenCodePlugin(data []byte) bool {
 	content := string(data)
 	return strings.HasPrefix(content, "// "+sessionHookMarker+"\nimport { execFileSync } from \"node:child_process\";\n") &&
-		strings.Contains(content, "export default function routerAxi() {") &&
-		strings.Contains(content, "output.system.push(`\\n${context}`);") &&
-		strings.HasSuffix(content, "\n}\n")
+		strings.Contains(content, "import { Plugin } from \"@opencode/plugin\";") &&
+		strings.Contains(content, "export default Plugin.define({") &&
+		strings.Contains(content, "await ctx.session.hook(\"context\", (event) => {") &&
+		strings.Contains(content, "event.system.push({ type: \"text\", text: context });") &&
+		strings.HasSuffix(content, "});\n")
 }
 
 func jsonStringCommand(value string) string {
