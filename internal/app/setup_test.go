@@ -94,7 +94,7 @@ func TestSetupPreservesUnrelatedClaudeHooksAndRepairsPath(t *testing.T) {
 		t.Fatalf("install: code=%d stdout=%q", code, stdout.String())
 	}
 	config := readPersistedHookConfig(t, path)
-	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[0].Hooks[0].Command != "keep-me" || !strings.HasPrefix(config.Hooks.SessionStart[1].Hooks[0].Command, "'/opt/router-axi/router-axi' session dashboard # "+sessionHookMarker+":") {
+	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[0].Hooks[0].Command != "keep-me" || config.Hooks.SessionStart[1].Hooks[0].Command != "'/opt/router-axi/router-axi' session dashboard # "+sessionHookMarker {
 		t.Fatalf("settings lost unrelated hook or managed path: %+v", config)
 	}
 	application.executable = func() (string, error) { return "/new/router-axi", nil }
@@ -103,7 +103,7 @@ func TestSetupPreservesUnrelatedClaudeHooksAndRepairsPath(t *testing.T) {
 		t.Fatalf("repair: code=%d stdout=%q", code, stdout.String())
 	}
 	config = readPersistedHookConfig(t, path)
-	if len(config.Hooks.SessionStart) != 2 || !strings.HasPrefix(config.Hooks.SessionStart[1].Hooks[0].Command, "'/new/router-axi' session dashboard # "+sessionHookMarker+":") {
+	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[1].Hooks[0].Command != "'/new/router-axi' session dashboard # "+sessionHookMarker {
 		t.Fatalf("managed path was not repaired: %+v", config)
 	}
 }
@@ -176,6 +176,10 @@ func TestSetupRejectsIncompatibleHookValuesAndUnmanagedMarker(t *testing.T) {
 	stdout.Reset()
 	if code := application.Run(t.Context(), []string{"setup", "uninstall", "--agent", "claude"}, &stdout, &stderr); code != ExitOK || !strings.Contains(stdout.String(), "state: missing") {
 		t.Fatalf("unmanaged marker: code=%d stdout=%q", code, stdout.String())
+	}
+	stdout.Reset()
+	if code := application.Run(t.Context(), []string{"setup", "install", "--agent", "claude"}, &stdout, &stderr); code != ExitInternal || !strings.Contains(stdout.String(), "no owner record") {
+		t.Fatalf("orphaned marker: code=%d stdout=%q", code, stdout.String())
 	}
 }
 
