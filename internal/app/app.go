@@ -69,15 +69,15 @@ func New(factory Factory, getenv func(string) string) *App {
 }
 
 type options struct {
-	command, host, action, output, path string
-	json, help, all, confirm, force     bool
-	instance                            uint64
-	instanceSet                         bool
-	interval                            time.Duration
-	count                               int
-	intervalSet, countSet               bool
-	flags                               map[string]bool
-	versionFlag                         bool
+	command, host, action, output, path, agent string
+	json, help, all, confirm, force            bool
+	instance                                   uint64
+	instanceSet                                bool
+	interval                                   time.Duration
+	count                                      int
+	intervalSet, countSet                      bool
+	flags                                      map[string]bool
+	versionFlag                                bool
 }
 
 type callResult struct {
@@ -242,6 +242,12 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	if opts.command == "skill" {
 		return a.runSkill(opts, stdout, stderr)
+	}
+	if opts.command == "setup" {
+		return a.runSetup(opts, stdout)
+	}
+	if opts.command == "session" {
+		return a.runSession(opts, stdout)
 	}
 	if !validCommand(opts.command) {
 		return writeError(stderr, opts.json, ExitUsage, "unknown_command", "unknown command: "+opts.command, "router-axi help")
@@ -464,6 +470,13 @@ func parse(args []string) (options, error) {
 				return opts, errors.New("--path requires a directory")
 			}
 			opts.path = args[i]
+		case "--agent":
+			opts.flags["--agent"] = true
+			i++
+			if i >= len(args) || args[i] == "" || strings.HasPrefix(args[i], "-") {
+				return opts, errors.New("--agent requires claude, codex, opencode, or all")
+			}
+			opts.agent = args[i]
 		case "--force":
 			opts.flags["--force"] = true
 			opts.force = true
@@ -492,6 +505,20 @@ func parse(args []string) (options, error) {
 				}
 				return opts, errors.New("skill accepts one action: install")
 			}
+			if opts.command == "setup" {
+				if (args[i] == "install" || args[i] == "check" || args[i] == "uninstall") && opts.action == "" {
+					opts.action = args[i]
+					continue
+				}
+				return opts, errors.New("setup accepts one action: install, check, or uninstall")
+			}
+			if opts.command == "session" {
+				if args[i] == "dashboard" && opts.action == "" {
+					opts.action = args[i]
+					continue
+				}
+				return opts, errors.New("session accepts one action: dashboard")
+			}
 			return opts, errors.New("exactly one command is required")
 		}
 	}
@@ -508,6 +535,12 @@ func parse(args []string) (options, error) {
 	if opts.command == "skill" && opts.action == "" && !opts.help {
 		return opts, errors.New("skill requires the action install")
 	}
+	if opts.command == "setup" && opts.action == "" && !opts.help {
+		return opts, errors.New("setup requires one action: install, check, or uninstall")
+	}
+	if opts.command == "session" && opts.action == "" && !opts.help {
+		return opts, errors.New("session requires the action dashboard")
+	}
 	if opts.command == "backup" && opts.output == "" && !opts.help {
 		return opts, errors.New("backup requires --output PATH")
 	}
@@ -515,7 +548,7 @@ func parse(args []string) (options, error) {
 }
 
 func validCommand(command string) bool {
-	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "backup" || command == "skill" || command == "version"
+	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "backup" || command == "skill" || command == "setup" || command == "session" || command == "version"
 }
 
 // commandHelp holds dedicated per-command help text: usage line, purpose,
@@ -563,6 +596,7 @@ var flagSpecs = map[string]flagSpec{
 	"--output":   {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--output is valid only with backup"},
 	"--force":    {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--force is valid only with backup"},
 	"--path":     {valid: func(opts options) bool { return opts.command == "skill" && opts.action == "install" }, invalid: "--path is valid only with skill install"},
+	"--agent":    {valid: func(opts options) bool { return opts.command == "setup" }, invalid: "--agent is valid only with setup"},
 }
 
 var commandFlags = map[string][]string{
@@ -581,6 +615,8 @@ var commandFlags = map[string][]string{
 	"reboot":   {"--host", "--json", "--confirm", "--help"},
 	"backup":   {"--host", "--json", "--output", "--force", "--help"},
 	"skill":    {"--path", "--json", "--help"},
+	"setup":    {"--agent", "--json", "--help"},
+	"session":  {"--json", "--help"},
 	"version":  {"--json", "--help"},
 }
 
@@ -597,7 +633,7 @@ func validateFlagContext(opts options) error {
 	for _, flag := range flags {
 		allowed[flag] = true
 	}
-	for _, flag := range []string{"--interval", "--count", "--all", "--instance", "--confirm", "--output", "--force", "--host", "--json", "--help"} {
+	for _, flag := range []string{"--interval", "--count", "--all", "--instance", "--confirm", "--output", "--force", "--path", "--agent", "--host", "--json", "--help"} {
 		if !opts.flags[flag] {
 			continue
 		}
@@ -637,6 +673,12 @@ func help(command, action string) string {
 	if command == "reboot" {
 		return "usage: router-axi reboot [--confirm] [--host ADDRESS] [--json] [--help]\nWithout --confirm: preview only. With --confirm: restart the router and temporarily interrupt all local services.\nNo prompts, retries, or recovery polling; reboot is not idempotent.\nexamples: router-axi reboot; router-axi reboot --confirm\n"
 	}
+	if command == "setup" {
+		return "usage: router-axi setup install|check|uninstall --agent claude|codex|opencode|all [--json] [--help]\nExplicitly installs, inspects, or removes a managed offline SessionStart integration. No router request is made during setup or session start.\nRepeated installs repair the managed executable path; uninstall removes only router-axi-managed configuration.\nexamples: router-axi setup install --agent all; router-axi setup check --agent claude; router-axi setup uninstall --agent opencode\n"
+	}
+	if command == "session" {
+		return "usage: router-axi session dashboard [--json] [--help]\nPrint the compact offline context used by installed session integrations; it never contacts the router.\nexamples: router-axi session dashboard; router-axi session dashboard --json\n"
+	}
 	if command == "backup" {
 		return "usage: router-axi backup --output PATH [--force] [--host ADDRESS] [--json] [--help]\nDownloads the documented DeviceConfig:X_AVM-DE_GetConfigFile export to PATH with an atomic owner-only write.\nThe export passphrase is read only from ROUTER_AXI_BACKUP_PASSWORD and is required to restore the file.\nAn existing file is never overwritten without --force; the router origin must be HTTPS (for example --host https://fritz.box:49443) with a locally trusted certificate, so the passphrase never travels in plaintext.\nNo prompts. Examples: router-axi backup --host https://fritz.box:49443 --output fritz.export; router-axi backup --host https://fritz.box:49443 --output fritz.export --force\n"
 	}
@@ -659,7 +701,7 @@ func help(command, action string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + " [--help]\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {

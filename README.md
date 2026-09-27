@@ -12,19 +12,25 @@ The current release provides device information, WAN status, traffic statistics,
 - Explicit confirmation for disruptive operations.
 - Local operation without telemetry or a hosted account.
 
-## Agent Skill (secondary integration)
+## Agent integrations
 
-This release ships an **opt-in skill** that never registers itself
-automatically. Install it for an agent that supports the
-agentskills.io format:
+Session integrations are explicit opt-in and add only a compact **offline** dashboard to agent sessions; they never contact the router, read credentials, or register automatically. Install, inspect, or remove the managed integration for Claude Code, Codex, OpenCode, or all three:
+
+```sh
+router-axi setup install --agent all
+router-axi setup check --agent claude
+router-axi setup uninstall --agent opencode
+```
+
+Repeated installs repair the executable path and are idempotent. Uninstall removes only router-axi-managed configuration.
+
+The bundled Agent Skill is a secondary on-demand discovery path for agents that support the agentskills.io format:
 
 ```sh
 router-axi skill install
 ```
 
-The default destination is `~/.agents/skills/router-axi/SKILL.md`; use
-`--path DIRECTORY` for another agent skills parent directory. Repeating the
-same install is a silent no-op.
+The default skill destination is `~/.agents/skills/router-axi/SKILL.md`; use `--path DIRECTORY` for another agent skills parent directory. Repeating the same install is a silent no-op.
 
 See [VISION.md](VISION.md) for the acceptance policy. Contributors should read
 [CONTRIBUTING.md](CONTRIBUTING.md); security reports belong in
@@ -79,6 +85,8 @@ router-axi wifi --json
 router-axi guest
 router-axi guest --json
 router-axi skill install
+router-axi setup install --agent all
+router-axi setup check --agent claude
 router-axi wifi enable
 router-axi wifi disable
 router-axi wifi disable --instance 1 --confirm

@@ -14,8 +14,11 @@ Empty results state that zero results were found.
 Commands include relevant aggregate state when it removes a follow-up query.
 Each successful command suggests the next valid operation when one is useful.
 Help is concise, consistent, and available at every command level.
-An installable Agent Skill may provide explicit, on-demand discovery without
-ambient registration or per-session token cost.
+Installed session integrations are explicit opt-in, offline, directory-scoped
+context only: they never contact the router, read credentials, or mutate router
+state. The explicit setup commands may change only the managed local agent
+configuration; ordinary commands never register an integration. An installable
+Agent Skill remains an on-demand discovery path without per-session token cost.
 Read-only watch streams are finite by default with hard polling bounds, explicit
 unknown values, observation timestamps, and JSONL for streaming consumers.
 Derived rates describe observed counter increases, not inferred traffic across

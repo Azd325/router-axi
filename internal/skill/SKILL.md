@@ -34,6 +34,8 @@ documentation; run the CLI for live router state.
   full list).
 - `reboot` — preview router restart; execute once with `--confirm`.
 - `backup` — download the documented configuration export to a file.
+- `setup install|check|uninstall --agent claude|codex|opencode|all` — explicitly manage offline session integrations; nothing is registered automatically.
+- `session dashboard` — offline context for the installed session integration; never contacts the router.
 - `skill install` — explicitly install this static skill; `--path DIRECTORY`
   selects another agent skills parent directory.
 - `version` — CLI version.
@@ -104,6 +106,8 @@ commands:
   reboot    preview router restart; execute once with --confirm
   backup    download the documented configuration export to a file
   skill     install the router-axi agent skill (explicit opt-in)
+  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations
+  session   print the offline session dashboard
   version   CLI version
 
 authentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD
