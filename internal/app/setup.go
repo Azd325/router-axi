@@ -21,8 +21,8 @@ type setupResult struct {
 }
 
 type ownerRecord struct {
-	Command     string `json:"command"`
-	ContentHash string `json:"content_hash"`
+	Command   string `json:"command"`
+	ShapeHash string `json:"shape_hash"`
 }
 
 type hookLocation struct {
@@ -154,9 +154,6 @@ func manageHookJSON(action string, location hookLocation, command string, owner 
 	if len(data) > 0 && json.Unmarshal(data, &root) != nil {
 		return setupResult{}, errors.New("managed hook configuration is not valid JSON")
 	}
-	if !ownerMatches(owner, data) {
-		owner = ownerRecord{}
-	}
 	if root == nil {
 		return setupResult{}, errors.New("managed hook configuration must be a JSON object")
 	}
@@ -196,7 +193,7 @@ func manageHookJSON(action string, location hookLocation, command string, owner 
 	case "check":
 		return setupResult{Agent: location.agent, State: state, Command: command}, nil
 	case "install":
-		if owner.Command == "" && hasSessionMarker(entries) {
+		if owner.ShapeHash == "" && hasSessionMarker(entries) {
 			return setupResult{}, errors.New("managed session hook has no owner record; refuse ambiguous configuration")
 		}
 		entry := map[string]any{"matcher": "", "hooks": []any{map[string]any{"type": "command", "command": command}}}
@@ -218,6 +215,14 @@ func manageHookJSON(action string, location hookLocation, command string, owner 
 		return setupResult{}, errors.New("setup accepts one action: install, check, or uninstall")
 	}
 	hooks["SessionStart"] = entries
+	var shapeHash string
+	if action == "install" {
+		if len(managed) == 1 {
+			shapeHash, _ = hookShapeHash(entries[managed[0]])
+		} else {
+			shapeHash, _ = hookShapeHash(entries[len(entries)-1])
+		}
+	}
 	encoded, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		return setupResult{}, err
@@ -228,7 +233,7 @@ func manageHookJSON(action string, location hookLocation, command string, owner 
 	if action == "uninstall" {
 		removeMarker(location.markerPath)
 	} else if action == "install" {
-		if err := writeOwner(location.markerPath, ownerRecord{Command: command, ContentHash: contentHash(append(encoded, '\n'))}); err != nil {
+		if err := writeOwner(location.markerPath, ownerRecord{Command: command, ShapeHash: shapeHash}); err != nil {
 			return setupResult{}, err
 		}
 	}
@@ -249,11 +254,40 @@ func isManagedHook(value any, owner ownerRecord) bool {
 		return false
 	}
 	command, ok := hook["command"].(string)
-	return ok && isManagedCommand(command, owner)
+	shapeHash, valid := hookShapeHash(entry)
+	return ok && valid && shapeHash == owner.ShapeHash && isManagedCommand(command, owner)
 }
 
 func isManagedCommand(command string, owner ownerRecord) bool {
-	return owner.Command != "" && command == owner.Command
+	return owner.ShapeHash != "" && (command == owner.Command || isSessionCommand(command))
+}
+
+func isSessionCommand(command string) bool {
+	suffix := "' session dashboard # " + sessionHookMarker
+	if !strings.HasPrefix(command, "'") || !strings.HasSuffix(command, suffix) {
+		return false
+	}
+	path := strings.TrimSuffix(strings.TrimPrefix(command, "'"), suffix)
+	path = strings.ReplaceAll(path, "'\\''", "'")
+	return shellQuote(path)+" session dashboard # "+sessionHookMarker == command
+}
+
+func hookShapeHash(value any) (string, bool) {
+	entry, ok := value.(map[string]any)
+	if !ok || entry["matcher"] != "" {
+		return "", false
+	}
+	hooks, ok := entry["hooks"].([]any)
+	if !ok || len(hooks) != 1 {
+		return "", false
+	}
+	hook, ok := hooks[0].(map[string]any)
+	if !ok || hook["type"] != "command" {
+		return "", false
+	}
+	normalized := map[string]any{"matcher": "", "hooks": []any{map[string]any{"type": "command", "command": sessionHookMarker}}}
+	data, err := json.Marshal(normalized)
+	return contentHash(data), err == nil
 }
 
 func hasSessionMarker(entries []any) bool {
@@ -333,9 +367,6 @@ func manageOpenCodePlugin(action string, location hookLocation, command string, 
 	if err != nil && !os.IsNotExist(err) {
 		return setupResult{}, err
 	}
-	if !ownerMatches(owner, data) {
-		owner = ownerRecord{}
-	}
 	managed := isManagedOpenCodePlugin(data, owner)
 	if len(data) > 0 && !managed {
 		return setupResult{}, errors.New("OpenCode plugin path is occupied by unmanaged content")
@@ -368,7 +399,8 @@ func manageOpenCodePlugin(action string, location hookLocation, command string, 
 		if err := atomicWrite(location.path, []byte(plugin), 0o600); err != nil {
 			return setupResult{}, err
 		}
-		if err := writeOwner(location.markerPath, ownerRecord{Command: command, ContentHash: contentHash([]byte(plugin))}); err != nil {
+		_, shapeHash, _ := openCodePluginParts([]byte(plugin))
+		if err := writeOwner(location.markerPath, ownerRecord{Command: command, ShapeHash: shapeHash}); err != nil {
 			return setupResult{}, err
 		}
 		return setupResult{Agent: location.agent, State: "installed", Command: command}, nil
@@ -378,15 +410,24 @@ func manageOpenCodePlugin(action string, location hookLocation, command string, 
 }
 
 func isManagedOpenCodePlugin(data []byte, owner ownerRecord) bool {
+	command, shapeHash, ok := openCodePluginParts(data)
+	return ok && shapeHash == owner.ShapeHash && isManagedCommand(command, owner)
+}
+
+func openCodePluginParts(data []byte) (string, string, bool) {
 	content := string(data)
 	prefix := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport type { Plugin } from \"@opencode-ai/plugin\";\n\nconst injected = new Set<string>();\n\nexport const RouterAxiPlugin: Plugin = async () => ({\n  \"experimental.chat.system.transform\": async (input, output) => {\n    if (input.sessionID && injected.has(input.sessionID)) return;\n    const context = execFileSync("
 	suffix := ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    if (input.sessionID) injected.add(input.sessionID);\n    output.system.push(context);\n  },\n});\n\nexport default RouterAxiPlugin;\n"
 	if !strings.HasPrefix(content, prefix) || !strings.HasSuffix(content, suffix) {
-		return false
+		return "", "", false
 	}
 	encodedCommand := strings.TrimSuffix(strings.TrimPrefix(content, prefix), suffix)
 	var command string
-	return json.Unmarshal([]byte(encodedCommand), &command) == nil && isManagedCommand(command, owner)
+	if json.Unmarshal([]byte(encodedCommand), &command) != nil {
+		return "", "", false
+	}
+	normalized := prefix + jsonStringCommand("") + suffix
+	return command, contentHash([]byte(normalized)), true
 }
 
 func jsonStringCommand(value string) string {
@@ -422,7 +463,7 @@ func readOwner(path string) (ownerRecord, error) {
 	data, err := os.ReadFile(path)
 	if err == nil {
 		var owner ownerRecord
-		if json.Unmarshal(data, &owner) != nil || owner.Command == "" || owner.ContentHash == "" {
+		if json.Unmarshal(data, &owner) != nil || owner.Command == "" || owner.ShapeHash == "" {
 			return ownerRecord{}, nil
 		}
 		return owner, nil
@@ -439,10 +480,6 @@ func writeOwner(path string, owner ownerRecord) error {
 		return err
 	}
 	return atomicWrite(path, append(data, '\n'), 0o600)
-}
-
-func ownerMatches(owner ownerRecord, data []byte) bool {
-	return owner.Command != "" && owner.ContentHash != "" && owner.ContentHash == contentHash(data)
 }
 
 func contentHash(data []byte) string {
