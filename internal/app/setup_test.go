@@ -20,6 +20,30 @@ func setupApp(t *testing.T, home string) *App {
 	return application
 }
 
+type persistedHookConfig struct {
+	Hooks struct {
+		SessionStart []struct {
+			Hooks []struct {
+				Type    string `json:"type"`
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"SessionStart"`
+	} `json:"hooks"`
+}
+
+func readPersistedHookConfig(t *testing.T, path string) persistedHookConfig {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config persistedHookConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	return config
+}
+
 func TestSetupInstallCheckAndUninstall(t *testing.T) {
 	home := t.TempDir()
 	application := setupApp(t, home)
@@ -34,7 +58,13 @@ func TestSetupInstallCheckAndUninstall(t *testing.T) {
 		if agent == "opencode" {
 			manifest := filepath.Join(home, ".config", "opencode", "package.json")
 			data, err := os.ReadFile(manifest)
-			if err != nil || !bytes.Contains(data, []byte(`"@opencode-ai/plugin"`)) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			var packageJSON struct {
+				Dependencies map[string]string `json:"dependencies"`
+			}
+			if err := json.Unmarshal(data, &packageJSON); err != nil || packageJSON.Dependencies["@opencode-ai/plugin"] == "" {
 				t.Fatalf("OpenCode dependency metadata: %s, %v", data, err)
 			}
 		}
@@ -63,21 +93,18 @@ func TestSetupPreservesUnrelatedClaudeHooksAndRepairsPath(t *testing.T) {
 	if code := application.Run(t.Context(), []string{"setup", "install", "--agent", "claude"}, &stdout, &stderr); code != ExitOK {
 		t.Fatalf("install: code=%d stdout=%q", code, stdout.String())
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Contains(data, []byte("keep-me")) || !bytes.Contains(data, []byte(sessionHookMarker)) || !bytes.Contains(data, []byte("/opt/router-axi/router-axi")) {
-		t.Fatalf("settings lost unrelated hook or managed path: %s", data)
+	config := readPersistedHookConfig(t, path)
+	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[0].Hooks[0].Command != "keep-me" || config.Hooks.SessionStart[1].Hooks[0].Command != "'/opt/router-axi/router-axi' session dashboard # "+sessionHookMarker {
+		t.Fatalf("settings lost unrelated hook or managed path: %+v", config)
 	}
 	application.executable = func() (string, error) { return "/new/router-axi", nil }
 	stdout.Reset()
 	if code := application.Run(t.Context(), []string{"setup", "install", "--agent", "claude"}, &stdout, &stderr); code != ExitOK {
 		t.Fatalf("repair: code=%d stdout=%q", code, stdout.String())
 	}
-	data, err = os.ReadFile(path)
-	if err != nil || !bytes.Contains(data, []byte("/new/router-axi")) || bytes.Contains(data, []byte("/opt/router-axi/router-axi")) {
-		t.Fatalf("managed path was not repaired: %s, %v", data, err)
+	config = readPersistedHookConfig(t, path)
+	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[1].Hooks[0].Command != "'/new/router-axi' session dashboard # "+sessionHookMarker {
+		t.Fatalf("managed path was not repaired: %+v", config)
 	}
 }
 
