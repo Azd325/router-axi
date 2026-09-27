@@ -1,7 +1,7 @@
 package app
 
 import (
-	"crypto/sha256"
+	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,6 +24,7 @@ type hookLocation struct {
 	agent        string
 	path         string
 	manifestPath string
+	markerPath   string
 }
 
 func (a *App) runSession(opts options, stdout io.Writer) int {
@@ -94,45 +95,52 @@ func (a *App) setupAgent(action, agent string) (setupResult, error) {
 	switch agent {
 	case "claude":
 		location.path = filepath.Join(home, ".claude", "settings.json")
+		location.markerPath = filepath.Join(home, ".claude", ".router-axi-session-hook")
 	case "codex":
 		location.path = filepath.Join(home, ".codex", "hooks.json")
+		location.markerPath = filepath.Join(home, ".codex", ".router-axi-session-hook")
 	case "opencode":
 		location.path = filepath.Join(home, ".config", "opencode", "plugins", "router-axi.ts")
 		location.manifestPath = filepath.Join(home, ".config", "opencode", "package.json")
+		location.markerPath = filepath.Join(home, ".config", "opencode", "plugins", ".router-axi-session-hook")
+	}
+	token, err := sessionToken(location.markerPath, action == "install")
+	if err != nil {
+		return setupResult{}, err
 	}
 	if agent == "opencode" {
 		if action == "install" {
-			command, err := a.sessionCommand()
+			command, err := a.sessionCommand(token)
 			if err != nil {
 				return setupResult{}, err
 			}
-			return manageOpenCodePlugin(action, location, command)
+			return manageOpenCodePlugin(action, location, command, token)
 		}
-		return manageOpenCodePlugin(action, location, "")
+		return manageOpenCodePlugin(action, location, "", token)
 	}
 	command := ""
 	if action == "install" {
-		command, err = a.sessionCommand()
+		command, err = a.sessionCommand(token)
 		if err != nil {
 			return setupResult{}, err
 		}
 	}
-	return manageHookJSON(action, location, command)
+	return manageHookJSON(action, location, command, token)
 }
 
-func (a *App) sessionCommand() (string, error) {
+func (a *App) sessionCommand(token string) (string, error) {
 	path, err := a.executable()
 	if err != nil || path == "" {
 		return "", errors.New("resolve router-axi executable")
 	}
-	return shellQuote(path) + " session dashboard # " + managedCommandMarker(path), nil
+	return shellQuote(path) + " session dashboard # " + sessionHookMarker + ":" + token, nil
 }
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
-func manageHookJSON(action string, location hookLocation, command string) (setupResult, error) {
+func manageHookJSON(action string, location hookLocation, command, token string) (setupResult, error) {
 	root := map[string]any{}
 	data, err := os.ReadFile(location.path)
 	if err != nil && !os.IsNotExist(err) {
@@ -165,7 +173,7 @@ func manageHookJSON(action string, location hookLocation, command string) (setup
 	}
 	managed := make([]int, 0, 1)
 	for i, entry := range entries {
-		if isManagedHook(entry) {
+		if isManagedHook(entry, token) {
 			managed = append(managed, i)
 		}
 	}
@@ -190,6 +198,7 @@ func manageHookJSON(action string, location hookLocation, command string) (setup
 		}
 	case "uninstall":
 		if len(managed) == 0 {
+			removeMarker(location.markerPath)
 			return setupResult{Agent: location.agent, State: "missing"}, nil
 		}
 		entries = append(entries[:managed[0]], entries[managed[0]+1:]...)
@@ -205,10 +214,13 @@ func manageHookJSON(action string, location hookLocation, command string) (setup
 	if err := atomicWrite(location.path, append(encoded, '\n'), 0o600); err != nil {
 		return setupResult{}, err
 	}
+	if action == "uninstall" {
+		removeMarker(location.markerPath)
+	}
 	return setupResult{Agent: location.agent, State: state, Command: command}, nil
 }
 
-func isManagedHook(value any) bool {
+func isManagedHook(value any, token string) bool {
 	entry, ok := value.(map[string]any)
 	if !ok || len(entry) != 2 || entry["matcher"] != "" {
 		return false
@@ -222,10 +234,10 @@ func isManagedHook(value any) bool {
 		return false
 	}
 	command, ok := hook["command"].(string)
-	return ok && isManagedCommand(command)
+	return ok && isManagedCommand(command, token)
 }
 
-func isManagedCommand(command string) bool {
+func isManagedCommand(command, token string) bool {
 	const separator = "' session dashboard # " + sessionHookMarker + ":"
 	if !strings.HasPrefix(command, "'") {
 		return false
@@ -236,12 +248,7 @@ func isManagedCommand(command string) bool {
 	}
 	encodedPath := command[1:separatorIndex]
 	path := strings.ReplaceAll(encodedPath, "'\\''", "'")
-	return shellQuote(path)+" session dashboard # "+managedCommandMarker(path) == command
-}
-
-func managedCommandMarker(path string) string {
-	digest := sha256.Sum256([]byte(path))
-	return sessionHookMarker + ":" + hex.EncodeToString(digest[:])
+	return token != "" && shellQuote(path)+" session dashboard # "+sessionHookMarker+":"+token == command
 }
 
 func openCodeDependency(path string) (bool, error) {
@@ -292,12 +299,12 @@ func ensureOpenCodeDependency(path string) error {
 	return atomicWrite(path, append(encoded, '\n'), 0o600)
 }
 
-func manageOpenCodePlugin(action string, location hookLocation, command string) (setupResult, error) {
+func manageOpenCodePlugin(action string, location hookLocation, command, token string) (setupResult, error) {
 	data, err := os.ReadFile(location.path)
 	if err != nil && !os.IsNotExist(err) {
 		return setupResult{}, err
 	}
-	managed := isManagedOpenCodePlugin(data)
+	managed := isManagedOpenCodePlugin(data, token)
 	if len(data) > 0 && !managed {
 		return setupResult{}, errors.New("OpenCode plugin path is occupied by unmanaged content")
 	}
@@ -319,6 +326,7 @@ func manageOpenCodePlugin(action string, location hookLocation, command string) 
 		if err := os.Remove(location.path); err != nil {
 			return setupResult{}, err
 		}
+		removeMarker(location.markerPath)
 		return setupResult{Agent: location.agent, State: "removed"}, nil
 	case "install":
 		if err := ensureOpenCodeDependency(location.manifestPath); err != nil {
@@ -334,7 +342,7 @@ func manageOpenCodePlugin(action string, location hookLocation, command string) 
 	}
 }
 
-func isManagedOpenCodePlugin(data []byte) bool {
+func isManagedOpenCodePlugin(data []byte, token string) bool {
 	content := string(data)
 	prefix := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport type { Plugin } from \"@opencode-ai/plugin\";\n\nconst injected = new Set<string>();\n\nexport const RouterAxiPlugin: Plugin = async () => ({\n  \"experimental.chat.system.transform\": async (input, output) => {\n    if (input.sessionID && injected.has(input.sessionID)) return;\n    const context = execFileSync("
 	suffix := ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    if (input.sessionID) injected.add(input.sessionID);\n    output.system.push(context);\n  },\n});\n\nexport default RouterAxiPlugin;\n"
@@ -343,7 +351,7 @@ func isManagedOpenCodePlugin(data []byte) bool {
 	}
 	encodedCommand := strings.TrimSuffix(strings.TrimPrefix(content, prefix), suffix)
 	var command string
-	return json.Unmarshal([]byte(encodedCommand), &command) == nil && isManagedCommand(command)
+	return json.Unmarshal([]byte(encodedCommand), &command) == nil && isManagedCommand(command, token)
 }
 
 func jsonStringCommand(value string) string {
@@ -373,4 +381,34 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmpPath, path)
+}
+
+func sessionToken(path string, create bool) (string, error) {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		token := strings.TrimSpace(string(data))
+		if token == "" {
+			return "", errors.New("managed session marker is empty")
+		}
+		return token, nil
+	}
+	if !os.IsNotExist(err) || !create {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", err
+	}
+	value := make([]byte, 32)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(value)
+	if err := atomicWrite(path, []byte(token+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+func removeMarker(path string) {
+	_ = os.Remove(path)
 }

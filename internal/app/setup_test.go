@@ -94,11 +94,7 @@ func TestSetupPreservesUnrelatedClaudeHooksAndRepairsPath(t *testing.T) {
 		t.Fatalf("install: code=%d stdout=%q", code, stdout.String())
 	}
 	config := readPersistedHookConfig(t, path)
-	wantCommand, err := application.sessionCommand()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[0].Hooks[0].Command != "keep-me" || config.Hooks.SessionStart[1].Hooks[0].Command != wantCommand {
+	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[0].Hooks[0].Command != "keep-me" || !strings.HasPrefix(config.Hooks.SessionStart[1].Hooks[0].Command, "'/opt/router-axi/router-axi' session dashboard # "+sessionHookMarker+":") {
 		t.Fatalf("settings lost unrelated hook or managed path: %+v", config)
 	}
 	application.executable = func() (string, error) { return "/new/router-axi", nil }
@@ -107,11 +103,7 @@ func TestSetupPreservesUnrelatedClaudeHooksAndRepairsPath(t *testing.T) {
 		t.Fatalf("repair: code=%d stdout=%q", code, stdout.String())
 	}
 	config = readPersistedHookConfig(t, path)
-	wantCommand, err = application.sessionCommand()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[1].Hooks[0].Command != wantCommand {
+	if len(config.Hooks.SessionStart) != 2 || !strings.HasPrefix(config.Hooks.SessionStart[1].Hooks[0].Command, "'/new/router-axi' session dashboard # "+sessionHookMarker+":") {
 		t.Fatalf("managed path was not repaired: %+v", config)
 	}
 }
