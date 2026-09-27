@@ -230,9 +230,10 @@ func manageHookJSON(action string, location hookLocation, command string, owner 
 	if err := atomicWrite(location.path, append(encoded, '\n'), 0o600); err != nil {
 		return setupResult{}, err
 	}
-	if action == "uninstall" {
+	switch action {
+	case "uninstall":
 		removeMarker(location.markerPath)
-	} else if action == "install" {
+	case "install":
 		if err := writeOwner(location.markerPath, ownerRecord{Command: command, ShapeHash: shapeHash}); err != nil {
 			if restoreErr := restoreFile(location.path, data, len(data) > 0); restoreErr != nil {
 				return setupResult{}, fmt.Errorf("write managed session owner: %w; rollback configuration: %v", err, restoreErr)
