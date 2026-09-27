@@ -1,6 +1,8 @@
 package app
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -123,7 +125,7 @@ func (a *App) sessionCommand() (string, error) {
 	if err != nil || path == "" {
 		return "", errors.New("resolve router-axi executable")
 	}
-	return shellQuote(path) + " session dashboard # " + sessionHookMarker, nil
+	return shellQuote(path) + " session dashboard # " + managedCommandMarker(path), nil
 }
 
 func shellQuote(value string) string {
@@ -224,13 +226,22 @@ func isManagedHook(value any) bool {
 }
 
 func isManagedCommand(command string) bool {
-	const suffix = "' session dashboard # " + sessionHookMarker
-	if !strings.HasPrefix(command, "'") || !strings.HasSuffix(command, suffix) {
+	const separator = "' session dashboard # " + sessionHookMarker + ":"
+	if !strings.HasPrefix(command, "'") {
 		return false
 	}
-	encodedPath := strings.TrimSuffix(strings.TrimPrefix(command, "'"), suffix)
+	separatorIndex := strings.LastIndex(command, separator)
+	if separatorIndex < 1 {
+		return false
+	}
+	encodedPath := command[1:separatorIndex]
 	path := strings.ReplaceAll(encodedPath, "'\\''", "'")
-	return filepath.Base(path) == "router-axi" || filepath.Base(path) == ".router-axi"
+	return shellQuote(path)+" session dashboard # "+managedCommandMarker(path) == command
+}
+
+func managedCommandMarker(path string) string {
+	digest := sha256.Sum256([]byte(path))
+	return sessionHookMarker + ":" + hex.EncodeToString(digest[:])
 }
 
 func openCodeDependency(path string) (bool, error) {
@@ -282,10 +293,6 @@ func ensureOpenCodeDependency(path string) error {
 }
 
 func manageOpenCodePlugin(action string, location hookLocation, command string) (setupResult, error) {
-	dependency, err := openCodeDependency(location.manifestPath)
-	if err != nil {
-		return setupResult{}, err
-	}
 	data, err := os.ReadFile(location.path)
 	if err != nil && !os.IsNotExist(err) {
 		return setupResult{}, err
@@ -296,6 +303,10 @@ func manageOpenCodePlugin(action string, location hookLocation, command string) 
 	}
 	switch action {
 	case "check":
+		dependency, err := openCodeDependency(location.manifestPath)
+		if err != nil {
+			return setupResult{}, err
+		}
 		state := "missing"
 		if managed && dependency {
 			state = "installed"

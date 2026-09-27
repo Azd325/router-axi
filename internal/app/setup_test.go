@@ -94,7 +94,11 @@ func TestSetupPreservesUnrelatedClaudeHooksAndRepairsPath(t *testing.T) {
 		t.Fatalf("install: code=%d stdout=%q", code, stdout.String())
 	}
 	config := readPersistedHookConfig(t, path)
-	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[0].Hooks[0].Command != "keep-me" || config.Hooks.SessionStart[1].Hooks[0].Command != "'/opt/router-axi/router-axi' session dashboard # "+sessionHookMarker {
+	wantCommand, err := application.sessionCommand()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[0].Hooks[0].Command != "keep-me" || config.Hooks.SessionStart[1].Hooks[0].Command != wantCommand {
 		t.Fatalf("settings lost unrelated hook or managed path: %+v", config)
 	}
 	application.executable = func() (string, error) { return "/new/router-axi", nil }
@@ -103,8 +107,29 @@ func TestSetupPreservesUnrelatedClaudeHooksAndRepairsPath(t *testing.T) {
 		t.Fatalf("repair: code=%d stdout=%q", code, stdout.String())
 	}
 	config = readPersistedHookConfig(t, path)
-	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[1].Hooks[0].Command != "'/new/router-axi' session dashboard # "+sessionHookMarker {
+	wantCommand, err = application.sessionCommand()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[1].Hooks[0].Command != wantCommand {
 		t.Fatalf("managed path was not repaired: %+v", config)
+	}
+}
+
+func TestSetupUninstallOpenCodeIgnoresMalformedManifest(t *testing.T) {
+	home := t.TempDir()
+	application := setupApp(t, home)
+	var stdout, stderr bytes.Buffer
+	if code := application.Run(t.Context(), []string{"setup", "install", "--agent", "opencode"}, &stdout, &stderr); code != ExitOK {
+		t.Fatalf("install: code=%d stdout=%q", code, stdout.String())
+	}
+	manifest := filepath.Join(home, ".config", "opencode", "package.json")
+	if err := os.WriteFile(manifest, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	if code := application.Run(t.Context(), []string{"setup", "uninstall", "--agent", "opencode"}, &stdout, &stderr); code != ExitOK || !strings.Contains(stdout.String(), "state: removed") {
+		t.Fatalf("uninstall: code=%d stdout=%q", code, stdout.String())
 	}
 }
 
