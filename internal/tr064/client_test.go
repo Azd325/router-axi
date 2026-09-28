@@ -896,6 +896,15 @@ func TestWANDetailUsesOnlyAdvertisedDocumentedActions(t *testing.T) {
 	}
 }
 
+func TestWANDetailNormalizesSameOriginAbsoluteControlURLs(t *testing.T) {
+	script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanAddonSCPDFixture, true)
+	script[0].body = strings.Replace(script[0].body, "<controlURL>/layer3</controlURL>", "<controlURL>__ORIGIN__/layer3</controlURL>", 1)
+	script[0].body = strings.Replace(script[0].body, "<controlURL>/ip1</controlURL>", "<controlURL>__ORIGIN__/ip1</controlURL>", 1)
+	if _, err := forwardFixtureClient(t, script).WANDetail(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWANDetailWorksWithoutOptionalAddonInfos(t *testing.T) {
 	detail, err := forwardFixtureClient(t, wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", portMappingSCPDFixture, false)).WANDetail(t.Context())
 	if err != nil || detail.RouterReportedDownloadBytesPerSecond != nil || detail.RouterReportedUploadBytesPerSecond != nil || detail.TotalDownloadBytes != nil || detail.TotalUploadBytes != nil || detail.DNSServers == nil || len(detail.DNSServers) != 0 {

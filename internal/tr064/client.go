@@ -536,7 +536,7 @@ func (c *Client) WANDetail(ctx context.Context) (WANDetail, error) {
 	if err != nil {
 		return WANDetail{}, wanDetailError(err)
 	}
-	addonActions, err := c.wanDetailAddonActions(ctx, active)
+	active, addonActions, err := c.wanDetailAddonActions(ctx, active)
 	if err != nil {
 		return WANDetail{}, err
 	}
@@ -617,15 +617,15 @@ func (c *Client) wanDetailService(ctx context.Context) (service, error) {
 	return svc, nil
 }
 
-func (c *Client) wanDetailAddonActions(ctx context.Context, svc service) (map[string]bool, error) {
+func (c *Client) wanDetailAddonActions(ctx context.Context, svc service) (service, map[string]bool, error) {
 	control, controlErr := c.base.Parse(svc.ControlURL)
 	scpdURL, scpdErr := c.base.Parse(svc.SCPDURL)
 	if controlErr != nil || svc.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.Fragment != "" || scpdErr != nil || svc.SCPDURL == "" || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.Fragment != "" {
-		return nil, &Error{Kind: "protocol", Operation: "wan detail", Message: "router advertised an invalid active WAN service URL"}
+		return service{}, nil, &Error{Kind: "protocol", Operation: "wan detail", Message: "router advertised an invalid active WAN service URL"}
 	}
 	body, err := c.get(ctx, scpdURL)
 	if err != nil {
-		return nil, wanDetailError(err)
+		return service{}, nil, wanDetailError(err)
 	}
 	var scpd struct {
 		XMLName xml.Name `xml:"scpd"`
@@ -634,13 +634,14 @@ func (c *Client) wanDetailAddonActions(ctx context.Context, svc service) (map[st
 		} `xml:"actionList>action"`
 	}
 	if err := xml.Unmarshal(body, &scpd); err != nil || scpd.XMLName.Local != "scpd" {
-		return nil, &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an invalid active WAN service description"}
+		return service{}, nil, &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an invalid active WAN service description"}
 	}
 	actions := map[string]bool{}
 	for _, action := range scpd.Actions {
 		actions[strings.TrimSpace(action.Name)] = true
 	}
-	return actions, nil
+	svc.ControlURL = control.Path
+	return svc, actions, nil
 }
 
 func normalizeWANDetailState(value string, allowed []string, field string) (string, error) {
@@ -1815,6 +1816,8 @@ func (c *Client) advertisesLayer3Action(ctx context.Context) error {
 	}
 	for _, candidate := range scpd.Actions {
 		if strings.TrimSpace(candidate.Name) == "GetDefaultConnectionService" {
+			layer3.ControlURL = controlURL.Path
+			c.services[layer3.Type] = layer3
 			return nil
 		}
 	}

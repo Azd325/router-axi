@@ -780,7 +780,7 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 		return err
 	case "wan":
 		if v, ok := value.(tr064.WANDetail); ok {
-			_, err := fmt.Fprintf(w, "wan_detail:\n  access_type: %s\n  physical_link_status: %s\n  max_download_bits_per_second: %d\n  max_upload_bits_per_second: %d\n  router_reported_download_bytes_per_second: %s\n  router_reported_upload_bytes_per_second: %s\n  total_download_bytes: %s\n  total_upload_bytes: %s\n  dns_servers: %s\n", scalar(v.AccessType), scalar(v.PhysicalLinkStatus), v.MaxDownloadBitsPerSecond, v.MaxUploadBitsPerSecond, optionalUint(v.RouterReportedDownloadBytesPerSecond), optionalUint(v.RouterReportedUploadBytesPerSecond), optionalUint(v.TotalDownloadBytes), optionalUint(v.TotalUploadBytes), scalar(strings.Join(v.DNSServers, ",")))
+			_, err := fmt.Fprintf(w, "wan_detail:\n  access_type: %s\n  physical_link_status: %s\n  max_download_bits_per_second: %d\n  max_upload_bits_per_second: %d\n  router_reported_download_bytes_per_second: %s\n  router_reported_upload_bytes_per_second: %s\n  total_download_bytes: %s\n  total_upload_bytes: %s\n  dns_servers: %s\n", scalar(v.AccessType), scalar(v.PhysicalLinkStatus), v.MaxDownloadBitsPerSecond, v.MaxUploadBitsPerSecond, optionalUint(v.RouterReportedDownloadBytesPerSecond), optionalUint(v.RouterReportedUploadBytesPerSecond), optionalUint(v.TotalDownloadBytes), optionalUint(v.TotalUploadBytes), strings.Join(v.DNSServers, ","))
 			return err
 		}
 		v := value.(tr064.WAN)

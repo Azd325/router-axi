@@ -626,6 +626,21 @@ func TestWANDetailOutputContractAndCompactWANRegression(t *testing.T) {
 	}
 }
 
+func TestWANDetailEmptyDNSServersRemainEmptyInCompactOutput(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return fakeReaderWithoutDNS{}, nil }, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"wan", "detail"}, &stdout, &stderr)
+	if code != ExitOK || stderr.Len() != 0 || !strings.Contains(stdout.String(), "  dns_servers: \n") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+type fakeReaderWithoutDNS struct{ fakeReader }
+
+func (fakeReaderWithoutDNS) WANDetail(context.Context) (tr064.WANDetail, error) {
+	return tr064.WANDetail{AccessType: "Cable", PhysicalLinkStatus: "Up", MaxDownloadBitsPerSecond: 1, MaxUploadBitsPerSecond: 1, DNSServers: []string{}}, nil
+}
+
 func TestWANDetailHelpAndArguments(t *testing.T) {
 	code, stdout, stderr := runTest(t, "wan", "detail", "--help")
 	if code != ExitOK || stderr != "" || !strings.Contains(stdout, "usage: router-axi wan detail") || !strings.Contains(stdout, "not watch's observed-delta rates") {
