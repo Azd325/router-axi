@@ -439,15 +439,18 @@ func (c *Client) Status(ctx context.Context) (Status, error) {
 }
 
 func (c *Client) WAN(ctx context.Context) (WAN, error) {
-	serviceType, err := c.wanConnectionService(ctx)
+	if err := c.discover(ctx); err != nil {
+		return WAN{}, err
+	}
+	active, err := c.activeWANService(ctx)
+	if err != nil {
+		return WAN{}, wanActiveWANError(err)
+	}
+	v, err := c.actionOnService(ctx, active, "GetStatusInfo")
 	if err != nil {
 		return WAN{}, err
 	}
-	v, err := c.action(ctx, serviceType, "GetStatusInfo")
-	if err != nil {
-		return WAN{}, err
-	}
-	ip, err := c.action(ctx, serviceType, "GetExternalIPAddress")
+	ip, err := c.actionOnService(ctx, active, "GetExternalIPAddress")
 	if err != nil {
 		return WAN{}, err
 	}
@@ -1283,6 +1286,7 @@ const (
 	maxPortMappingEntries = 4096
 	activeWANMessage      = "could not determine the active WAN service"
 	activeWANRemediation  = "enable Layer3Forwarding:GetDefaultConnectionService or use supported firmware"
+	wanRemediation        = "enable a WANIPConnection or WANPPPConnection service and Layer3Forwarding:GetDefaultConnectionService, or use supported firmware"
 	forwardsRemediation   = "enable a WANIPConnection or WANPPPConnection service with documented port-mapping enumeration actions, or use supported firmware"
 )
 
@@ -1571,6 +1575,21 @@ func activeWANError(err error) *Error {
 	return result
 }
 
+func wanActiveWANError(err error) *Error {
+	result := &Error{Kind: "protocol", Operation: "wan", Message: activeWANMessage}
+	var protocolErr *Error
+	if errors.As(err, &protocolErr) {
+		result.Kind, result.StatusCode = protocolErr.Kind, protocolErr.StatusCode
+	}
+	if result.Kind == "router" && result.StatusCode == http.StatusInternalServerError {
+		result.Kind = "unsupported"
+	}
+	if result.Kind == "unsupported" {
+		result.Message += "; " + wanRemediation
+	}
+	return result
+}
+
 // activeWANServiceID matches a Layer3Forwarding default connection service
 // identifier shaped urn:upnp-org:serviceId:WANIPConnectionN,
 // WANPPPConnectionN, uuid:...:WANIPConnection.N, or the dot-separated
@@ -1750,20 +1769,6 @@ func (c *Client) discover(ctx context.Context) error {
 		c.services[svc.Type] = svc
 	}
 	return nil
-}
-
-func (c *Client) wanConnectionService(ctx context.Context) (string, error) {
-	if err := c.discover(ctx); err != nil {
-		return "", err
-	}
-	for _, prefix := range []string{"urn:dslforum-org:service:WANIPConnection:", "urn:dslforum-org:service:WANPPPConnection:"} {
-		for serviceType := range c.services {
-			if strings.HasPrefix(serviceType, prefix) {
-				return serviceType, nil
-			}
-		}
-	}
-	return "", &Error{Kind: "unsupported", Operation: "wan", Message: "router does not advertise a WAN connection service"}
 }
 
 func (c *Client) action(ctx context.Context, prefix, action string, arguments ...soapArgument) (soapValues, error) {

@@ -89,13 +89,14 @@ func fixtureServer(t *testing.T) *httptest.Server {
 		"/calllist.lua": callsFixture,
 	}
 	actions := map[string]string{
-		"GetInfo":                deviceFixture,
-		"GetStatusInfo":          wanStatusFixture,
-		"GetExternalIPAddress":   wanIPFixture,
-		"GetTotalBytesReceived":  trafficFixture,
-		"GetTotalBytesSent":      trafficFixture,
-		"GetCallList":            callListURLFixture,
-		"GetHostNumberOfEntries": hostCountFixture,
+		"GetInfo":                     deviceFixture,
+		"GetDefaultConnectionService": `<Envelope><NewDefaultConnectionService>urn:dslforum-org:service:WANIPConnection:1</NewDefaultConnectionService></Envelope>`,
+		"GetStatusInfo":               wanStatusFixture,
+		"GetExternalIPAddress":        wanIPFixture,
+		"GetTotalBytesReceived":       trafficFixture,
+		"GetTotalBytesSent":           trafficFixture,
+		"GetCallList":                 callListURLFixture,
+		"GetHostNumberOfEntries":      hostCountFixture,
 	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if response, ok := responses[r.URL.Path]; ok {
@@ -629,10 +630,13 @@ func forwardFixtureClient(t *testing.T, exchanges []forwardExchange) *Client {
 		if exchange.path == "/layer3" {
 			serviceType = "urn:dslforum-org:service:Layer3Forwarding:1"
 		}
+		if exchange.path == "/common" {
+			serviceType = "urn:dslforum-org:service:WANCommonInterfaceConfig:1"
+		}
 		var wantBody, wantAction string
 		if exchange.action != "" {
 			method = http.MethodPost
-			if exchange.action != "GetPortMappingNumberOfEntries" && exchange.action != "GetGenericPortMappingEntry" && (exchange.path != "/device" || exchange.action != "GetInfo") && (exchange.path != "/layer3" || exchange.action != "GetDefaultConnectionService") {
+			if exchange.action != "GetPortMappingNumberOfEntries" && exchange.action != "GetGenericPortMappingEntry" && (exchange.path != "/device" || exchange.action != "GetInfo") && (exchange.path != "/layer3" || exchange.action != "GetDefaultConnectionService") && (exchange.path != "/ip1" && exchange.path != "/ip2" && exchange.path != "/ppp1" || exchange.action != "GetStatusInfo" && exchange.action != "GetExternalIPAddress") && (exchange.path != "/common" || exchange.action != "GetTotalBytesReceived" && exchange.action != "GetTotalBytesSent") {
 				t.Errorf("test permitted forbidden action %q", exchange.action)
 			}
 			argument := ""
@@ -706,6 +710,28 @@ func allEntries(tables [][]string) []string {
 
 func activeIPScript(tables ...[]string) []forwardExchange {
 	return forwardScript("urn:WANIPConnection-com:serviceId:WANIPConnection1", "/ip1", tables...)
+}
+
+func wanScript(defaultService, activePath string) []forwardExchange {
+	return []forwardExchange{
+		{path: descriptionPath, body: portMappingDescriptionFixture},
+		{path: "/layer3", action: "GetDefaultConnectionService", body: `<Envelope><NewDefaultConnectionService>` + defaultService + `</NewDefaultConnectionService></Envelope>`},
+		{path: activePath, action: "GetStatusInfo", body: wanStatusFixture},
+		{path: activePath, action: "GetExternalIPAddress", body: wanIPFixture},
+	}
+}
+
+func overviewScript(defaultService, activePath string) []forwardExchange {
+	description := strings.Replace(portMappingDescriptionFixture, "</serviceList><deviceList>", `<service><serviceType>urn:dslforum-org:service:WANCommonInterfaceConfig:1</serviceType><controlURL>/common</controlURL></service></serviceList><deviceList>`, 1)
+	return []forwardExchange{
+		{path: descriptionPath, body: description},
+		{path: "/device", action: "GetInfo", body: deviceFixture},
+		{path: "/layer3", action: "GetDefaultConnectionService", body: `<Envelope><NewDefaultConnectionService>` + defaultService + `</NewDefaultConnectionService></Envelope>`},
+		{path: activePath, action: "GetStatusInfo", body: wanStatusFixture},
+		{path: activePath, action: "GetExternalIPAddress", body: wanIPFixture},
+		{path: "/common", action: "GetTotalBytesReceived", body: trafficFixture},
+		{path: "/common", action: "GetTotalBytesSent", body: trafficFixture},
+	}
 }
 
 func mappingField(body, tag, value string) string {
@@ -811,6 +837,49 @@ func TestForwardsSelectsDefaultConnectionService(t *testing.T) {
 				t.Fatalf("forwards=%#v error=%v", got, err)
 			}
 		})
+	}
+}
+
+func TestWANSelectionErrorsUseWANContract(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		script []forwardExchange
+	}{
+		{"missing-default", wanScript("", "/ip1")[:2]},
+		{"unknown-default", wanScript("urn:synthetic:unknown", "/ip1")[:2]},
+		{"missing-wan-service", []forwardExchange{{path: descriptionPath, body: `<root><device><serviceList><service><serviceType>urn:dslforum-org:service:Layer3Forwarding:1</serviceType><controlURL>/layer3</controlURL></service></serviceList></device></root>`}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := forwardFixtureClient(t, test.script).WAN(t.Context())
+			var protocolErr *Error
+			if !errors.As(err, &protocolErr) || protocolErr.Kind != "unsupported" || protocolErr.Operation != "wan" || !strings.Contains(protocolErr.Message, wanRemediation) || strings.Contains(protocolErr.Message, forwardsRemediation) {
+				t.Fatalf("error=%#v", err)
+			}
+		})
+	}
+}
+
+func TestWANSelectsDefaultConnectionService(t *testing.T) {
+	for _, test := range []struct {
+		name, defaultService, activePath string
+	}{
+		{"ip", "urn:WANIPConnection-com:serviceId:WANIPConnection2", "/ip2"},
+		{"ppp", "urn:WANPPPConnection-com:serviceId:WANPPPConnection1", "/ppp1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wan, err := forwardFixtureClient(t, wanScript(test.defaultService, test.activePath)).WAN(t.Context())
+			if err != nil || wan.Status != "Connected" || wan.ExternalIP != "2001:db8::42" {
+				t.Fatalf("wan=%#v error=%v", wan, err)
+			}
+		})
+	}
+}
+
+func TestOverviewSelectsDefaultConnectionService(t *testing.T) {
+	client := forwardFixtureClient(t, overviewScript("urn:WANIPConnection-com:serviceId:WANIPConnection2", "/ip2"))
+	overview, err := client.Overview(t.Context())
+	if err != nil || overview.Router.Model != "FRITZ!Box 7590 AX" || overview.WAN.Status != "Connected" || overview.Traffic.TotalDownloadBytes != 12345678901 {
+		t.Fatalf("overview=%#v error=%v", overview, err)
 	}
 }
 
@@ -1441,6 +1510,10 @@ func TestWANSupportsPPPConnectionService(t *testing.T) {
 			return
 		}
 		action := r.Header.Get("SOAPAction")
+		if strings.Contains(action, "GetDefaultConnectionService") {
+			_, _ = w.Write([]byte(`<Envelope><NewDefaultConnectionService>urn:dslforum-org:service:WANPPPConnection:1</NewDefaultConnectionService></Envelope>`))
+			return
+		}
 		if strings.Contains(action, "GetStatusInfo") {
 			_, _ = w.Write([]byte(wanStatusFixture))
 			return

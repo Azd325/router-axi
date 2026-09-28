@@ -103,6 +103,11 @@ not reliably identify the returned address family. `wan` therefore classifies
 `ip_family` from the address itself. `traffic` includes `observed_at`, the UTC
 RFC 3339 time at which the CLI completed both counter reads; compact output
 shows `unknown` if an observation time is unavailable.
+When multiple `WANIPConnection` or `WANPPPConnection` services are advertised,
+`wan` and `overview` resolve the active service through the documented
+`Layer3Forwarding:GetDefaultConnectionService` action; they do not select the
+first advertised service. The identifier matching and fail-closed rules are
+the same as [`forwards`](#port-forward-inspection).
 
 `doctor` performs one bounded diagnosis: it fetches the TR-064 device
 description once and, when `DeviceInfo` is advertised, invokes only
@@ -657,7 +662,7 @@ with remediation; there is no fallback to another instance.
 This table is not a firewall audit: IPv6 pinholes, exposed-host settings, or
 rules unavailable through these documented actions are outside its scope.
 
-`overview` reads router identity, WAN state, and traffic totals in that fixed
+`overview` reads router identity, active WAN state, and traffic totals in that fixed
 order. It is atomic: if any read fails, the command emits the failed operation as
 a structured error on stdout with its normal non-zero
 exit code. It never presents a partial overview as successful. JSON output has
@@ -715,8 +720,9 @@ and `WLANConfiguration:GetInfo`, `GetChannelInfo`, `GetTotalAssociations`, and
 `GetBeaconType`. Guest inspection additionally uses the documented AVM
 `WLANConfiguration:X_AVM-DE_GetWLANExtInfo` action only to read
 `NewX_AVM-DE_APType`, then the same four status actions for explicitly classified
-guest instances. It also uses `Layer3Forwarding:GetDefaultConnectionService` and the
-active `WANIPConnection`/`WANPPPConnection`:
+guest instances. Commands that need an active WAN (`wan`, `overview`, `watch`,
+and `forwards`) use `Layer3Forwarding:GetDefaultConnectionService`; `forwards`
+then uses the active `WANIPConnection`/`WANPPPConnection`:
 `GetPortMappingNumberOfEntries` and `GetGenericPortMappingEntry(NewPortMappingIndex)`
 when advertised in their SCPDs. Wi-Fi inspection does not call `GetSecurityKeys` or any other
 key- or client-returning WLAN action.

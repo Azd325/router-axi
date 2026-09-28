@@ -2,7 +2,8 @@
 <root xmlns="urn:dslforum-org:device-1-0">
   <device><serviceList>
     <service><serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType><controlURL>/upnp/control/deviceinfo</controlURL></service>
-    <service><serviceType>urn:dslforum-org:service:WANIPConnection:1</serviceType><controlURL>/upnp/control/wanipconn1</controlURL></service>
+    <service><serviceType>urn:dslforum-org:service:Layer3Forwarding:1</serviceType><controlURL>/upnp/control/layer3forwarding</controlURL></service>
+    <service><serviceType>urn:dslforum-org:service:WANIPConnection:1</serviceType><serviceId>urn:WANIPConnection-com:serviceId:WANIPConnection1</serviceId><controlURL>/upnp/control/wanipconn1</controlURL></service>
     <service><serviceType>urn:dslforum-org:service:WANCommonInterfaceConfig:1</serviceType><controlURL>/upnp/control/wancommonifconfig1</controlURL></service>
     <service><serviceType>urn:dslforum-org:service:X_AVM-DE_OnTel:1</serviceType><controlURL>/upnp/control/x_contact</controlURL></service>
     <service><serviceType>urn:dslforum-org:service:Hosts:1</serviceType><controlURL>/upnp/control/hosts</controlURL></service>
