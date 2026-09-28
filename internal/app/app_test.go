@@ -114,6 +114,11 @@ func (f fakeReader) Overview(ctx context.Context) (tr064.Overview, error) {
 func (f fakeReader) WAN(context.Context) (tr064.WAN, error) {
 	return tr064.WAN{Status: "Connected", ExternalIP: "203.0.113.42", IPFamily: "ipv4", UptimeSeconds: 86400, LastError: "ERROR_NONE"}, f.err
 }
+func (f fakeReader) WANDetail(context.Context) (tr064.WANDetail, error) {
+	downloadRate, uploadRate := uint64(2500000), uint64(125000)
+	totalDownload, totalUpload := uint64(12345678901), uint64(987654321)
+	return tr064.WANDetail{AccessType: "Cable", PhysicalLinkStatus: "Up", MaxDownloadBitsPerSecond: 1100000000, MaxUploadBitsPerSecond: 55000000, RouterReportedDownloadBytesPerSecond: &downloadRate, RouterReportedUploadBytesPerSecond: &uploadRate, TotalDownloadBytes: &totalDownload, TotalUploadBytes: &totalUpload, DNSServers: []string{"192.0.2.53", "192.0.2.54"}}, f.err
+}
 func (f fakeReader) Traffic(context.Context) (tr064.Traffic, error) {
 	return tr064.Traffic{TotalDownloadBytes: 12345678901, TotalUploadBytes: 987654321, ObservedAt: "2025-03-08T09:11:12Z"}, f.err
 }
@@ -601,6 +606,54 @@ func (fakeReaderWithoutObservation) Traffic(context.Context) (tr064.Traffic, err
 	return tr064.Traffic{TotalDownloadBytes: 1, TotalUploadBytes: 2}, nil
 }
 
+func TestWANDetailOutputContractAndCompactWANRegression(t *testing.T) {
+	code, stdout, stderr := runTest(t, "wan")
+	wantWAN := "wan:\n  status: Connected\n  external_ip: 203.0.113.42\n  ip_family: ipv4\n  uptime: 1d 00h 00m\n  last_error: ERROR_NONE\nnext: router-axi traffic\n"
+	if code != ExitOK || stdout != wantWAN || stderr != "" {
+		t.Fatalf("wan code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"wan", "detail"}, "wan_detail:\n  access_type: Cable\n  physical_link_status: Up\n  max_download_bits_per_second: 1100000000\n  max_upload_bits_per_second: 55000000\n  router_reported_download_bytes_per_second: 2500000\n  router_reported_upload_bytes_per_second: 125000\n  total_download_bytes: 12345678901\n  total_upload_bytes: 987654321\n  dns_servers: 192.0.2.53,192.0.2.54\n"},
+		{[]string{"wan", "detail", "--json"}, `{"access_type":"Cable","physical_link_status":"Up","max_download_bits_per_second":1100000000,"max_upload_bits_per_second":55000000,"router_reported_download_bytes_per_second":2500000,"router_reported_upload_bytes_per_second":125000,"total_download_bytes":12345678901,"total_upload_bytes":987654321,"dns_servers":["192.0.2.53","192.0.2.54"]}` + "\n"},
+	} {
+		code, stdout, stderr := runTest(t, test.args...)
+		if code != ExitOK || stdout != test.want || stderr != "" {
+			t.Fatalf("args=%v code=%d stdout=%q stderr=%q", test.args, code, stdout, stderr)
+		}
+	}
+}
+
+func TestWANDetailEmptyDNSServersRemainEmptyInCompactOutput(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return fakeReaderWithoutDNS{}, nil }, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"wan", "detail"}, &stdout, &stderr)
+	if code != ExitOK || stderr.Len() != 0 || !strings.Contains(stdout.String(), "  dns_servers: \n") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+type fakeReaderWithoutDNS struct{ fakeReader }
+
+func (fakeReaderWithoutDNS) WANDetail(context.Context) (tr064.WANDetail, error) {
+	return tr064.WANDetail{AccessType: "Cable", PhysicalLinkStatus: "Up", MaxDownloadBitsPerSecond: 1, MaxUploadBitsPerSecond: 1, DNSServers: []string{}}, nil
+}
+
+func TestWANDetailHelpAndArguments(t *testing.T) {
+	code, stdout, stderr := runTest(t, "wan", "detail", "--help")
+	if code != ExitOK || stderr != "" || !strings.Contains(stdout, "usage: router-axi wan detail") || !strings.Contains(stdout, "not watch's observed-delta rates") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	for _, args := range [][]string{{"wan", "unknown"}, {"wan", "detail", "extra"}} {
+		code, stdout, stderr := runTest(t, args...)
+		if code != ExitUsage || stderr != "" || !strings.Contains(stdout, "wan accepts one action: detail") && !strings.Contains(stdout, "exactly one command") {
+			t.Fatalf("args=%v code=%d stdout=%q stderr=%q", args, code, stdout, stderr)
+		}
+	}
+}
+
 func TestJSONIsExplicit(t *testing.T) {
 	code, stdout, stderr := runTest(t, "wan", "--json")
 	if code != ExitOK || stderr != "" {
@@ -830,6 +883,10 @@ func TestEverySubcommandHelpDepth(t *testing.T) {
 		if !strings.HasPrefix(text, "usage: router-axi "+command) || !strings.Contains(text, "--host ADDRESS") || !strings.Contains(text, "--json") || !strings.Contains(text, "examples: router-axi "+command) && !strings.Contains(text, "Examples: router-axi "+command) {
 			t.Fatalf("help for %s lacks usage, flags, or examples: %q", command, text)
 		}
+	}
+	wanDetail := help("wan", "detail")
+	if !strings.HasPrefix(wanDetail, "usage: router-axi wan detail") || !strings.Contains(wanDetail, "--host ADDRESS") || !strings.Contains(wanDetail, "--json") || !strings.Contains(wanDetail, "examples: router-axi wan detail") {
+		t.Fatalf("help for wan detail lacks usage, flags, or examples: %q", wanDetail)
 	}
 	for _, action := range []string{"enable", "disable"} {
 		text := help("wifi", action)

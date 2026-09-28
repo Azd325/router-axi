@@ -40,6 +40,7 @@ type Reader interface {
 	Status(context.Context) (tr064.Status, error)
 	Overview(context.Context) (tr064.Overview, error)
 	WAN(context.Context) (tr064.WAN, error)
+	WANDetail(context.Context) (tr064.WANDetail, error)
 	Traffic(context.Context) (tr064.Traffic, error)
 	WatchSnapshot(context.Context) (tr064.WatchSnapshot, error)
 	Calls(context.Context) ([]tr064.Call, error)
@@ -310,7 +311,11 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		case "overview":
 			value, err = reader.Overview(ctx)
 		case "wan":
-			value, err = reader.WAN(ctx)
+			if opts.action == "detail" {
+				value, err = reader.WANDetail(ctx)
+			} else {
+				value, err = reader.WAN(ctx)
+			}
 		case "traffic":
 			value, err = reader.Traffic(ctx)
 		case "calls":
@@ -491,6 +496,13 @@ func parse(args []string) (options, error) {
 				opts.command = args[i]
 				continue
 			}
+			if opts.command == "wan" && opts.action == "" && args[i] == "detail" {
+				opts.action = args[i]
+				continue
+			}
+			if opts.command == "wan" && opts.action != "" {
+				return opts, errors.New("wan accepts one action: detail")
+			}
 			if opts.command == "wifi" && opts.action == "" && (args[i] == "enable" || args[i] == "disable") {
 				opts.action = args[i]
 				continue
@@ -557,7 +569,7 @@ var commandHelp = map[string]string{
 	"doctor":   "usage: router-axi doctor [--host ADDRESS] [--json] [--help]\nOne bounded read-only diagnosis: reachability, TR-064 availability, authentication, model and firmware, and candidate capabilities for every command.\nUnsupported optional capabilities are a successful diagnosis and include remediation; no command's actions are invoked beyond DeviceInfo:GetInfo.\nexamples: router-axi doctor; router-axi doctor --host 192.0.2.1 --json\n",
 	"status":   "usage: router-axi status [--host ADDRESS] [--json] [--help]\nRead-only router identity and firmware; the default command when no command is given.\nexamples: router-axi status; router-axi status --json\n",
 	"overview": "usage: router-axi overview [--host ADDRESS] [--json] [--help]\nRead-only combined view: router identity, WAN state, and traffic totals in one read.\nexamples: router-axi overview; router-axi overview --json\n",
-	"wan":      "usage: router-axi wan [--host ADDRESS] [--json] [--help]\nRead-only internet connection state: status, external address, IP family, uptime, and last error.\nexamples: router-axi wan; router-axi wan --json\n",
+	"wan":      "usage: router-axi wan [detail] [--host ADDRESS] [--json] [--help]\nRead-only internet connection state: status, external address, IP family, uptime, and last error. Use wan detail for bounded physical-link properties and optional router-reported rates, totals, and DNS.\nexamples: router-axi wan; router-axi wan --json; router-axi wan detail\n",
 	"traffic":  "usage: router-axi traffic [--host ADDRESS] [--json] [--help]\nRead-only total downloaded and uploaded byte counters with the observation time.\nexamples: router-axi traffic; router-axi traffic --json\n",
 	"calls":    "usage: router-axi calls [--all] [--host ADDRESS] [--json] [--help]\nRead-only call history. Defaults to the 100 most recent entries; --all lists everything. No required arguments.\nexamples: router-axi calls; router-axi calls --all; router-axi calls --all --json\n",
 	"devices":  "usage: router-axi devices [--all] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi devices; router-axi devices --all --json\n",
@@ -663,6 +675,9 @@ func usageHint(opts options) string {
 }
 
 func help(command, action string) string {
+	if command == "wan" && action == "detail" {
+		return "usage: router-axi wan detail [--host ADDRESS] [--json] [--help]\nRead-only bounded WAN physical-link detail from documented WANCommonInterfaceConfig actions.\nGetCommonLinkProperties is required. Advertised GetAddonInfos adds router-reported byte rates, totals, and DNS servers; these rates are not watch's observed-delta rates.\nexamples: router-axi wan detail; router-axi wan detail --json\n"
+	}
 	if action != "" && command == "wifi" {
 		return "usage: router-axi wifi " + action + " [--instance N] --confirm [--host ADDRESS] [--json] [--help]\nEnables or disables one WLANConfiguration radio. Without --confirm: preview only, nothing changes.\nWith --confirm: idempotent change; the router must confirm the new state. --instance N is required when the router advertises more than one radio; bounds N 1 or greater.\nNo prompts or retries; SSIDs, BSSIDs, and keys are never read or printed.\nexamples: router-axi wifi " + action + "; router-axi wifi " + action + " --instance 1 --confirm; router-axi wifi " + action + " --instance 2 --confirm --json\n"
 	}
@@ -701,7 +716,7 @@ func help(command, action string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + " [--help]\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -764,6 +779,10 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 		_, err := fmt.Fprintf(w, "overview:\n  router: %s (%s)\n  wan: %s, %s, %s\n  traffic: %s downloaded, %s uploaded\n  observed_at: %s\n", scalar(v.Router.Model), scalar(v.Router.Software), scalar(v.WAN.Status), scalar(v.WAN.ExternalIP), scalar(v.WAN.IPFamily), size(v.Traffic.TotalDownloadBytes), size(v.Traffic.TotalUploadBytes), scalar(v.Traffic.ObservedAt))
 		return err
 	case "wan":
+		if v, ok := value.(tr064.WANDetail); ok {
+			_, err := fmt.Fprintf(w, "wan_detail:\n  access_type: %s\n  physical_link_status: %s\n  max_download_bits_per_second: %d\n  max_upload_bits_per_second: %d\n  router_reported_download_bytes_per_second: %s\n  router_reported_upload_bytes_per_second: %s\n  total_download_bytes: %s\n  total_upload_bytes: %s\n  dns_servers: %s\n", scalar(v.AccessType), scalar(v.PhysicalLinkStatus), v.MaxDownloadBitsPerSecond, v.MaxUploadBitsPerSecond, optionalUint(v.RouterReportedDownloadBytesPerSecond), optionalUint(v.RouterReportedUploadBytesPerSecond), optionalUint(v.TotalDownloadBytes), optionalUint(v.TotalUploadBytes), strings.Join(v.DNSServers, ","))
+			return err
+		}
 		v := value.(tr064.WAN)
 		_, err := fmt.Fprintf(w, "wan:\n  status: %s\n  external_ip: %s\n  ip_family: %s\n  uptime: %s\n  last_error: %s\nnext: router-axi traffic\n", scalar(v.Status), scalar(v.ExternalIP), scalar(v.IPFamily), duration(v.UptimeSeconds), scalar(v.LastError))
 		return err
@@ -1137,6 +1156,12 @@ func toon(value string) string {
 		return strconv.Quote(value)
 	}
 	return value
+}
+func optionalUint(value *uint64) string {
+	if value == nil {
+		return "unknown"
+	}
+	return strconv.FormatUint(*value, 10)
 }
 func duration(seconds uint64) string {
 	return fmt.Sprintf("%dd %02dh %02dm", seconds/86400, seconds%86400/3600, seconds%3600/60)

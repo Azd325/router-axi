@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<scpd xmlns="urn:dslforum-org:service-1-0">
+  <actionList>
+    <action><name>GetAddonInfos</name></action>
+  </actionList>
+</scpd>

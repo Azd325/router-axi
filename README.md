@@ -71,6 +71,8 @@ router-axi doctor --json
 router-axi status
 router-axi overview
 router-axi wan
+router-axi wan detail
+router-axi wan detail --json
 router-axi traffic
 router-axi watch
 router-axi watch --interval 2s --count 10 --json
@@ -163,6 +165,42 @@ faults, malformed or implausibly large host counts, and malformed active states
 remain protocol errors with exit `6`. Names, addresses, and interface types can be empty when the router
 does not know them. `interface_type` is the service's documented interface
 classification, not a physical switch port or inferred connection detail.
+
+### Bounded WAN detail
+
+Bare `wan` retains its compact connection-state output unchanged. `wan detail` is the
+explicit read-only detail view. It uses the documented
+`WANCommonInterfaceConfig:GetCommonLinkProperties` action for access type, physical-link
+status, and the router's maximum layer-1 download/upload bit rates. The command requires
+exactly one advertised WANCommonInterfaceConfig service and confirms
+`GetCommonLinkProperties` in that service's SCPD before invoking it.
+
+The command resolves the active WANIPConnection or WANPPPConnection through documented
+`Layer3Forwarding:GetDefaultConnectionService`, then checks that active service's SCPD for
+AVM's documented `GetAddonInfos`. When advertised there, it reads router-reported current
+byte rates, byte totals, and up to two DNS server addresses. If the action is not advertised,
+those numeric JSON fields are `null`, compact output says `unknown`, and `dns_servers` is
+empty; the CLI never probes the absent action. The rate
+fields are named `router_reported_download_bytes_per_second` and
+`router_reported_upload_bytes_per_second` to distinguish them from `watch`'s rates, which
+are calculated from observed counter deltas. Router-reported rates are not independently
+measured by the CLI.
+
+JSON fields are deterministic:
+
+```json
+{"access_type":"Cable","physical_link_status":"Up","max_download_bits_per_second":1100000000,"max_upload_bits_per_second":55000000,"router_reported_download_bytes_per_second":2500000,"router_reported_upload_bytes_per_second":125000,"total_download_bytes":12345678901,"total_upload_bytes":987654321,"dns_servers":["192.0.2.53","192.0.2.54"]}
+```
+
+Documented access types and physical-link states are preserved; unrecognized non-empty
+states become `unknown`. All numeric values are strict unsigned integers and DNS values must be IP addresses;
+missing required link properties or malformed advertised add-on data fail atomically as
+protocol errors. Missing or duplicate required services, or action-incomplete required
+SCPDs, are explicit unsupported capabilities; the optional add-on action may be absent.
+SCPD and control URLs must remain on the router origin. No WAN account data,
+credentials, generic SOAP surface, browser endpoint, mutation, or model-name inference is
+used. Compatibility is fixture-backed for service versions 1 and 2 and for routers with and
+without `GetAddonInfos`.
 
 ### Bounded WAN and traffic watch
 
@@ -715,7 +753,9 @@ and `DeviceConfig:Reboot` respectively, and the documented
 Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 `DeviceInfo:GetInfo`, `WANIPConnection` or
 `WANPPPConnection:GetStatusInfo` and `GetExternalIPAddress`,
-`WANCommonInterfaceConfig:GetTotalBytesReceived` and `GetTotalBytesSent`, AVM's
+`WANCommonInterfaceConfig:GetTotalBytesReceived`, `GetTotalBytesSent`, and the explicit
+`wan detail` actions `GetCommonLinkProperties` on WANCommonInterfaceConfig plus
+SCPD-advertised `GetAddonInfos` on the active WANIPConnection/WANPPPConnection service, AVM's
 documented `X_AVM-DE_OnTel:GetCallList`, and the standard
 `Hosts:GetHostNumberOfEntries` plus zero-based `GetGenericHostEntry(NewIndex)`,
 and `WLANConfiguration:GetInfo`, `GetChannelInfo`, `GetTotalAssociations`, and
