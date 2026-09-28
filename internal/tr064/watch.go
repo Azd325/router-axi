@@ -24,7 +24,7 @@ type WatchSnapshot struct {
 
 const WANStatusConnected = "connected"
 
-const watchRemediation = "enable the Layer3Forwarding and WANCommonInterfaceConfig TR-064 services or use supported firmware"
+const watchRemediation = "enable the Layer3Forwarding, WANCommonInterfaceConfig, and a WANIPConnection or WANPPPConnection TR-064 service or use supported firmware"
 
 func (c *Client) WatchSnapshot(ctx context.Context) (WatchSnapshot, error) {
 	client := *c

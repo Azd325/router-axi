@@ -80,6 +80,7 @@ type DoctorCapabilities struct {
 	Overview DoctorCheck `json:"overview"`
 	WAN      DoctorCheck `json:"wan"`
 	Traffic  DoctorCheck `json:"traffic"`
+	Watch    DoctorCheck `json:"watch"`
 	Calls    DoctorCheck `json:"calls"`
 	Devices  DoctorCheck `json:"devices"`
 	Leases   DoctorCheck `json:"leases"`
@@ -363,7 +364,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 		Protocol:       unknown,
 		Authentication: unknown,
 		Capabilities: DoctorCapabilities{
-			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Calls: unknown, Devices: unknown, Leases: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown, Backup: unknown,
+			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Watch: unknown, Calls: unknown, Devices: unknown, Leases: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown, Backup: unknown,
 		},
 	}
 	if err := c.discover(ctx); err != nil {
@@ -386,6 +387,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 	report.Capabilities.Status = c.advertisedCapability([]string{"urn:dslforum-org:service:DeviceInfo:"}, "enable the DeviceInfo TR-064 service or use supported firmware")
 	report.Capabilities.WAN = c.advertisedCapability([]string{"urn:dslforum-org:service:WANIPConnection:", "urn:dslforum-org:service:WANPPPConnection:"}, "enable a WAN connection TR-064 service or use supported firmware")
 	report.Capabilities.Traffic = c.advertisedCapability([]string{"urn:dslforum-org:service:WANCommonInterfaceConfig:"}, "enable the WAN common-interface TR-064 service or use supported firmware")
+	report.Capabilities.Watch = c.watchCapability()
 	report.Capabilities.Calls = c.advertisedCapability([]string{"urn:dslforum-org:service:X_AVM-DE_OnTel:"}, "enable telephony and its TR-064 service or use supported firmware")
 	hostsCapability := c.advertisedCapability([]string{"urn:dslforum-org:service:Hosts:"}, "enable the Hosts TR-064 service or use supported firmware")
 	report.Capabilities.Devices = hostsCapability
@@ -428,6 +430,19 @@ func (c *Client) advertisedCapability(prefixes []string, remediation string) Doc
 		}
 	}
 	return DoctorCheck{State: "unsupported", Remediation: remediation}
+}
+
+func (c *Client) watchCapability() DoctorCheck {
+	for _, prefixes := range [][]string{
+		{"urn:dslforum-org:service:Layer3Forwarding:"},
+		{"urn:dslforum-org:service:WANCommonInterfaceConfig:"},
+		wanMappingPrefixes,
+	} {
+		if c.advertisedCapability(prefixes, watchRemediation).State != "advertised" {
+			return DoctorCheck{State: "unsupported", Remediation: watchRemediation}
+		}
+	}
+	return DoctorCheck{State: "advertised"}
 }
 
 func (c *Client) Status(ctx context.Context) (Status, error) {

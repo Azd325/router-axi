@@ -114,8 +114,10 @@ description once and, when `DeviceInfo` is advertised, invokes only
 `DeviceInfo:GetInfo` to verify authentication and obtain model and firmware.
 It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
-`wan`, `traffic`, `calls`, `devices`, `leases`, `wifi`, `forwards`, `reboot`, and
-`backup`. Doctor does not report a separate `guest` capability: WLANConfiguration
+`wan`, `traffic`, `watch`, `calls`, `devices`, `leases`, `wifi`, `forwards`, `reboot`, and
+`backup`. `watch` is advertised only when the description includes Layer3Forwarding,
+WANCommonInterfaceConfig, and either WANIPConnection or WANPPPConnection; doctor does
+not invoke any of their actions. Doctor does not report a separate `guest` capability: WLANConfiguration
 advertisement alone cannot prove that every instance implements the documented
 `X_AVM-DE_GetWLANExtInfo` discriminator without additional reads, and doctor does
 not perform those reads. For reboot, doctor applies the same target selection as the command (exactly
