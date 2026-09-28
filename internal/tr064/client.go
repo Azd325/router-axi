@@ -1785,18 +1785,19 @@ func (c *Client) activeWANService(ctx context.Context) (service, error) {
 }
 
 func (c *Client) advertisesLayer3Action(ctx context.Context) error {
-	var layer3 service
-	for serviceType, candidate := range c.services {
-		if strings.HasPrefix(serviceType, "urn:dslforum-org:service:Layer3Forwarding:") {
-			layer3 = candidate
-			break
+	var matches []service
+	for _, candidate := range c.allServices {
+		if strings.HasPrefix(candidate.Type, "urn:dslforum-org:service:Layer3Forwarding:") {
+			matches = append(matches, candidate)
 		}
 	}
-	if layer3.Type == "" || layer3.SCPDURL == "" {
+	if len(matches) != 1 {
 		return &Error{Kind: "unsupported", Operation: "forwards", Message: "router does not advertise Layer3Forwarding:GetDefaultConnectionService; " + forwardsRemediation}
 	}
+	layer3 := matches[0]
+	controlURL, controlErr := c.base.Parse(layer3.ControlURL)
 	scpdURL, err := c.base.Parse(layer3.SCPDURL)
-	if err != nil || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.Fragment != "" {
+	if controlErr != nil || layer3.ControlURL == "" || !sameOrigin(c.base, controlURL) || controlURL.User != nil || controlURL.RawQuery != "" || controlURL.Fragment != "" || err != nil || layer3.SCPDURL == "" || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.Fragment != "" {
 		return &Error{Kind: "protocol", Operation: "forwards", Message: "router advertised an invalid Layer3Forwarding service-description URL"}
 	}
 	body, err := c.get(ctx, scpdURL)

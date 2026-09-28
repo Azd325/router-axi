@@ -922,6 +922,36 @@ func TestWANDetailRejectsUnadvertisedLayer3Action(t *testing.T) {
 	}
 }
 
+func TestWANDetailRejectsAmbiguousOrUnsafeLayer3Service(t *testing.T) {
+	base := wanDetailDescription("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1")
+	for _, test := range []struct {
+		name, description string
+		kind              string
+	}{
+		{
+			name:        "duplicate",
+			description: strings.Replace(base, "</serviceList>", `<service><serviceType>urn:dslforum-org:service:Layer3Forwarding:2</serviceType><controlURL>/layer3-2</controlURL><SCPDURL>/layer3-2.xml</SCPDURL></service></serviceList>`, 1),
+			kind:        "unsupported",
+		},
+		{
+			name:        "off-origin-control",
+			description: strings.Replace(base, "<controlURL>/layer3</controlURL>", "<controlURL>http://private-canary.invalid/layer3</controlURL>", 1),
+			kind:        "protocol",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanAddonSCPDFixture, false)
+			script[0].body = test.description
+			script = script[:3]
+			_, err := forwardFixtureClient(t, script).WANDetail(t.Context())
+			var protocolErr *Error
+			if !errors.As(err, &protocolErr) || protocolErr.Kind != test.kind || protocolErr.Operation != "wan detail" {
+				t.Fatalf("error=%#v", err)
+			}
+		})
+	}
+}
+
 func TestWANDetailCapabilityDetectionAndValidation(t *testing.T) {
 	withoutLink := strings.Replace(wanCommonSCPDFixture, "    <action><name>GetCommonLinkProperties</name></action>\n", "", 1)
 	for _, test := range []struct {
