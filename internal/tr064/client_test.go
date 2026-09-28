@@ -1370,8 +1370,52 @@ func TestDoctorUsesFixtureBackedDescriptionAndDeviceInfo(t *testing.T) {
 	if report.Model != "FRITZ!Box 7590 AX" || report.Firmware != "8.02" {
 		t.Fatalf("doctor identity = %#v", report)
 	}
-	if report.Capabilities.Status.State != "advertised" || report.Capabilities.Overview.State != "advertised" || report.Capabilities.WAN.State != "advertised" || report.Capabilities.Traffic.State != "advertised" || report.Capabilities.Calls.State != "advertised" || report.Capabilities.Devices.State != "advertised" {
+	if report.Capabilities.Status.State != "advertised" || report.Capabilities.Overview.State != "advertised" || report.Capabilities.WAN.State != "advertised" || report.Capabilities.Traffic.State != "advertised" || report.Capabilities.Watch.State != "advertised" || report.Capabilities.Calls.State != "advertised" || report.Capabilities.Devices.State != "advertised" {
 		t.Fatalf("doctor capabilities = %#v", report.Capabilities)
+	}
+}
+
+func TestDoctorWatchCapabilityUsesAdvertisementsOnly(t *testing.T) {
+	services := map[string]string{
+		"layer3": `<service><serviceType>urn:dslforum-org:service:Layer3Forwarding:1</serviceType><controlURL>/upnp/control/layer3forwarding</controlURL></service>`,
+		"common": `<service><serviceType>urn:dslforum-org:service:WANCommonInterfaceConfig:1</serviceType><controlURL>/upnp/control/wancommonifconfig1</controlURL></service>`,
+		"wan":    `<service><serviceType>urn:dslforum-org:service:WANIPConnection:1</serviceType><serviceId>urn:WANIPConnection-com:serviceId:WANIPConnection1</serviceId><controlURL>/upnp/control/wanipconn1</controlURL></service>`,
+	}
+	for name, omitted := range map[string]string{"advertised": "", "missing-layer3": services["layer3"], "missing-common": services["common"], "missing-wan": services["wan"]} {
+		t.Run(name, func(t *testing.T) {
+			description := descriptionFixture
+			if omitted != "" {
+				description = strings.Replace(description, omitted, "", 1)
+			}
+			var actions []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == descriptionPath {
+					_, _ = w.Write([]byte(description))
+					return
+				}
+				actions = append(actions, strings.Trim(r.Header.Get("SOAPAction"), `"`))
+				_, _ = w.Write([]byte(deviceFixture))
+			}))
+			defer server.Close()
+			client, err := New(server.URL, "", "", server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			report, err := client.Doctor(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "unsupported"
+			if name == "advertised" {
+				want = "advertised"
+			}
+			if report.Capabilities.Watch.State != want || (want == "unsupported" && report.Capabilities.Watch.Remediation == "") {
+				t.Fatalf("watch capability = %#v", report.Capabilities.Watch)
+			}
+			if !reflect.DeepEqual(actions, []string{"urn:dslforum-org:service:DeviceInfo:1#GetInfo"}) {
+				t.Fatalf("doctor probed watch services: %q", actions)
+			}
+		})
 	}
 }
 
@@ -1394,7 +1438,7 @@ func TestDoctorReportsOptionalUnsupportedCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Capabilities.Status.State != "advertised" || report.Capabilities.WAN.State != "unsupported" || report.Capabilities.Overview.State != "unsupported" {
+	if report.Capabilities.Status.State != "advertised" || report.Capabilities.WAN.State != "unsupported" || report.Capabilities.Overview.State != "unsupported" || report.Capabilities.Watch.State != "unsupported" {
 		t.Fatalf("capabilities = %#v", report.Capabilities)
 	}
 	if report.Capabilities.WiFi.State != "unsupported" || report.Capabilities.WiFi.Remediation == "" || report.Capabilities.WAN.Remediation == "" || report.Capabilities.Devices.Remediation == "" {
