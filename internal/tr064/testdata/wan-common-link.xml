@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:GetCommonLinkPropertiesResponse xmlns:u="urn:dslforum-org:service:WANCommonInterfaceConfig:1"><NewWANAccessType>Cable</NewWANAccessType><NewLayer1UpstreamMaxBitRate>55000000</NewLayer1UpstreamMaxBitRate><NewLayer1DownstreamMaxBitRate>1100000000</NewLayer1DownstreamMaxBitRate><NewPhysicalLinkStatus>Up</NewPhysicalLinkStatus></u:GetCommonLinkPropertiesResponse></s:Body></s:Envelope>

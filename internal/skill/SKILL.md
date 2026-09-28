@@ -18,7 +18,7 @@ documentation; run the CLI for live router state.
 - `router-axi` — status is the default view (router identity and firmware).
 - `doctor` — bounded connectivity and capability diagnosis.
 - `overview` — identity, WAN state, and traffic totals in one atomic read.
-- `wan` — internet connection state (status, external IP, IP family, uptime).
+- `wan` — compact internet connection state; `wan detail` explicitly reads bounded physical-link properties and optional router-reported rates, totals, and DNS.
 - `traffic` — byte totals with an `observed_at` timestamp.
 - `watch` — bounded read-only WAN/traffic polling; defaults `--interval 5s
   --count 6` (bounds 1s–1m and 1–3600, no unbounded mode, JSONL with `--json`,
@@ -94,7 +94,7 @@ commands:
   doctor    bounded connectivity and capability diagnosis
   status    router identity and firmware (default)
   overview  identity, WAN state, and traffic totals
-  wan       internet connection state
+  wan       internet connection state; wan detail adds bounded link details
   traffic   byte totals
   watch     bounded WAN state and traffic polling (6 samples, 5s interval)
   calls     call history

@@ -64,6 +64,18 @@ type Traffic struct {
 	ObservedAt         string `json:"observed_at"`
 }
 
+type WANDetail struct {
+	AccessType                           string   `json:"access_type"`
+	PhysicalLinkStatus                   string   `json:"physical_link_status"`
+	MaxDownloadBitsPerSecond             uint64   `json:"max_download_bits_per_second"`
+	MaxUploadBitsPerSecond               uint64   `json:"max_upload_bits_per_second"`
+	RouterReportedDownloadBytesPerSecond *uint64  `json:"router_reported_download_bytes_per_second"`
+	RouterReportedUploadBytesPerSecond   *uint64  `json:"router_reported_upload_bytes_per_second"`
+	TotalDownloadBytes                   *uint64  `json:"total_download_bytes"`
+	TotalUploadBytes                     *uint64  `json:"total_upload_bytes"`
+	DNSServers                           []string `json:"dns_servers"`
+}
+
 type Overview struct {
 	Router  Status  `json:"router"`
 	WAN     WAN     `json:"wan"`
@@ -195,18 +207,20 @@ func (d *description) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement)
 }
 
 type soapValues struct {
-	Status, LastError, ExternalIP                                            string
-	Manufacturer, Model, Serial, Software, Hardware                          string
-	Uptime, DownloadRate, UploadRate, TotalDownload, TotalUpload             string
-	CallListURL, HostNumberOfEntries, DefaultConnectionService               string
-	MACAddress, IPAddress, InterfaceType, Active, HostName, AddressSource    string
-	LeaseTimeRemaining                                                       *string
-	FaultCode, FaultDescription                                              string
-	Enable, SSID, Standard                                                   string
-	Channel, FrequencyBand, TotalAssociations, BeaconType, APType            string
-	PortMappingCount, ExternalPort, PortMappingProtocol                      string
-	InternalPort, InternalClient, PortMappingEnabled, PortMappingDescription string
-	RemoteHost, LeaseDuration                                                *string
+	Status, LastError, ExternalIP                                               string
+	Manufacturer, Model, Serial, Software, Hardware                             string
+	Uptime, DownloadRate, UploadRate, TotalDownload, TotalUpload                string
+	WANAccessType, PhysicalLinkStatus, DownstreamMaxBitRate, UpstreamMaxBitRate string
+	DNSServer1, DNSServer2                                                      string
+	CallListURL, HostNumberOfEntries, DefaultConnectionService                  string
+	MACAddress, IPAddress, InterfaceType, Active, HostName, AddressSource       string
+	LeaseTimeRemaining                                                          *string
+	FaultCode, FaultDescription                                                 string
+	Enable, SSID, Standard                                                      string
+	Channel, FrequencyBand, TotalAssociations, BeaconType, APType               string
+	PortMappingCount, ExternalPort, PortMappingProtocol                         string
+	InternalPort, InternalClient, PortMappingEnabled, PortMappingDescription    string
+	RemoteHost, LeaseDuration                                                   *string
 }
 
 type soapArgument struct{ Name, Value string }
@@ -252,6 +266,18 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.TotalDownload
 		case "NewTotalBytesSent":
 			target = &v.TotalUpload
+		case "NewWANAccessType":
+			target = &v.WANAccessType
+		case "NewPhysicalLinkStatus":
+			target = &v.PhysicalLinkStatus
+		case "NewLayer1DownstreamMaxBitRate":
+			target = &v.DownstreamMaxBitRate
+		case "NewLayer1UpstreamMaxBitRate":
+			target = &v.UpstreamMaxBitRate
+		case "NewDNSServer1":
+			target = &v.DNSServer1
+		case "NewDNSServer2":
+			target = &v.DNSServer2
 		case "NewCallListURL":
 			target = &v.CallListURL
 		case "NewDefaultConnectionService":
@@ -470,6 +496,184 @@ func (c *Client) WAN(ctx context.Context) (WAN, error) {
 		return WAN{}, err
 	}
 	return WAN{v.Status, ip.ExternalIP, ipFamily(ip.ExternalIP), number(v.Uptime), v.LastError}, nil
+}
+
+const wanDetailRemediation = "use firmware that advertises WANCommonInterfaceConfig:GetCommonLinkProperties"
+
+func (c *Client) WANDetail(ctx context.Context) (WANDetail, error) {
+	if err := c.discover(ctx); err != nil {
+		return WANDetail{}, wanDetailError(err)
+	}
+	common, err := c.wanDetailService(ctx)
+	if err != nil {
+		return WANDetail{}, err
+	}
+	link, err := c.actionOnService(ctx, common, "GetCommonLinkProperties")
+	if err != nil {
+		return WANDetail{}, wanDetailError(err)
+	}
+	downstream, err := parseWANDetailUint(link.DownstreamMaxBitRate, "maximum download bit rate")
+	if err != nil {
+		return WANDetail{}, err
+	}
+	upstream, err := parseWANDetailUint(link.UpstreamMaxBitRate, "maximum upload bit rate")
+	if err != nil {
+		return WANDetail{}, err
+	}
+	accessType, err := normalizeWANDetailState(link.WANAccessType, []string{"DSL", "POTS", "Cable", "Ethernet", "Other"}, "access type")
+	if err != nil {
+		return WANDetail{}, err
+	}
+	physicalStatus, err := normalizeWANDetailState(link.PhysicalLinkStatus, []string{"Up", "Down", "Initializing", "Unavailable"}, "physical-link status")
+	if err != nil {
+		return WANDetail{}, err
+	}
+	result := WANDetail{AccessType: accessType, PhysicalLinkStatus: physicalStatus, MaxDownloadBitsPerSecond: downstream, MaxUploadBitsPerSecond: upstream, DNSServers: []string{}}
+	active, err := c.activeWANService(ctx)
+	if err != nil {
+		return WANDetail{}, wanDetailError(err)
+	}
+	addonActions, err := c.wanDetailAddonActions(ctx, active)
+	if err != nil {
+		return WANDetail{}, err
+	}
+	if !addonActions["GetAddonInfos"] {
+		return result, nil
+	}
+	addon, err := c.actionOnService(ctx, active, "GetAddonInfos")
+	if err != nil {
+		return WANDetail{}, wanDetailError(err)
+	}
+	addonFields := []struct {
+		value  string
+		target **uint64
+	}{
+		{addon.DownloadRate, &result.RouterReportedDownloadBytesPerSecond},
+		{addon.UploadRate, &result.RouterReportedUploadBytesPerSecond},
+		{addon.TotalDownload, &result.TotalDownloadBytes},
+		{addon.TotalUpload, &result.TotalUploadBytes},
+	}
+	for _, field := range addonFields {
+		n, parseErr := parseWANDetailUint(field.value, "add-on numeric value")
+		if parseErr != nil {
+			return WANDetail{}, parseErr
+		}
+		*field.target = &n
+	}
+	for _, value := range []string{addon.DNSServer1, addon.DNSServer2} {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, err := netip.ParseAddr(value); err != nil {
+			return WANDetail{}, &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an invalid DNS server address"}
+		}
+		result.DNSServers = append(result.DNSServers, value)
+	}
+	return result, nil
+}
+
+func (c *Client) wanDetailService(ctx context.Context) (service, error) {
+	const prefix = "urn:dslforum-org:service:WANCommonInterfaceConfig:"
+	var services []service
+	for _, svc := range c.allServices {
+		if strings.HasPrefix(svc.Type, prefix) {
+			services = append(services, svc)
+		}
+	}
+	if len(services) != 1 {
+		return service{}, &Error{Kind: "unsupported", Operation: "wan detail", Message: "router does not advertise exactly one WANCommonInterfaceConfig service; " + wanDetailRemediation}
+	}
+	svc := services[0]
+	control, controlErr := c.base.Parse(svc.ControlURL)
+	scpdURL, scpdErr := c.base.Parse(svc.SCPDURL)
+	if controlErr != nil || svc.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.Fragment != "" || scpdErr != nil || svc.SCPDURL == "" || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.Fragment != "" {
+		return service{}, &Error{Kind: "protocol", Operation: "wan detail", Message: "router advertised an invalid WAN common-interface URL"}
+	}
+	body, err := c.get(ctx, scpdURL)
+	if err != nil {
+		return service{}, wanDetailError(err)
+	}
+	var scpd struct {
+		XMLName xml.Name `xml:"scpd"`
+		Actions []struct {
+			Name string `xml:"name"`
+		} `xml:"actionList>action"`
+	}
+	if err := xml.Unmarshal(body, &scpd); err != nil || scpd.XMLName.Local != "scpd" {
+		return service{}, &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an invalid WAN common-interface service description"}
+	}
+	actions := map[string]bool{}
+	for _, action := range scpd.Actions {
+		actions[strings.TrimSpace(action.Name)] = true
+	}
+	if !actions["GetCommonLinkProperties"] {
+		return service{}, &Error{Kind: "unsupported", Operation: "wan detail", Message: "router does not advertise WANCommonInterfaceConfig:GetCommonLinkProperties; " + wanDetailRemediation}
+	}
+	svc.ControlURL = control.Path
+	return svc, nil
+}
+
+func (c *Client) wanDetailAddonActions(ctx context.Context, svc service) (map[string]bool, error) {
+	control, controlErr := c.base.Parse(svc.ControlURL)
+	scpdURL, scpdErr := c.base.Parse(svc.SCPDURL)
+	if controlErr != nil || svc.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.Fragment != "" || scpdErr != nil || svc.SCPDURL == "" || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.Fragment != "" {
+		return nil, &Error{Kind: "protocol", Operation: "wan detail", Message: "router advertised an invalid active WAN service URL"}
+	}
+	body, err := c.get(ctx, scpdURL)
+	if err != nil {
+		return nil, wanDetailError(err)
+	}
+	var scpd struct {
+		XMLName xml.Name `xml:"scpd"`
+		Actions []struct {
+			Name string `xml:"name"`
+		} `xml:"actionList>action"`
+	}
+	if err := xml.Unmarshal(body, &scpd); err != nil || scpd.XMLName.Local != "scpd" {
+		return nil, &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an invalid active WAN service description"}
+	}
+	actions := map[string]bool{}
+	for _, action := range scpd.Actions {
+		actions[strings.TrimSpace(action.Name)] = true
+	}
+	return actions, nil
+}
+
+func normalizeWANDetailState(value string, allowed []string, field string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", &Error{Kind: "protocol", Operation: "wan detail", Message: "router omitted the WAN " + field}
+	}
+	for _, candidate := range allowed {
+		if value == candidate {
+			return value, nil
+		}
+	}
+	return "unknown", nil
+}
+
+func parseWANDetailUint(value, field string) (uint64, error) {
+	n, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		return 0, &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an invalid " + field}
+	}
+	return n, nil
+}
+
+func wanDetailError(err error) *Error {
+	result := &Error{Kind: "protocol", Operation: "wan detail", Message: "WAN detail inspection failed"}
+	var protocolErr *Error
+	if errors.As(err, &protocolErr) {
+		result.Kind, result.StatusCode = protocolErr.Kind, protocolErr.StatusCode
+		if protocolErr.Kind == "router" && protocolErr.FaultCode == "401" {
+			result.Kind = "unsupported"
+		}
+	}
+	if result.Kind == "unsupported" {
+		result.Message = "router does not support the documented WAN detail action; " + wanDetailRemediation
+	}
+	return result
 }
 
 func (c *Client) Overview(ctx context.Context) (Overview, error) {
