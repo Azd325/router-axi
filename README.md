@@ -84,6 +84,8 @@ router-axi leases --json
 router-axi leases --all
 router-axi wifi
 router-axi wifi --json
+router-axi wifi detail
+router-axi wifi detail --instance 2 --json
 router-axi guest
 router-axi guest --json
 router-axi skill install
@@ -564,10 +566,59 @@ documented service identifiers; routers whose `GetInfo` omits the
 frequency-band extension report `band: unknown`. Compatibility is
 fixture-backed, not inferred from a model name.
 
+### Per-radio Wi-Fi detail
+
+`wifi detail` is the bounded read-only companion to the `wifi` list: it reports
+one identified radio's safe documented properties. It accepts the same
+`--instance N` selection as `wifi enable|disable` (required when the router
+advertises more than one WLANConfiguration instance) and resolves the target
+before any request is sent.
+
+Like `wan detail`, the command validates the target service's SCPD first: the
+service description must advertise the documented `GetInfo` and
+`GetChannelInfo` actions before either is invoked. Missing advertisement exits
+`5` with remediation and no action request is sent.
+
+Only safe fields are read from the two documented responses: enable status
+(`NewEnable`, strictly parsed), status (`NewStatus`), standard
+(`NewStandard`), max bitrate (`NewMaxBitRate`), channel (`NewChannel`), and
+band (`NewX_AVM-DE_FrequencyBand`). Optional fields the router omits are
+`unknown` in compact output and JSON `null`; channel and band follow the same
+whitelist rules as the `wifi` list, and unrecognized optional values never
+fail the command. The BSSID that `GetInfo` also returns is discarded and never
+emitted; `GetSecurityKeys`, `X_AVM-DE_GetWLANHybridMode`, and associated-device
+actions are never called.
+
+Compact output is:
+
+```
+wifi_detail:
+  instance: urn:WLANConfiguration-com:serviceId:WLANConfiguration2
+  enabled: true
+  status: Up
+  standard: ax
+  max_bit_rate: Auto
+  channel: 36
+  band: 5000
+```
+
+JSON uses the same deterministic field order:
+
+```json
+{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","enabled":true,"status":"Up","standard":"ax","max_bit_rate":"Auto","channel":36,"band":"5000"}
+```
+
+Errors are the standard structured errors: `ambiguous_instance` and
+`unknown_instance` exit `2`, unsupported actions `5`, authentication `3`,
+network `4`, and invalid required values `6`. Compatibility is fixture-backed,
+including multi-radio routers and guest access-point instances, not inferred
+from a model name.
+
 ### Guest Wi-Fi inspection
 
 `guest` is a distinct top-level read command because the existing CLI grammar has
-single-word inspection commands; `wifi` accepts only the established mutation
+single-word inspection commands; `wifi` accepts only the `detail` inspection
+action and the established mutation
 actions `enable|disable`. It enumerates every advertised WLANConfiguration service
 and calls the documented AVM action `X_AVM-DE_GetWLANExtInfo` on each one. An
 instance is a guest network only when `NewX_AVM-DE_APType` is exactly `guest`;

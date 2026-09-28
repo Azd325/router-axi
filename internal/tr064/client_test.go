@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -63,6 +64,9 @@ var hostEntryOneFixture string
 
 //go:embed testdata/wifi-description.xml
 var wifiDescriptionFixture string
+
+//go:embed testdata/wifi-scpd.xml
+var wifiSCPDFixture string
 
 //go:embed testdata/wifi-info.xml
 var wifiInfoFixture string
@@ -153,6 +157,8 @@ type wifiResponse struct {
 	status int
 }
 
+const wifiSCPPath = "/wlan.xml"
+
 func wifiFixtureClient(t *testing.T, description string, overrides map[string]wifiResponse) (*Client, <-chan string) {
 	t.Helper()
 	requests := make(chan string, 100)
@@ -169,6 +175,18 @@ func wifiFixtureClient(t *testing.T, description string, overrides map[string]wi
 				t.Error("description request was not GET")
 			}
 			_, _ = w.Write([]byte(description))
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == wifiSCPPath {
+			requests <- r.URL.Path + "#SCPD"
+			response := wifiSCPDFixture
+			if override, ok := overrides[wifiSCPPath+"#SCPD"]; ok {
+				response = override.body
+				if override.status != 0 {
+					w.WriteHeader(override.status)
+				}
+			}
+			_, _ = w.Write([]byte(response))
 			return
 		}
 		if r.URL.Path == "/device" && r.Header.Get("SOAPAction") == `"urn:dslforum-org:service:DeviceInfo:1#GetInfo"` {
@@ -249,6 +267,168 @@ func TestWiFiEnumeratesNestedInstancesInNumericOrder(t *testing.T) {
 			}
 			if string(encoded) != `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration1","ssid":"synthetic-ap","enabled":true,"channel":0,"band":"5000","standard":"ax","associated_devices":2,"security_mode":"11iandWPA3"}` {
 				t.Fatalf("radio JSON = %s", encoded)
+			}
+		})
+	}
+}
+
+func TestWiFiDetailReportsDocumentedSafeFields(t *testing.T) {
+	// Instance 2 is the guest access point in the guest fixtures; detail reads
+	// only its safe documented state, never keys or client lists.
+	for _, test := range []struct {
+		instance uint64
+		path     string
+	}{{2, "/wifi2"}, {10, "/wifi10"}} {
+		t.Run(test.path, func(t *testing.T) {
+			client, requests := wifiFixtureClient(t, wifiDescriptionFixture, nil)
+			detail, err := client.WiFiDetail(t.Context(), test.instance)
+			if err != nil {
+				t.Fatal(err)
+			}
+			status, maxBitRate, channel := "Up", "Auto", uint64(36)
+			want := RadioDetail{
+				ServiceID: wlanIDPrefix + strconv.FormatUint(test.instance, 10), Enabled: true, Status: &status,
+				Standard: "ax", MaxBitRate: &maxBitRate, Channel: &channel, Band: "5000",
+			}
+			if !reflect.DeepEqual(detail, want) {
+				t.Fatalf("detail = %#v, want %#v", detail, want)
+			}
+			if got := <-requests; got != "/wlan.xml#SCPD" {
+				t.Fatalf("first request = %q, want the SCPD preflight", got)
+			}
+			for _, action := range []string{"GetInfo", "GetChannelInfo"} {
+				if got := <-requests; got != test.path+"#"+action {
+					t.Fatalf("request = %q, want %s#%s", got, test.path, action)
+				}
+			}
+			if len(requests) != 0 {
+				t.Fatalf("unexpected extra requests: %d", len(requests))
+			}
+			encoded, err := json.Marshal(detail)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(encoded) != `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration`+strconv.FormatUint(test.instance, 10)+`","enabled":true,"status":"Up","standard":"ax","max_bit_rate":"Auto","channel":36,"band":"5000"}` {
+				t.Fatalf("detail JSON = %s", encoded)
+			}
+			if strings.Contains(string(encoded), "synthetic-sensitive-bssid") || strings.Contains(string(encoded), "synthetic-ap") {
+				t.Fatalf("detail JSON leaked a BSSID or SSID: %s", encoded)
+			}
+		})
+	}
+}
+
+func TestWiFiDetailSelectsSingleInstanceWithoutFlag(t *testing.T) {
+	description := `<root xmlns="urn:dslforum-org:device-1-0"><device><serviceList><service><serviceType>urn:dslforum-org:service:WLANConfiguration:1</serviceType><serviceId>urn:WLANConfiguration-com:serviceId:WLANConfiguration1</serviceId><controlURL>/wifi1</controlURL><SCPDURL>/wlan.xml</SCPDURL></service></serviceList></device></root>`
+	client, requests := wifiFixtureClient(t, description, nil)
+	detail, err := client.WiFiDetail(t.Context(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.ServiceID != wlanIDPrefix+"1" || !detail.Enabled {
+		t.Fatalf("detail = %#v", detail)
+	}
+	for _, want := range []string{"/wlan.xml#SCPD", "/wifi1#GetInfo", "/wifi1#GetChannelInfo"} {
+		if got := <-requests; got != want {
+			t.Fatalf("request = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestWiFiDetailRejectsAmbiguousOrUnknownInstance(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		instance uint64
+		code     string
+	}{
+		{name: "ambiguous", instance: 0, code: "ambiguous_instance"},
+		{name: "unknown", instance: 5, code: "unknown_instance"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, requests := wifiFixtureClient(t, wifiDescriptionFixture, nil)
+			detail, err := client.WiFiDetail(t.Context(), test.instance)
+			var protocolErr *Error
+			if detail.ServiceID != "" || !errors.As(err, &protocolErr) || protocolErr.Kind != "usage" || protocolErr.Code != test.code || protocolErr.Operation != "wifi detail" {
+				t.Fatalf("detail=%#v error=%#v", detail, err)
+			}
+			if len(requests) != 0 {
+				t.Fatalf("no request may precede instance resolution: %d", len(requests))
+			}
+		})
+	}
+}
+
+func TestWiFiDetailReportsMissingOptionalFieldsAsUnknown(t *testing.T) {
+	client, _ := wifiFixtureClient(t, wifiDescriptionFixture, map[string]wifiResponse{
+		"GetInfo":        {body: strings.ReplaceAll(strings.ReplaceAll(wifiInfoFixture, "<NewStatus>Up</NewStatus>", ""), "<NewMaxBitRate>Auto</NewMaxBitRate>", "")},
+		"GetChannelInfo": {body: strings.Replace(strings.ReplaceAll(wifiChannelFixture, "<NewChannel>36</NewChannel>", ""), ">5000<", ">2500<", 1)},
+	})
+	detail, err := client.WiFiDetail(t.Context(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := RadioDetail{ServiceID: wlanIDPrefix + "2", Enabled: true, Standard: "ax", Band: "unknown"}
+	if !reflect.DeepEqual(detail, want) {
+		t.Fatalf("detail = %#v, want %#v", detail, want)
+	}
+	encoded, err := json.Marshal(detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","enabled":true,"status":null,"standard":"ax","max_bit_rate":null,"channel":null,"band":"unknown"}` {
+		t.Fatalf("detail JSON = %s", encoded)
+	}
+}
+
+func TestWiFiDetailRequiresAdvertisedDocumentedActions(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		scpd   string
+		kind   string
+		wanted string
+	}{
+		{name: "missing GetChannelInfo", scpd: strings.Replace(wifiSCPDFixture, "<action><name>GetChannelInfo</name></action>", "", 1), kind: "unsupported"},
+		{name: "missing GetInfo", scpd: strings.Replace(wifiSCPDFixture, "<action><name>GetInfo</name></action>", "", 1), kind: "unsupported"},
+		{name: "invalid description", scpd: `<not-scpd/>`, kind: "protocol"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, requests := wifiFixtureClient(t, wifiDescriptionFixture, map[string]wifiResponse{
+				wifiSCPPath + "#SCPD": {body: test.scpd},
+			})
+			detail, err := client.WiFiDetail(t.Context(), 2)
+			var protocolErr *Error
+			if detail.ServiceID != "" || !errors.As(err, &protocolErr) || protocolErr.Kind != test.kind || protocolErr.Operation != "wifi detail" {
+				t.Fatalf("detail=%#v error=%#v", detail, err)
+			}
+			if test.kind == "unsupported" && !strings.Contains(protocolErr.Message, wifiDetailRemediation) {
+				t.Fatalf("error lacks remediation: %q", protocolErr.Message)
+			}
+			if len(requests) != 1 {
+				t.Fatalf("only the SCPD preflight may run: %d", len(requests))
+			}
+		})
+	}
+}
+
+func TestWiFiDetailRejectsInvalidRouterValues(t *testing.T) {
+	fault := `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><s:Fault><errorCode>401</errorCode><errorDescription>private-value</errorDescription></s:Fault></s:Body></s:Envelope>`
+	for _, test := range []struct {
+		name       string
+		overrides  map[string]wifiResponse
+		kind       string
+		operation  string
+		statusCode int
+	}{
+		{name: "invalid enable state", overrides: map[string]wifiResponse{"GetInfo": {body: strings.Replace(wifiInfoFixture, ">1</NewEnable>", ">maybe</NewEnable>", 1)}}, kind: "protocol"},
+		{name: "invalid channel", overrides: map[string]wifiResponse{"GetChannelInfo": {body: strings.Replace(wifiChannelFixture, ">36<", ">256<", 1)}}, kind: "protocol"},
+		{name: "unsupported action", overrides: map[string]wifiResponse{"GetChannelInfo": {body: fault, status: http.StatusInternalServerError}}, kind: "unsupported"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, _ := wifiFixtureClient(t, wifiDescriptionFixture, test.overrides)
+			detail, err := client.WiFiDetail(t.Context(), 2)
+			var protocolErr *Error
+			if detail.ServiceID != "" || !errors.As(err, &protocolErr) || protocolErr.Kind != test.kind || strings.Contains(fmt.Sprintf("%#v", err), "private-value") {
+				t.Fatalf("detail=%#v error=%#v", detail, err)
 			}
 		})
 	}

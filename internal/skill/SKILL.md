@@ -28,7 +28,7 @@ documentation; run the CLI for live router state.
   `--all` for the full list).
 - `leases` — observed Hosts-table lease metadata (100 entries by default,
   `--all` for the full list).
-- `wifi` — Wi-Fi inspection; `wifi enable|disable` changes a radio.
+- `wifi` — Wi-Fi inspection; `wifi detail [--instance N]` reports one radio's safe documented properties; `wifi enable|disable` changes a radio.
 - `guest` — documented guest Wi-Fi inspection (public SSID, aggregate state).
 - `forwards` — port-forwarding rules (100 entries by default, `--all` for the
   full list).
@@ -100,7 +100,7 @@ commands:
   calls     call history
   devices   connected and known LAN clients
   leases    observed Hosts table lease metadata
-  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm
+  wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm
   guest     documented guest Wi-Fi inspection
   forwards  port-forwarding rules
   reboot    preview router restart; execute once with --confirm
