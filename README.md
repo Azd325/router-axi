@@ -195,8 +195,9 @@ JSON fields are deterministic:
 Documented access types and physical-link states are preserved; unrecognized non-empty
 states become `unknown`. All numeric values are strict unsigned integers and DNS values must be IP addresses;
 missing required link properties or malformed advertised add-on data fail atomically as
-protocol errors. Missing, duplicate, or action-incomplete services are explicit unsupported
-capabilities. SCPD and control URLs must remain on the router origin. No WAN account data,
+protocol errors. Missing or duplicate required services, or action-incomplete required
+SCPDs, are explicit unsupported capabilities; the optional add-on action may be absent.
+SCPD and control URLs must remain on the router origin. No WAN account data,
 credentials, generic SOAP surface, browser endpoint, mutation, or model-name inference is
 used. Compatibility is fixture-backed for service versions 1 and 2 and for routers with and
 without `GetAddonInfos`.
