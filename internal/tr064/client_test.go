@@ -43,6 +43,9 @@ var wanAddonSCPDFixture string
 //go:embed testdata/wan-addon.xml
 var wanAddonFixture string
 
+//go:embed testdata/layer3-scpd.xml
+var layer3SCPDFixture string
+
 //go:embed testdata/call-list-url.xml
 var callListURLFixture string
 
@@ -660,7 +663,7 @@ func forwardFixtureClient(t *testing.T, exchanges []forwardExchange) *Client {
 			}
 			wantAction = `"` + serviceType + "#" + exchange.action + `"`
 			wantBody = `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` + exchange.action + ` xmlns:u="` + serviceType + `">` + argument + `</u:` + exchange.action + `></s:Body></s:Envelope>`
-		} else if exchange.path != descriptionPath && exchange.path != "/ip1.xml" && exchange.path != "/ip2.xml" && exchange.path != "/ppp1.xml" && exchange.path != "/common.xml" {
+		} else if exchange.path != descriptionPath && exchange.path != "/ip1.xml" && exchange.path != "/ip2.xml" && exchange.path != "/ppp1.xml" && exchange.path != "/common.xml" && exchange.path != "/layer3.xml" {
 			t.Errorf("test permitted forbidden GET %q", exchange.path)
 		}
 		body, err := io.ReadAll(r.Body)
@@ -856,7 +859,7 @@ func TestForwardsSelectsDefaultConnectionService(t *testing.T) {
 }
 
 func wanDetailDescription(version, activeType, activePath string) string {
-	return `<root><device><serviceList><service><serviceType>urn:dslforum-org:service:Layer3Forwarding:1</serviceType><controlURL>/layer3</controlURL></service><service><serviceType>urn:dslforum-org:service:WANCommonInterfaceConfig:` + version + `</serviceType><controlURL>/common</controlURL><SCPDURL>/common.xml</SCPDURL></service><service><serviceType>` + activeType + `</serviceType><serviceId>urn:` + strings.TrimPrefix(strings.TrimSuffix(activeType, ":1"), "urn:dslforum-org:service:") + `-com:serviceId:` + strings.TrimPrefix(strings.TrimSuffix(activeType, ":1"), "urn:dslforum-org:service:") + `1</serviceId><controlURL>` + activePath + `</controlURL><SCPDURL>` + activePath + `.xml</SCPDURL></service></serviceList></device></root>`
+	return `<root><device><serviceList><service><serviceType>urn:dslforum-org:service:Layer3Forwarding:1</serviceType><controlURL>/layer3</controlURL><SCPDURL>/layer3.xml</SCPDURL></service><service><serviceType>urn:dslforum-org:service:WANCommonInterfaceConfig:` + version + `</serviceType><controlURL>/common</controlURL><SCPDURL>/common.xml</SCPDURL></service><service><serviceType>` + activeType + `</serviceType><serviceId>urn:` + strings.TrimPrefix(strings.TrimSuffix(activeType, ":1"), "urn:dslforum-org:service:") + `-com:serviceId:` + strings.TrimPrefix(strings.TrimSuffix(activeType, ":1"), "urn:dslforum-org:service:") + `1</serviceId><controlURL>` + activePath + `</controlURL><SCPDURL>` + activePath + `.xml</SCPDURL></service></serviceList></device></root>`
 }
 
 func wanDetailScript(version, activeType, activePath, activeSCPD string, addon bool) []forwardExchange {
@@ -865,6 +868,7 @@ func wanDetailScript(version, activeType, activePath, activeSCPD string, addon b
 		{path: descriptionPath, body: wanDetailDescription(version, activeType, activePath)},
 		{path: "/common.xml", body: wanCommonSCPDFixture},
 		{path: "/common", action: "GetCommonLinkProperties", body: wanCommonLinkFixture, serviceType: "urn:dslforum-org:service:WANCommonInterfaceConfig:" + version},
+		{path: "/layer3.xml", body: layer3SCPDFixture},
 		{path: "/layer3", action: "GetDefaultConnectionService", body: `<Envelope><NewDefaultConnectionService>` + defaultService + `</NewDefaultConnectionService></Envelope>`},
 		{path: activePath + ".xml", body: activeSCPD},
 	}
@@ -904,6 +908,17 @@ func TestWANDetailWorksWithoutOptionalAddonInfos(t *testing.T) {
 	want := `{"access_type":"Cable","physical_link_status":"Up","max_download_bits_per_second":1100000000,"max_upload_bits_per_second":55000000,"router_reported_download_bytes_per_second":null,"router_reported_upload_bytes_per_second":null,"total_download_bytes":null,"total_upload_bytes":null,"dns_servers":[]}`
 	if string(encoded) != want {
 		t.Fatalf("JSON=%s", encoded)
+	}
+}
+
+func TestWANDetailRejectsUnadvertisedLayer3Action(t *testing.T) {
+	script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanAddonSCPDFixture, false)
+	script[3].body = strings.Replace(layer3SCPDFixture, "    <action><name>GetDefaultConnectionService</name></action>\n", "", 1)
+	script = script[:4]
+	_, err := forwardFixtureClient(t, script).WANDetail(t.Context())
+	var protocolErr *Error
+	if !errors.As(err, &protocolErr) || protocolErr.Kind != "unsupported" || protocolErr.Operation != "wan detail" {
+		t.Fatalf("error=%#v", err)
 	}
 }
 

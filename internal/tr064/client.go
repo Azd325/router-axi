@@ -529,6 +529,9 @@ func (c *Client) WANDetail(ctx context.Context) (WANDetail, error) {
 		return WANDetail{}, err
 	}
 	result := WANDetail{AccessType: accessType, PhysicalLinkStatus: physicalStatus, MaxDownloadBitsPerSecond: downstream, MaxUploadBitsPerSecond: upstream, DNSServers: []string{}}
+	if err := c.advertisesLayer3Action(ctx); err != nil {
+		return WANDetail{}, wanDetailError(err)
+	}
 	active, err := c.activeWANService(ctx)
 	if err != nil {
 		return WANDetail{}, wanDetailError(err)
@@ -1779,6 +1782,42 @@ func (c *Client) activeWANService(ctx context.Context) (service, error) {
 		return service{}, &Error{Kind: "unsupported", Operation: "forwards", Message: "router default WAN service does not name exactly one advertised WAN service; " + forwardsRemediation}
 	}
 	return matches[0], nil
+}
+
+func (c *Client) advertisesLayer3Action(ctx context.Context) error {
+	var layer3 service
+	for serviceType, candidate := range c.services {
+		if strings.HasPrefix(serviceType, "urn:dslforum-org:service:Layer3Forwarding:") {
+			layer3 = candidate
+			break
+		}
+	}
+	if layer3.Type == "" || layer3.SCPDURL == "" {
+		return &Error{Kind: "unsupported", Operation: "forwards", Message: "router does not advertise Layer3Forwarding:GetDefaultConnectionService; " + forwardsRemediation}
+	}
+	scpdURL, err := c.base.Parse(layer3.SCPDURL)
+	if err != nil || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.Fragment != "" {
+		return &Error{Kind: "protocol", Operation: "forwards", Message: "router advertised an invalid Layer3Forwarding service-description URL"}
+	}
+	body, err := c.get(ctx, scpdURL)
+	if err != nil {
+		return forwardsError(err)
+	}
+	var scpd struct {
+		XMLName xml.Name `xml:"scpd"`
+		Actions []struct {
+			Name string `xml:"name"`
+		} `xml:"actionList>action"`
+	}
+	if err := xml.Unmarshal(body, &scpd); err != nil || scpd.XMLName.Local != "scpd" {
+		return &Error{Kind: "protocol", Operation: "forwards", Message: "router returned an invalid Layer3Forwarding service description"}
+	}
+	for _, candidate := range scpd.Actions {
+		if strings.TrimSpace(candidate.Name) == "GetDefaultConnectionService" {
+			return nil
+		}
+	}
+	return &Error{Kind: "unsupported", Operation: "forwards", Message: "router does not advertise Layer3Forwarding:GetDefaultConnectionService; " + forwardsRemediation}
 }
 
 func activeWANError(err error) *Error {
