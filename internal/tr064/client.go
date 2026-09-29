@@ -96,16 +96,16 @@ type DSL struct {
 	DownstreamCurrentKbps        uint64  `json:"downstream_current_kbps"`
 	UpstreamMaxKbps              uint64  `json:"upstream_max_kbps"`
 	DownstreamMaxKbps            uint64  `json:"downstream_max_kbps"`
-	UpstreamNoiseMarginTenthDB   int64   `json:"upstream_noise_margin_tenth_db"`
-	DownstreamNoiseMarginTenthDB int64   `json:"downstream_noise_margin_tenth_db"`
-	UpstreamAttenuationTenthDB   int64   `json:"upstream_attenuation_tenth_db"`
-	DownstreamAttenuationTenthDB int64   `json:"downstream_attenuation_tenth_db"`
+	UpstreamNoiseMarginTenthDB   uint32  `json:"upstream_noise_margin_tenth_db"`
+	DownstreamNoiseMarginTenthDB uint32  `json:"downstream_noise_margin_tenth_db"`
+	UpstreamAttenuationTenthDB   uint32  `json:"upstream_attenuation_tenth_db"`
+	DownstreamAttenuationTenthDB uint32  `json:"downstream_attenuation_tenth_db"`
 	FECErrors                    uint64  `json:"fec_errors"`
 	CRCErrors                    uint64  `json:"crc_errors"`
 	ATURVendor                   *string `json:"atur_vendor"`
 	ATURCountry                  *string `json:"atur_country"`
-	UpstreamPowerTenthDBm        *int64  `json:"upstream_power_tenth_dbm"`
-	DownstreamPowerTenthDBm      *int64  `json:"downstream_power_tenth_dbm"`
+	UpstreamPowerTenthDBm        *uint16 `json:"upstream_power_tenth_dbm"`
+	DownstreamPowerTenthDBm      *uint16 `json:"downstream_power_tenth_dbm"`
 }
 
 type Overview struct {
@@ -1083,26 +1083,26 @@ func parseDSLInfo(values soapValues) (DSL, error) {
 		{values.UpstreamCurrRate, "upstream current rate", new(uint64)}, {values.DownstreamCurrRate, "downstream current rate", new(uint64)}, {values.UpstreamMaxRate, "upstream maximum rate", new(uint64)}, {values.DownstreamMaxRate, "downstream maximum rate", new(uint64)}, {values.FECErrors, "FEC errors", new(uint64)}, {values.CRCErrors, "CRC errors", new(uint64)},
 	}
 	for _, field := range rates {
-		n, parseErr := parseDSLUint(field.value, field.field)
+		n, parseErr := parseDSLUint(field.value, field.field, 32)
 		if parseErr != nil {
 			return DSL{}, parseErr
 		}
 		*field.target = n
 	}
-	signed := []struct {
+	unsigned := []struct {
 		value, field string
-		target       *int64
+		target       *uint32
 	}{
-		{values.UpstreamNoiseMargin, "upstream noise margin", new(int64)}, {values.DownstreamNoiseMargin, "downstream noise margin", new(int64)}, {values.UpstreamAttenuation, "upstream attenuation", new(int64)}, {values.DownstreamAttenuation, "downstream attenuation", new(int64)},
+		{values.UpstreamNoiseMargin, "upstream noise margin", new(uint32)}, {values.DownstreamNoiseMargin, "downstream noise margin", new(uint32)}, {values.UpstreamAttenuation, "upstream attenuation", new(uint32)}, {values.DownstreamAttenuation, "downstream attenuation", new(uint32)},
 	}
-	for _, field := range signed {
-		n, parseErr := parseDSLInt(field.value, field.field)
+	for _, field := range unsigned {
+		n, parseErr := parseDSLUint(field.value, field.field, 32)
 		if parseErr != nil {
 			return DSL{}, parseErr
 		}
-		*field.target = n
+		*field.target = uint32(n)
 	}
-	result := DSL{LinkStatus: linkStatus, ModulationType: modulation, CurrentProfile: profile, UpstreamCurrentKbps: *rates[0].target, DownstreamCurrentKbps: *rates[1].target, UpstreamMaxKbps: *rates[2].target, DownstreamMaxKbps: *rates[3].target, UpstreamNoiseMarginTenthDB: *signed[0].target, DownstreamNoiseMarginTenthDB: *signed[1].target, UpstreamAttenuationTenthDB: *signed[2].target, DownstreamAttenuationTenthDB: *signed[3].target, FECErrors: *rates[4].target, CRCErrors: *rates[5].target}
+	result := DSL{LinkStatus: linkStatus, ModulationType: modulation, CurrentProfile: profile, UpstreamCurrentKbps: *rates[0].target, DownstreamCurrentKbps: *rates[1].target, UpstreamMaxKbps: *rates[2].target, DownstreamMaxKbps: *rates[3].target, UpstreamNoiseMarginTenthDB: *unsigned[0].target, DownstreamNoiseMarginTenthDB: *unsigned[1].target, UpstreamAttenuationTenthDB: *unsigned[2].target, DownstreamAttenuationTenthDB: *unsigned[3].target, FECErrors: *rates[4].target, CRCErrors: *rates[5].target}
 	result.ATURVendor, err = optionalDSLText(values.ATURVendor, "ATUR vendor")
 	if err != nil {
 		return DSL{}, err
@@ -1111,11 +1111,11 @@ func parseDSLInfo(values soapValues) (DSL, error) {
 	if err != nil {
 		return DSL{}, err
 	}
-	result.UpstreamPowerTenthDBm, err = optionalDSLInt(values.UpstreamPower, "upstream power")
+	result.UpstreamPowerTenthDBm, err = optionalDSLUint16(values.UpstreamPower, "upstream power")
 	if err != nil {
 		return DSL{}, err
 	}
-	result.DownstreamPowerTenthDBm, err = optionalDSLInt(values.DownstreamPower, "downstream power")
+	result.DownstreamPowerTenthDBm, err = optionalDSLUint16(values.DownstreamPower, "downstream power")
 	if err != nil {
 		return DSL{}, err
 	}
@@ -1135,31 +1135,24 @@ func normalizeDSLState(value string, allowed []string, field string) (string, er
 	return "unknown", nil
 }
 
-func parseDSLUint(value, field string) (uint64, error) {
-	n, err := strconv.ParseUint(strings.TrimSpace(value), 10, 32)
+func parseDSLUint(value, field string, bitSize int) (uint64, error) {
+	n, err := strconv.ParseUint(strings.TrimSpace(value), 10, bitSize)
 	if err != nil {
 		return 0, &Error{Kind: "protocol", Operation: "dsl", Message: "router returned an invalid DSL " + field}
 	}
 	return n, nil
 }
 
-func parseDSLInt(value, field string) (int64, error) {
-	n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 32)
-	if err != nil {
-		return 0, &Error{Kind: "protocol", Operation: "dsl", Message: "router returned an invalid DSL " + field}
-	}
-	return n, nil
-}
-
-func optionalDSLInt(value, field string) (*int64, error) {
+func optionalDSLUint16(value, field string) (*uint16, error) {
 	if strings.TrimSpace(value) == "" {
 		return nil, nil
 	}
-	n, err := parseDSLInt(value, field)
+	n, err := parseDSLUint(value, field, 16)
 	if err != nil {
 		return nil, err
 	}
-	return &n, nil
+	result := uint16(n)
+	return &result, nil
 }
 
 func requiredDSLText(value, field string) (string, error) {

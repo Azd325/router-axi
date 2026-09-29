@@ -155,7 +155,7 @@ func (f fakeReaderWithoutDHCPConfig) DHCP(ctx context.Context) (tr064.DHCP, erro
 
 func (f fakeReader) DSL(context.Context) (tr064.DSL, error) {
 	vendor, country := "synthetic-vendor", "DE"
-	upstreamPower, downstreamPower := int64(-10), int64(140)
+	upstreamPower, downstreamPower := uint16(10), uint16(140)
 	return tr064.DSL{LinkStatus: "Up", ModulationType: "VDSL", CurrentProfile: "17a", UpstreamCurrentKbps: 42000, DownstreamCurrentKbps: 250000, UpstreamMaxKbps: 50000, DownstreamMaxKbps: 300000, UpstreamNoiseMarginTenthDB: 70, DownstreamNoiseMarginTenthDB: 60, UpstreamAttenuationTenthDB: 120, DownstreamAttenuationTenthDB: 180, FECErrors: 12, CRCErrors: 3, ATURVendor: &vendor, ATURCountry: &country, UpstreamPowerTenthDBm: &upstreamPower, DownstreamPowerTenthDBm: &downstreamPower}, f.err
 }
 
@@ -1337,8 +1337,8 @@ func TestDSLOutputContract(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"dsl"}, "dsl:\n  link_status: Up\n  modulation_type: VDSL\n  current_profile: 17a\n  upstream_current_kbps: 42000\n  downstream_current_kbps: 250000\n  upstream_max_kbps: 50000\n  downstream_max_kbps: 300000\n  upstream_noise_margin_tenth_db: 70\n  downstream_noise_margin_tenth_db: 60\n  upstream_attenuation_tenth_db: 120\n  downstream_attenuation_tenth_db: 180\n  fec_errors: 12\n  crc_errors: 3\n  atur_vendor: synthetic-vendor\n  atur_country: DE\n  upstream_power_tenth_dbm: -10\n  downstream_power_tenth_dbm: 140\n"},
-		{[]string{"dsl", "--json"}, `{"link_status":"Up","modulation_type":"VDSL","current_profile":"17a","upstream_current_kbps":42000,"downstream_current_kbps":250000,"upstream_max_kbps":50000,"downstream_max_kbps":300000,"upstream_noise_margin_tenth_db":70,"downstream_noise_margin_tenth_db":60,"upstream_attenuation_tenth_db":120,"downstream_attenuation_tenth_db":180,"fec_errors":12,"crc_errors":3,"atur_vendor":"synthetic-vendor","atur_country":"DE","upstream_power_tenth_dbm":-10,"downstream_power_tenth_dbm":140}` + "\n"},
+		{[]string{"dsl"}, "dsl:\n  link_status: Up\n  modulation_type: VDSL\n  current_profile: 17a\n  upstream_current_kbps: 42000\n  downstream_current_kbps: 250000\n  upstream_max_kbps: 50000\n  downstream_max_kbps: 300000\n  upstream_noise_margin_tenth_db: 70\n  downstream_noise_margin_tenth_db: 60\n  upstream_attenuation_tenth_db: 120\n  downstream_attenuation_tenth_db: 180\n  fec_errors: 12\n  crc_errors: 3\n  atur_vendor: synthetic-vendor\n  atur_country: DE\n  upstream_power_tenth_dbm: 10\n  downstream_power_tenth_dbm: 140\n"},
+		{[]string{"dsl", "--json"}, `{"link_status":"Up","modulation_type":"VDSL","current_profile":"17a","upstream_current_kbps":42000,"downstream_current_kbps":250000,"upstream_max_kbps":50000,"downstream_max_kbps":300000,"upstream_noise_margin_tenth_db":70,"downstream_noise_margin_tenth_db":60,"upstream_attenuation_tenth_db":120,"downstream_attenuation_tenth_db":180,"fec_errors":12,"crc_errors":3,"atur_vendor":"synthetic-vendor","atur_country":"DE","upstream_power_tenth_dbm":10,"downstream_power_tenth_dbm":140}` + "\n"},
 	} {
 		code, stdout, stderr := runTest(t, test.args...)
 		if code != ExitOK || stdout != test.want || stderr != "" {

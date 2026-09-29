@@ -587,13 +587,40 @@ func TestDSLReportsDocumentedFields(t *testing.T) {
 			client, requests := dslFixtureClient(t, description, dslSCPDFixture, map[string]dslResponse{"X_AVM-DE_GetDSLInfo": {body: dslInfoFixture}})
 			result, err := client.DSL(t.Context())
 			vendor, country := "synthetic-vendor", "DE"
-			upstreamPower, downstreamPower := int64(80), int64(140)
+			upstreamPower, downstreamPower := uint16(80), uint16(140)
 			want := DSL{LinkStatus: "Up", ModulationType: "VDSL", CurrentProfile: "17a", UpstreamCurrentKbps: 42000, DownstreamCurrentKbps: 250000, UpstreamMaxKbps: 50000, DownstreamMaxKbps: 300000, UpstreamNoiseMarginTenthDB: 70, DownstreamNoiseMarginTenthDB: 60, UpstreamAttenuationTenthDB: 120, DownstreamAttenuationTenthDB: 180, FECErrors: 12, CRCErrors: 3, ATURVendor: &vendor, ATURCountry: &country, UpstreamPowerTenthDBm: &upstreamPower, DownstreamPowerTenthDBm: &downstreamPower}
 			if err != nil || !reflect.DeepEqual(result, want) {
 				t.Fatalf("result=%#v error=%v", result, err)
 			}
 			if !reflect.DeepEqual(*requests, []string{"GET /tr64desc.xml", "GET /dsl.xml", "/dsl#X_AVM-DE_GetDSLInfo"}) {
 				t.Fatalf("requests=%v", *requests)
+			}
+		})
+	}
+}
+
+func TestDSLValidatesUnsignedWidths(t *testing.T) {
+	valid := soapValues{LinkStatus: "Up", ModulationType: "VDSL", CurrentProfile: "17a", UpstreamCurrRate: "42000", DownstreamCurrRate: "250000", UpstreamMaxRate: "50000", DownstreamMaxRate: "300000", UpstreamNoiseMargin: "4294967295", DownstreamNoiseMargin: "60", UpstreamAttenuation: "120", DownstreamAttenuation: "180", FECErrors: "12", CRCErrors: "3", UpstreamPower: "65535", DownstreamPower: "140"}
+	result, err := parseDSLInfo(valid)
+	if err != nil || result.UpstreamNoiseMarginTenthDB != ^uint32(0) || result.UpstreamPowerTenthDBm == nil || *result.UpstreamPowerTenthDBm != ^uint16(0) {
+		t.Fatalf("result=%#v error=%v", result, err)
+	}
+	for _, test := range []struct {
+		name   string
+		change func(*soapValues)
+	}{
+		{"negative noise margin", func(v *soapValues) { v.UpstreamNoiseMargin = "-1" }},
+		{"noise margin overflow", func(v *soapValues) { v.UpstreamNoiseMargin = "4294967296" }},
+		{"negative power", func(v *soapValues) { v.UpstreamPower = "-1" }},
+		{"power overflow", func(v *soapValues) { v.UpstreamPower = "65536" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			values := valid
+			test.change(&values)
+			result, err := parseDSLInfo(values)
+			var protocolErr *Error
+			if !reflect.DeepEqual(result, DSL{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || protocolErr.Operation != "dsl" {
+				t.Fatalf("result=%#v error=%#v", result, err)
 			}
 		})
 	}

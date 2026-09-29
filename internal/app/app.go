@@ -1203,11 +1203,11 @@ func optionalUint(value *uint64) string {
 	return strconv.FormatUint(*value, 10)
 }
 
-func optionalInt(value *int64) string {
+func optionalInt(value *uint16) string {
 	if value == nil {
 		return "unknown"
 	}
-	return strconv.FormatInt(*value, 10)
+	return strconv.FormatUint(uint64(*value), 10)
 }
 
 func optionalText(value *string) string {
