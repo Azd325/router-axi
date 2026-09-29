@@ -111,6 +111,15 @@ var dhcpSCPDFixture string
 //go:embed testdata/dhcp-info.xml
 var dhcpInfoFixture string
 
+//go:embed testdata/dsl-description.xml
+var dslDescriptionFixture string
+
+//go:embed testdata/dsl-scpd.xml
+var dslSCPDFixture string
+
+//go:embed testdata/dsl-info.xml
+var dslInfoFixture string
+
 func fixtureServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	responses := map[string]string{
@@ -500,6 +509,219 @@ func TestDoctorAdvertisesDHCPWithoutReadingItsSCPDOrActions(t *testing.T) {
 	client, requests := dhcpFixtureClient(t, dhcpDescriptionFixture, dhcpSCPDFixture, map[string]dhcpResponse{"GetInfo": {body: deviceFixture}})
 	report, err := client.Doctor(t.Context())
 	if err != nil || report.Capabilities.DHCP.State != "advertised" || !reflect.DeepEqual(*requests, []string{"GET /tr64desc.xml", "/device#GetInfo"}) {
+		t.Fatalf("report=%#v error=%v requests=%v", report, err, *requests)
+	}
+}
+
+type dslResponse struct {
+	body, location string
+	status         int
+}
+
+func dslFixtureClient(t *testing.T, description, scpd string, responses map[string]dslResponse) (*Client, *[]string) {
+	t.Helper()
+	requests := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == descriptionPath {
+			requests = append(requests, "GET "+r.URL.RequestURI())
+			_, _ = io.WriteString(w, strings.ReplaceAll(description, "__ORIGIN__", "http://"+r.Host))
+			return
+		}
+		if r.Method == http.MethodGet {
+			requests = append(requests, "GET "+r.URL.RequestURI())
+			response := responses["GET "+r.URL.RequestURI()]
+			body := scpd
+			if response.body != "" {
+				body = response.body
+			}
+			if response.location != "" {
+				w.Header().Set("Location", strings.ReplaceAll(response.location, "__ORIGIN__", "http://"+r.Host))
+			}
+			if response.status != 0 {
+				w.WriteHeader(response.status)
+			}
+			_, _ = io.WriteString(w, body)
+			return
+		}
+		header := strings.Trim(r.Header.Get("SOAPAction"), `"`)
+		serviceType, action, ok := strings.Cut(header, "#")
+		requests = append(requests, r.URL.Path+"#"+action)
+		allowed := map[string]bool{"X_AVM-DE_GetDSLInfo": true, "GetInfo": true}
+		validTarget := r.URL.Path == "/dsl" || r.URL.Path == "/device" && action == "GetInfo"
+		if r.Method != http.MethodPost || !validTarget || !ok || !allowed[action] {
+			t.Errorf("forbidden DSL request: %s %s %q", r.Method, r.URL.Path, header)
+			http.Error(w, "forbidden", http.StatusBadRequest)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		want := `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` + action + ` xmlns:u="` + serviceType + `"></u:` + action + `></s:Body></s:Envelope>`
+		if string(body) != want {
+			t.Errorf("unexpected DSL SOAP request: %s", body)
+		}
+		response, exists := responses[action]
+		if !exists {
+			t.Errorf("missing DSL fixture response for %s", action)
+			http.Error(w, "missing fixture", http.StatusBadRequest)
+			return
+		}
+		if response.status != 0 {
+			w.WriteHeader(response.status)
+		}
+		_, _ = io.WriteString(w, response.body)
+	}))
+	t.Cleanup(server.Close)
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, &requests
+}
+
+func TestDSLReportsDocumentedFields(t *testing.T) {
+	for _, version := range []string{"1", "2"} {
+		t.Run("service "+version, func(t *testing.T) {
+			description := strings.Replace(dslDescriptionFixture, "WANDSLInterfaceConfig:1", "WANDSLInterfaceConfig:"+version, 1)
+			client, requests := dslFixtureClient(t, description, dslSCPDFixture, map[string]dslResponse{"X_AVM-DE_GetDSLInfo": {body: dslInfoFixture}})
+			result, err := client.DSL(t.Context())
+			vendor, country := "synthetic-vendor", "DE"
+			upstreamPower, downstreamPower := int64(80), int64(140)
+			want := DSL{LinkStatus: "Up", ModulationType: "VDSL", CurrentProfile: "17a", UpstreamCurrentKbps: 42000, DownstreamCurrentKbps: 250000, UpstreamMaxKbps: 50000, DownstreamMaxKbps: 300000, UpstreamNoiseMarginTenthDB: 70, DownstreamNoiseMarginTenthDB: 60, UpstreamAttenuationTenthDB: 120, DownstreamAttenuationTenthDB: 180, FECErrors: 12, CRCErrors: 3, ATURVendor: &vendor, ATURCountry: &country, UpstreamPowerTenthDBm: &upstreamPower, DownstreamPowerTenthDBm: &downstreamPower}
+			if err != nil || !reflect.DeepEqual(result, want) {
+				t.Fatalf("result=%#v error=%v", result, err)
+			}
+			if !reflect.DeepEqual(*requests, []string{"GET /tr64desc.xml", "GET /dsl.xml", "/dsl#X_AVM-DE_GetDSLInfo"}) {
+				t.Fatalf("requests=%v", *requests)
+			}
+		})
+	}
+}
+
+func TestDSLOmitsOptionalFields(t *testing.T) {
+	client, _ := dslFixtureClient(t, dslDescriptionFixture, dslSCPDFixture, map[string]dslResponse{"X_AVM-DE_GetDSLInfo": {body: strings.NewReplacer("<NewATURVendor>synthetic-vendor</NewATURVendor>", "", "<NewATURCountry>DE</NewATURCountry>", "", "<NewUpstreamPower>80</NewUpstreamPower>", "", "<NewDownstreamPower>140</NewDownstreamPower>", "").Replace(dslInfoFixture)}})
+	result, err := client.DSL(t.Context())
+	if err != nil || result.ATURVendor != nil || result.ATURCountry != nil || result.UpstreamPowerTenthDBm != nil || result.DownstreamPowerTenthDBm != nil {
+		t.Fatalf("result=%#v error=%v", result, err)
+	}
+}
+
+func TestDSLPreflightFailsBeforeSOAP(t *testing.T) {
+	service := `<service><serviceType>urn:dslforum-org:service:WANDSLInterfaceConfig:1</serviceType><serviceId>urn:WANDSLInterfaceConfig-com:serviceId:WANDSLInterfaceConfig1</serviceId><controlURL>/dsl</controlURL><SCPDURL>/dsl.xml</SCPDURL></service>`
+	for _, test := range []struct {
+		name, description, scpd, kind string
+	}{
+		{name: "missing service", description: `<root/>`, scpd: dslSCPDFixture, kind: "unsupported"},
+		{name: "duplicate service", description: `<root>` + service + service + `</root>`, scpd: dslSCPDFixture, kind: "unsupported"},
+		{name: "off-origin control", description: strings.Replace(dslDescriptionFixture, "/dsl</controlURL>", "http://outside.test/control</controlURL>", 1), scpd: dslSCPDFixture, kind: "protocol"},
+		{name: "off-origin SCPD", description: strings.Replace(dslDescriptionFixture, "/dsl.xml</SCPDURL>", "http://outside.test/scpd.xml</SCPDURL>", 1), scpd: dslSCPDFixture, kind: "protocol"},
+		{name: "control query", description: strings.Replace(dslDescriptionFixture, "/dsl</controlURL>", "/dsl?</controlURL>", 1), scpd: dslSCPDFixture, kind: "protocol"},
+		{name: "SCPD query", description: strings.Replace(dslDescriptionFixture, "/dsl.xml</SCPDURL>", "/dsl.xml?private=1</SCPDURL>", 1), scpd: dslSCPDFixture, kind: "protocol"},
+		{name: "invalid SCPD", description: dslDescriptionFixture, scpd: `<private>value</private>`, kind: "protocol"},
+		{name: "missing action", description: dslDescriptionFixture, scpd: `<scpd><actionList><action><name>GetInfo</name></action></actionList></scpd>`, kind: "unsupported"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, requests := dslFixtureClient(t, test.description, test.scpd, nil)
+			result, err := client.DSL(t.Context())
+			var protocolErr *Error
+			if !reflect.DeepEqual(result, DSL{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != test.kind || protocolErr.Operation != "dsl" || strings.Contains(fmt.Sprintf("%#v", err), "outside.test") || strings.Contains(fmt.Sprintf("%#v", err), "private=1") {
+				t.Fatalf("result=%#v error=%#v", result, err)
+			}
+			for _, request := range *requests {
+				if strings.Contains(request, "#") {
+					t.Fatalf("preflight sent SOAP request: %v", *requests)
+				}
+			}
+		})
+	}
+}
+
+func TestDSLValidatesRequiredFields(t *testing.T) {
+	valid := soapValues{LinkStatus: "Up", ModulationType: "VDSL", CurrentProfile: "17a", UpstreamCurrRate: "42000", DownstreamCurrRate: "250000", UpstreamMaxRate: "50000", DownstreamMaxRate: "300000", UpstreamNoiseMargin: "70", DownstreamNoiseMargin: "60", UpstreamAttenuation: "120", DownstreamAttenuation: "180", FECErrors: "12", CRCErrors: "3"}
+	for _, test := range []struct {
+		name   string
+		change func(*soapValues)
+	}{
+		{"missing link status", func(v *soapValues) { v.LinkStatus = "" }},
+		{"missing profile", func(v *soapValues) { v.CurrentProfile = "" }},
+		{"missing current rate", func(v *soapValues) { v.UpstreamCurrRate = "" }},
+		{"missing noise margin", func(v *soapValues) { v.DownstreamNoiseMargin = "" }},
+		{"missing attenuation", func(v *soapValues) { v.UpstreamAttenuation = "" }},
+		{"missing fec", func(v *soapValues) { v.FECErrors = "" }},
+		{"missing crc", func(v *soapValues) { v.CRCErrors = "" }},
+		{"invalid rate", func(v *soapValues) { v.DownstreamCurrRate = "private-value" }},
+		{"invalid margin", func(v *soapValues) { v.UpstreamNoiseMargin = "-1.5" }},
+		{"invalid attenuation", func(v *soapValues) { v.DownstreamAttenuation = "private-value" }},
+		{"invalid fec", func(v *soapValues) { v.FECErrors = "private-value" }},
+		{"invalid crc", func(v *soapValues) { v.CRCErrors = "-3" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			values := valid
+			test.change(&values)
+			result, err := parseDSLInfo(values)
+			var protocolErr *Error
+			if !reflect.DeepEqual(result, DSL{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || protocolErr.Operation != "dsl" || strings.Contains(fmt.Sprintf("%#v", err), "private-value") {
+				t.Fatalf("result=%#v error=%#v", result, err)
+			}
+		})
+	}
+}
+
+func TestDSLFailuresAreSanitizedAndInvalidActionIsUnsupported(t *testing.T) {
+	for _, test := range []struct {
+		name, body, kind string
+		status           int
+	}{
+		{name: "invalid action", body: `<Fault><errorCode>401</errorCode><errorDescription>private-fault</errorDescription></Fault>`, kind: "unsupported", status: http.StatusInternalServerError},
+		{name: "router fault", body: `<Fault><errorCode>501</errorCode><errorDescription>private-fault</errorDescription></Fault>`, kind: "router", status: http.StatusInternalServerError},
+		{name: "invalid XML", body: `<private-value`, kind: "protocol", status: http.StatusOK},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, _ := dslFixtureClient(t, dslDescriptionFixture, dslSCPDFixture, map[string]dslResponse{"X_AVM-DE_GetDSLInfo": {body: test.body, status: test.status}})
+			result, err := client.DSL(t.Context())
+			var protocolErr *Error
+			if !reflect.DeepEqual(result, DSL{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != test.kind || protocolErr.Operation != "dsl" || strings.Contains(fmt.Sprintf("%#v", err), "private") || strings.Contains(fmt.Sprintf("%#v", err), client.base.Host) {
+				t.Fatalf("result=%#v error=%#v", result, err)
+			}
+		})
+	}
+}
+
+func TestDSLHTTPAuthenticationStatuses(t *testing.T) {
+	for _, test := range []struct {
+		name, response string
+		status         int
+	}{
+		{name: "SCPD unauthorized", response: "GET /dsl.xml", status: http.StatusUnauthorized},
+		{name: "SCPD forbidden", response: "GET /dsl.xml", status: http.StatusForbidden},
+		{name: "GetDSLInfo unauthorized", response: "X_AVM-DE_GetDSLInfo", status: http.StatusUnauthorized},
+		{name: "GetDSLInfo forbidden", response: "X_AVM-DE_GetDSLInfo", status: http.StatusForbidden},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, _ := dslFixtureClient(t, dslDescriptionFixture, dslSCPDFixture, map[string]dslResponse{test.response: {status: test.status}})
+			result, err := client.DSL(t.Context())
+			var protocolErr *Error
+			if !reflect.DeepEqual(result, DSL{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != "auth" || protocolErr.StatusCode != test.status || protocolErr.Operation != "dsl" {
+				t.Fatalf("result=%#v error=%#v", result, err)
+			}
+		})
+	}
+}
+
+func TestDSLRefusesSCPDRedirect(t *testing.T) {
+	client, requests := dslFixtureClient(t, dslDescriptionFixture, dslSCPDFixture, map[string]dslResponse{"GET /dsl.xml": {status: http.StatusFound, location: "__ORIGIN__/redirected.xml"}})
+	result, err := client.DSL(t.Context())
+	var protocolErr *Error
+	if !reflect.DeepEqual(result, DSL{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != "network" || protocolErr.Operation != "dsl" || len(*requests) != 2 {
+		t.Fatalf("result=%#v error=%#v requests=%v", result, err, *requests)
+	}
+}
+
+func TestDoctorAdvertisesDSLWithoutReadingItsSCPDOrActions(t *testing.T) {
+	client, requests := dslFixtureClient(t, dslDescriptionFixture, dslSCPDFixture, map[string]dslResponse{"GetInfo": {body: deviceFixture}})
+	report, err := client.Doctor(t.Context())
+	if err != nil || report.Capabilities.DSL.State != "advertised" || !reflect.DeepEqual(*requests, []string{"GET /tr64desc.xml", "/device#GetInfo"}) {
 		t.Fatalf("report=%#v error=%v requests=%v", report, err, *requests)
 	}
 }

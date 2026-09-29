@@ -88,6 +88,26 @@ type DHCP struct {
 	DomainName         *string  `json:"domain_name"`
 }
 
+type DSL struct {
+	LinkStatus                   string  `json:"link_status"`
+	ModulationType               string  `json:"modulation_type"`
+	CurrentProfile               string  `json:"current_profile"`
+	UpstreamCurrentKbps          uint64  `json:"upstream_current_kbps"`
+	DownstreamCurrentKbps        uint64  `json:"downstream_current_kbps"`
+	UpstreamMaxKbps              uint64  `json:"upstream_max_kbps"`
+	DownstreamMaxKbps            uint64  `json:"downstream_max_kbps"`
+	UpstreamNoiseMarginTenthDB   int64   `json:"upstream_noise_margin_tenth_db"`
+	DownstreamNoiseMarginTenthDB int64   `json:"downstream_noise_margin_tenth_db"`
+	UpstreamAttenuationTenthDB   int64   `json:"upstream_attenuation_tenth_db"`
+	DownstreamAttenuationTenthDB int64   `json:"downstream_attenuation_tenth_db"`
+	FECErrors                    uint64  `json:"fec_errors"`
+	CRCErrors                    uint64  `json:"crc_errors"`
+	ATURVendor                   *string `json:"atur_vendor"`
+	ATURCountry                  *string `json:"atur_country"`
+	UpstreamPowerTenthDBm        *int64  `json:"upstream_power_tenth_dbm"`
+	DownstreamPowerTenthDBm      *int64  `json:"downstream_power_tenth_dbm"`
+}
+
 type Overview struct {
 	Router  Status  `json:"router"`
 	WAN     WAN     `json:"wan"`
@@ -109,6 +129,7 @@ type DoctorCapabilities struct {
 	Devices  DoctorCheck `json:"devices"`
 	Leases   DoctorCheck `json:"leases"`
 	DHCP     DoctorCheck `json:"dhcp"`
+	DSL      DoctorCheck `json:"dsl"`
 	WiFi     DoctorCheck `json:"wifi"`
 	Forwards DoctorCheck `json:"forwards"`
 	Reboot   DoctorCheck `json:"reboot"`
@@ -252,6 +273,11 @@ type soapValues struct {
 	RemoteHost, LeaseDuration                                                   *string
 	DHCPServerConfigurable, DHCPServerEnable, DHCPRelay                         string
 	MinAddress, MaxAddress, SubnetMask, DNSServers, DomainName, IPRouters       string
+	LinkStatus, ModulationType, CurrentProfile                                  string
+	UpstreamCurrRate, DownstreamCurrRate, UpstreamMaxRate, DownstreamMaxRate    string
+	UpstreamNoiseMargin, DownstreamNoiseMargin                                  string
+	UpstreamAttenuation, DownstreamAttenuation, FECErrors, CRCErrors            string
+	ATURVendor, ATURCountry, UpstreamPower, DownstreamPower                     string
 }
 
 type soapArgument struct{ Name, Value string }
@@ -388,6 +414,40 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.DomainName
 		case "NewIPRouters":
 			target = &v.IPRouters
+		case "NewLinkStatus":
+			target = &v.LinkStatus
+		case "NewModulationType":
+			target = &v.ModulationType
+		case "NewCurrentProfile":
+			target = &v.CurrentProfile
+		case "NewUpstreamCurrRate":
+			target = &v.UpstreamCurrRate
+		case "NewDownstreamCurrRate":
+			target = &v.DownstreamCurrRate
+		case "NewUpstreamMaxRate":
+			target = &v.UpstreamMaxRate
+		case "NewDownstreamMaxRate":
+			target = &v.DownstreamMaxRate
+		case "NewUpstreamNoiseMargin":
+			target = &v.UpstreamNoiseMargin
+		case "NewDownstreamNoiseMargin":
+			target = &v.DownstreamNoiseMargin
+		case "NewUpstreamAttenuation":
+			target = &v.UpstreamAttenuation
+		case "NewDownstreamAttenuation":
+			target = &v.DownstreamAttenuation
+		case "NewFECErrors":
+			target = &v.FECErrors
+		case "NewCRCErrors":
+			target = &v.CRCErrors
+		case "NewATURVendor":
+			target = &v.ATURVendor
+		case "NewATURCountry":
+			target = &v.ATURCountry
+		case "NewUpstreamPower":
+			target = &v.UpstreamPower
+		case "NewDownstreamPower":
+			target = &v.DownstreamPower
 		case "errorCode":
 			target = &v.FaultCode
 		case "errorDescription":
@@ -443,7 +503,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 		Protocol:       unknown,
 		Authentication: unknown,
 		Capabilities: DoctorCapabilities{
-			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Watch: unknown, Calls: unknown, Devices: unknown, Leases: unknown, DHCP: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown, Backup: unknown,
+			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Watch: unknown, Calls: unknown, Devices: unknown, Leases: unknown, DHCP: unknown, DSL: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown, Backup: unknown,
 		},
 	}
 	if err := c.discover(ctx); err != nil {
@@ -472,6 +532,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 	report.Capabilities.Devices = hostsCapability
 	report.Capabilities.Leases = hostsCapability
 	report.Capabilities.DHCP = c.advertisedCapability([]string{dhcpServicePrefix}, dhcpRemediation)
+	report.Capabilities.DSL = c.advertisedCapability([]string{dslServicePrefix}, dslRemediation)
 	report.Capabilities.WiFi = c.advertisedCapability([]string{wlanServicePrefix}, wifiRemediation)
 	report.Capabilities.Forwards = c.advertisedCapability(wanMappingPrefixes, forwardsRemediation)
 	report.Capabilities.Reboot = c.rebootCapability()
@@ -935,6 +996,207 @@ func dhcpError(err error) *Error {
 	}
 	if result.Kind == "unsupported" {
 		result.Message = "router does not support documented DHCP configuration reads; " + dhcpRemediation
+	}
+	return result
+}
+
+const (
+	dslServicePrefix = "urn:dslforum-org:service:WANDSLInterfaceConfig:"
+	dslRemediation   = "enable WANDSLInterfaceConfig with X_AVM-DE_GetDSLInfo, or use supported firmware"
+)
+
+func (c *Client) DSL(ctx context.Context) (DSL, error) {
+	client := *c
+	httpClient := *c.http
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return errors.New("DSL inspection refuses redirects") }
+	client.http = &httpClient
+	client.services, client.allServices, client.digestChallenge = nil, nil, nil
+	if err := client.discover(ctx); err != nil {
+		return DSL{}, dslError(err)
+	}
+	target, err := client.dslService(ctx)
+	if err != nil {
+		return DSL{}, err
+	}
+	values, err := client.actionOnService(ctx, target, "X_AVM-DE_GetDSLInfo")
+	if err != nil {
+		return DSL{}, dslError(err)
+	}
+	return parseDSLInfo(values)
+}
+
+func (c *Client) dslService(ctx context.Context) (service, error) {
+	matches := make([]service, 0, 1)
+	for _, svc := range c.allServices {
+		if strings.HasPrefix(svc.Type, dslServicePrefix) {
+			matches = append(matches, svc)
+		}
+	}
+	if len(matches) != 1 {
+		return service{}, &Error{Kind: "unsupported", Operation: "dsl", Message: "router does not advertise exactly one WANDSLInterfaceConfig service; " + dslRemediation}
+	}
+	target := matches[0]
+	control, controlErr := c.base.Parse(target.ControlURL)
+	scpdURL, scpdErr := c.base.Parse(target.SCPDURL)
+	if controlErr != nil || target.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.ForceQuery || control.Fragment != "" || scpdErr != nil || target.SCPDURL == "" || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.ForceQuery || scpdURL.Fragment != "" {
+		return service{}, &Error{Kind: "protocol", Operation: "dsl", Message: "router advertised an invalid WANDSLInterfaceConfig service URL"}
+	}
+	body, err := c.get(ctx, scpdURL)
+	if err != nil {
+		return service{}, dslError(err)
+	}
+	var scpd struct {
+		XMLName xml.Name `xml:"scpd"`
+		Actions []struct {
+			Name string `xml:"name"`
+		} `xml:"actionList>action"`
+	}
+	if err := xml.Unmarshal(body, &scpd); err != nil || scpd.XMLName.Local != "scpd" {
+		return service{}, &Error{Kind: "protocol", Operation: "dsl", Message: "router returned an invalid WANDSLInterfaceConfig service description"}
+	}
+	for _, action := range scpd.Actions {
+		if strings.TrimSpace(action.Name) == "X_AVM-DE_GetDSLInfo" {
+			target.ControlURL = control.Path
+			return target, nil
+		}
+	}
+	return service{}, &Error{Kind: "unsupported", Operation: "dsl", Message: "router does not advertise WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo; " + dslRemediation}
+}
+
+func parseDSLInfo(values soapValues) (DSL, error) {
+	linkStatus, err := normalizeDSLState(values.LinkStatus, []string{"Up", "Down", "Initializing", "Unavailable"}, "link status")
+	if err != nil {
+		return DSL{}, err
+	}
+	modulation, err := normalizeDSLState(values.ModulationType, []string{"ADSL", "G.lite", "G.shdsl", "IDSL", "HDSL", "SDSL", "VDSL"}, "modulation type")
+	if err != nil {
+		return DSL{}, err
+	}
+	profile, err := requiredDSLText(values.CurrentProfile, "current profile")
+	if err != nil {
+		return DSL{}, err
+	}
+	rates := []struct {
+		value, field string
+		target       *uint64
+	}{
+		{values.UpstreamCurrRate, "upstream current rate", new(uint64)}, {values.DownstreamCurrRate, "downstream current rate", new(uint64)}, {values.UpstreamMaxRate, "upstream maximum rate", new(uint64)}, {values.DownstreamMaxRate, "downstream maximum rate", new(uint64)}, {values.FECErrors, "FEC errors", new(uint64)}, {values.CRCErrors, "CRC errors", new(uint64)},
+	}
+	for _, field := range rates {
+		n, parseErr := parseDSLUint(field.value, field.field)
+		if parseErr != nil {
+			return DSL{}, parseErr
+		}
+		*field.target = n
+	}
+	signed := []struct {
+		value, field string
+		target       *int64
+	}{
+		{values.UpstreamNoiseMargin, "upstream noise margin", new(int64)}, {values.DownstreamNoiseMargin, "downstream noise margin", new(int64)}, {values.UpstreamAttenuation, "upstream attenuation", new(int64)}, {values.DownstreamAttenuation, "downstream attenuation", new(int64)},
+	}
+	for _, field := range signed {
+		n, parseErr := parseDSLInt(field.value, field.field)
+		if parseErr != nil {
+			return DSL{}, parseErr
+		}
+		*field.target = n
+	}
+	result := DSL{LinkStatus: linkStatus, ModulationType: modulation, CurrentProfile: profile, UpstreamCurrentKbps: *rates[0].target, DownstreamCurrentKbps: *rates[1].target, UpstreamMaxKbps: *rates[2].target, DownstreamMaxKbps: *rates[3].target, UpstreamNoiseMarginTenthDB: *signed[0].target, DownstreamNoiseMarginTenthDB: *signed[1].target, UpstreamAttenuationTenthDB: *signed[2].target, DownstreamAttenuationTenthDB: *signed[3].target, FECErrors: *rates[4].target, CRCErrors: *rates[5].target}
+	result.ATURVendor, err = optionalDSLText(values.ATURVendor, "ATUR vendor")
+	if err != nil {
+		return DSL{}, err
+	}
+	result.ATURCountry, err = optionalDSLText(values.ATURCountry, "ATUR country")
+	if err != nil {
+		return DSL{}, err
+	}
+	result.UpstreamPowerTenthDBm, err = optionalDSLInt(values.UpstreamPower, "upstream power")
+	if err != nil {
+		return DSL{}, err
+	}
+	result.DownstreamPowerTenthDBm, err = optionalDSLInt(values.DownstreamPower, "downstream power")
+	if err != nil {
+		return DSL{}, err
+	}
+	return result, nil
+}
+
+func normalizeDSLState(value string, allowed []string, field string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", &Error{Kind: "protocol", Operation: "dsl", Message: "router omitted the DSL " + field}
+	}
+	for _, candidate := range allowed {
+		if value == candidate {
+			return value, nil
+		}
+	}
+	return "unknown", nil
+}
+
+func parseDSLUint(value, field string) (uint64, error) {
+	n, err := strconv.ParseUint(strings.TrimSpace(value), 10, 32)
+	if err != nil {
+		return 0, &Error{Kind: "protocol", Operation: "dsl", Message: "router returned an invalid DSL " + field}
+	}
+	return n, nil
+}
+
+func parseDSLInt(value, field string) (int64, error) {
+	n, err := strconv.ParseInt(strings.TrimSpace(value), 10, 32)
+	if err != nil {
+		return 0, &Error{Kind: "protocol", Operation: "dsl", Message: "router returned an invalid DSL " + field}
+	}
+	return n, nil
+}
+
+func optionalDSLInt(value, field string) (*int64, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	n, err := parseDSLInt(value, field)
+	if err != nil {
+		return nil, err
+	}
+	return &n, nil
+}
+
+func requiredDSLText(value, field string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", &Error{Kind: "protocol", Operation: "dsl", Message: "router omitted the DSL " + field}
+	}
+	if len(value) > 128 || strings.IndexFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+		return "", &Error{Kind: "protocol", Operation: "dsl", Message: "router returned an invalid DSL " + field}
+	}
+	return value, nil
+}
+
+func optionalDSLText(value, field string) (*string, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	text, err := requiredDSLText(value, field)
+	if err != nil {
+		return nil, err
+	}
+	return &text, nil
+}
+
+func dslError(err error) *Error {
+	result := &Error{Kind: "protocol", Operation: "dsl", Message: "DSL diagnostic inspection failed"}
+	var protocolErr *Error
+	if errors.As(err, &protocolErr) {
+		result.Kind, result.StatusCode, result.FaultCode = protocolErr.Kind, protocolErr.StatusCode, protocolErr.FaultCode
+		if result.Kind == "router" && result.FaultCode == "401" {
+			result.Kind = "unsupported"
+		} else if result.StatusCode == http.StatusUnauthorized || result.StatusCode == http.StatusForbidden {
+			result.Kind = "auth"
+		}
+	}
+	if result.Kind == "unsupported" {
+		result.Message = "router does not support documented DSL diagnostics; " + dslRemediation
 	}
 	return result
 }

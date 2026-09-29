@@ -93,7 +93,7 @@ func (f fakeReader) Doctor(context.Context) (tr064.Doctor, error) {
 		Endpoint: "http://router.test:49000", Reachability: tr064.DoctorCheck{State: "reachable"},
 		Protocol: tr064.DoctorCheck{State: "available"}, Authentication: tr064.DoctorCheck{State: "authenticated"},
 		Model: "FRITZ!Box 7590 AX", Firmware: "8.02",
-		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Watch: advertised, Calls: advertised, Devices: advertised, Leases: advertised, DHCP: advertised, WiFi: advertised, Forwards: advertised, Reboot: advertised, Backup: advertised},
+		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Watch: advertised, Calls: advertised, Devices: advertised, Leases: advertised, DHCP: advertised, DSL: advertised, WiFi: advertised, Forwards: advertised, Reboot: advertised, Backup: advertised},
 	}, f.err
 }
 func (f fakeReader) Status(context.Context) (tr064.Status, error) {
@@ -151,6 +151,12 @@ func (f fakeReaderWithoutDHCPConfig) DHCP(ctx context.Context) (tr064.DHCP, erro
 	result, err := f.fakeReader.DHCP(ctx)
 	result.ServerConfigurable = nil
 	return result, err
+}
+
+func (f fakeReader) DSL(context.Context) (tr064.DSL, error) {
+	vendor, country := "synthetic-vendor", "DE"
+	upstreamPower, downstreamPower := int64(-10), int64(140)
+	return tr064.DSL{LinkStatus: "Up", ModulationType: "VDSL", CurrentProfile: "17a", UpstreamCurrentKbps: 42000, DownstreamCurrentKbps: 250000, UpstreamMaxKbps: 50000, DownstreamMaxKbps: 300000, UpstreamNoiseMarginTenthDB: 70, DownstreamNoiseMarginTenthDB: 60, UpstreamAttenuationTenthDB: 120, DownstreamAttenuationTenthDB: 180, FECErrors: 12, CRCErrors: 3, ATURVendor: &vendor, ATURCountry: &country, UpstreamPowerTenthDBm: &upstreamPower, DownstreamPowerTenthDBm: &downstreamPower}, f.err
 }
 
 func (f fakeReader) WiFi(context.Context) ([]tr064.Radio, error) {
@@ -289,6 +295,7 @@ func TestCompactCommands(t *testing.T) {
 		{"devices", "devices[1]{name,ip_address,mac_address,interface_type,active}:"},
 		{"leases", "leases[2]{name,ip_address,mac_address,address_source,lease_time_remaining,interface_type,active}:"},
 		{"dhcp", "server_configurable: true"},
+		{"dsl", "downstream_current_kbps: 250000"},
 		{"wifi", "radios[1]{service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode}:"},
 		{"guest", "guests[1]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}:"},
 		{"forwards", "forwards[1]{enabled,protocol,external_port,internal_client,internal_port,description,remote_host,lease_duration}:"},
@@ -455,7 +462,7 @@ func TestTopLevelHelpListsPublicCommands(t *testing.T) {
 	if code != ExitOK || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "watch", "calls", "devices", "leases", "dhcp", "wifi", "guest", "forwards", "reboot", "backup", "skill", "version"} {
+	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "watch", "calls", "devices", "leases", "dhcp", "dsl", "wifi", "guest", "forwards", "reboot", "backup", "skill", "version"} {
 		if !strings.Contains(stdout, "\n  "+command+" ") {
 			t.Fatalf("top-level help does not list %q: %q", command, stdout)
 		}
@@ -464,7 +471,7 @@ func TestTopLevelHelpListsPublicCommands(t *testing.T) {
 
 func TestDoctorJSONIsDeterministic(t *testing.T) {
 	code, stdout, stderr := runTest(t, "doctor", "--json")
-	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"watch":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"leases":{"state":"advertised"},"dhcp":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"},"reboot":{"state":"advertised"},"backup":{"state":"advertised"}}}` + "\n"
+	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"watch":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"leases":{"state":"advertised"},"dhcp":{"state":"advertised"},"dsl":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"},"reboot":{"state":"advertised"},"backup":{"state":"advertised"}}}` + "\n"
 	if code != ExitOK || stdout != want || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -915,7 +922,7 @@ func TestWiFiClientPrivacyBoundary(t *testing.T) {
 // TestEverySubcommandHelpDepth asserts the AXI help contract: every
 // subcommand help must include a usage line, flags, and concrete examples.
 func TestEverySubcommandHelpDepth(t *testing.T) {
-	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "calls", "devices", "leases", "dhcp", "wifi", "guest", "forwards", "watch", "reboot", "backup"} {
+	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "calls", "devices", "leases", "dhcp", "dsl", "wifi", "guest", "forwards", "watch", "reboot", "backup"} {
 		text := help(command, "")
 		if !strings.HasPrefix(text, "usage: router-axi "+command) || !strings.Contains(text, "--host ADDRESS") || !strings.Contains(text, "--json") || !strings.Contains(text, "examples: router-axi "+command) && !strings.Contains(text, "Examples: router-axi "+command) {
 			t.Fatalf("help for %s lacks usage, flags, or examples: %q", command, text)
@@ -1321,6 +1328,21 @@ func TestDHCPOutputUnknownConfigurableState(t *testing.T) {
 		code := New(func(Config) (Reader, error) { return fakeReaderWithoutDHCPConfig{}, nil }, func(string) string { return "" }).Run(t.Context(), test.args, &stdout, &stderr)
 		if code != ExitOK || stdout.String() != test.want || stderr.Len() != 0 {
 			t.Fatalf("args=%q code=%d stdout=%q stderr=%q", test.args, code, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestDSLOutputContract(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"dsl"}, "dsl:\n  link_status: Up\n  modulation_type: VDSL\n  current_profile: 17a\n  upstream_current_kbps: 42000\n  downstream_current_kbps: 250000\n  upstream_max_kbps: 50000\n  downstream_max_kbps: 300000\n  upstream_noise_margin_tenth_db: 70\n  downstream_noise_margin_tenth_db: 60\n  upstream_attenuation_tenth_db: 120\n  downstream_attenuation_tenth_db: 180\n  fec_errors: 12\n  crc_errors: 3\n  atur_vendor: synthetic-vendor\n  atur_country: DE\n  upstream_power_tenth_dbm: -10\n  downstream_power_tenth_dbm: 140\n"},
+		{[]string{"dsl", "--json"}, `{"link_status":"Up","modulation_type":"VDSL","current_profile":"17a","upstream_current_kbps":42000,"downstream_current_kbps":250000,"upstream_max_kbps":50000,"downstream_max_kbps":300000,"upstream_noise_margin_tenth_db":70,"downstream_noise_margin_tenth_db":60,"upstream_attenuation_tenth_db":120,"downstream_attenuation_tenth_db":180,"fec_errors":12,"crc_errors":3,"atur_vendor":"synthetic-vendor","atur_country":"DE","upstream_power_tenth_dbm":-10,"downstream_power_tenth_dbm":140}` + "\n"},
+	} {
+		code, stdout, stderr := runTest(t, test.args...)
+		if code != ExitOK || stdout != test.want || stderr != "" {
+			t.Fatalf("args=%q code=%d stdout=%q stderr=%q", test.args, code, stdout, stderr)
 		}
 	}
 }

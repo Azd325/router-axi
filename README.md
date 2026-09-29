@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, DHCP server configuration, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, reboot, and configuration export.
+The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, reboot, and configuration export.
 
 ## Design constraints
 
@@ -84,6 +84,8 @@ router-axi leases --json
 router-axi leases --all
 router-axi dhcp
 router-axi dhcp --json
+router-axi dsl
+router-axi dsl --json
 router-axi wifi
 router-axi wifi --json
 router-axi wifi detail
@@ -120,7 +122,7 @@ description once and, when `DeviceInfo` is advertised, invokes only
 `DeviceInfo:GetInfo` to verify authentication and obtain model and firmware.
 It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
-`wan`, `traffic`, `watch`, `calls`, `devices`, `leases`, `dhcp`, `wifi`, `forwards`, `reboot`, and
+`wan`, `traffic`, `watch`, `calls`, `devices`, `leases`, `dhcp`, `dsl`, `wifi`, `forwards`, `reboot`, and
 `backup`. `watch` is advertised only when the description includes Layer3Forwarding,
 WANCommonInterfaceConfig, and either WANIPConnection or WANPPPConnection; doctor does
 not invoke any of their actions. Doctor does not report a separate `guest` capability: WLANConfiguration
@@ -386,8 +388,70 @@ a missing `GetInfo` action, or an invalid-action fault `401` exit `5`;
 authentication exits `3`, network failures `4`, and malformed configuration or
 other router faults `6`. Errors discard router addresses, fault text, URLs, and
 response bodies. Doctor reports service advertisement only and does not fetch
-the SCPD or invoke a DHCP action. Compatibility is fixture-backed for aggregate
+the SCPD or invoke a DHCP action; the `dsl` capability is likewise advertisement-only,
+so doctor never fetches the WANDSLInterfaceConfig SCPD or invokes `X_AVM-DE_GetDSLInfo`.
+Compatibility is fixture-backed for aggregate
 `GetInfo` and service versions 1 and 2; it is not inferred from router models.
+
+### DSL link diagnostics
+
+`dsl` is a bounded read-only view of the DSL line from the single advertised
+`WANDSLInterfaceConfig` service. It invokes only AVM's documented action
+`X_AVM-DE_GetDSLInfo`
+([FRITZ! TR-064 WANDSLInterfaceConfig v9, §3.4](https://fritz.support/resources/TR-064_WAN_DSL_Interface_Config.pdf));
+no other action of that service, no `GetInfo`, no DSL statistics or reset action,
+no browser endpoint, and no mutation is used.
+
+The command requires exactly one advertised service and fetches that service's
+same-origin SCPD before any SOAP action. Same-origin control and SCPD URLs must
+have no user information, query, or fragment, and redirects are refused. The
+SCPD must advertise `X_AVM-DE_GetDSLInfo`, which is the only DSL action invoked.
+
+Compact output has this fixed shape:
+
+```
+dsl:
+  link_status: Up
+  modulation_type: VDSL
+  current_profile: 17a
+  upstream_current_kbps: 42000
+  downstream_current_kbps: 250000
+  upstream_max_kbps: 50000
+  downstream_max_kbps: 300000
+  upstream_noise_margin_tenth_db: 70
+  downstream_noise_margin_tenth_db: 60
+  upstream_attenuation_tenth_db: 120
+  downstream_attenuation_tenth_db: 180
+  fec_errors: 12
+  crc_errors: 3
+  atur_vendor: synthetic-vendor
+  atur_country: DE
+  upstream_power_tenth_dbm: 80
+  downstream_power_tenth_dbm: 140
+```
+
+JSON fields follow the same order:
+
+```json
+{"link_status":"Up","modulation_type":"VDSL","current_profile":"17a","upstream_current_kbps":42000,"downstream_current_kbps":250000,"upstream_max_kbps":50000,"downstream_max_kbps":300000,"upstream_noise_margin_tenth_db":70,"downstream_noise_margin_tenth_db":60,"upstream_attenuation_tenth_db":120,"downstream_attenuation_tenth_db":180,"fec_errors":12,"crc_errors":3,"atur_vendor":"synthetic-vendor","atur_country":"DE","upstream_power_tenth_dbm":80,"downstream_power_tenth_dbm":140}
+```
+
+`link_status`, `modulation_type`, `current_profile`, the current and maximum
+upstream/downstream rates in Kbps, the upstream/downstream noise margins and
+attenuations (in 0.1 dB units), and the FEC and CRC counters are required and
+validated before any output. Vendor and country strings and the upstream/downstream
+power values (0.1 dBm units) are optional: absent fields are omitted in JSON and
+shown as `unknown` in compact output, and a present but malformed value fails the
+whole read. Documented link states are preserved; unrecognized non-empty states
+become `unknown`. A router without a DSL interface (cable, fiber) advertises the
+service on some models and fails the action read; missing or duplicate services,
+the missing action, or an invalid-action fault `401` exit `5`, authentication
+exits `3`, network failures `4`, and malformed values and other router faults `6`.
+Errors discard router addresses, fault text, URLs, and response bodies. Doctor
+reports service advertisement only and does not fetch the SCPD or invoke the DSL
+action. Compatibility is fixture-backed for service versions 1 and 2, with and
+without the optional vendor, country, and power fields; it is not inferred from
+router models.
 
 ### Wi-Fi radio mutation
 
@@ -860,7 +924,8 @@ SCPD-advertised `GetAddonInfos` on the active WANIPConnection/WANPPPConnection s
 documented `X_AVM-DE_OnTel:GetCallList`, and the standard
 `Hosts:GetHostNumberOfEntries` plus zero-based `GetGenericHostEntry(NewIndex)`,
 the SCPD-advertised documented `LANHostConfigManagement:GetInfo` DHCP
-configuration read (never reservation inventory), and `WLANConfiguration:GetInfo`,
+configuration read (never reservation inventory), the SCPD-advertised documented
+`WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo` DSL link read, and `WLANConfiguration:GetInfo`,
 `GetChannelInfo`, `GetTotalAssociations`, and
 `GetBeaconType`. Guest inspection additionally uses the documented AVM
 `WLANConfiguration:X_AVM-DE_GetWLANExtInfo` action only to read
