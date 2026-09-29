@@ -1,6 +1,6 @@
 ---
 name: router-axi
-description: Inspect and operate a supported home router through the router-axi CLI (FRITZ!Box TR-064). Use when an agent needs to review router status, WAN, traffic, calls, devices, leases, DHCP server configuration, Wi-Fi, guest Wi-Fi, or port forwards, or to make confirmed wifi, reboot, or backup changes from a terminal.
+description: Inspect and operate a supported home router through the router-axi CLI (FRITZ!Box TR-064). Use when an agent needs to review router status, WAN, traffic, calls, devices, leases, DHCP server configuration, DSL link diagnostics, Wi-Fi, guest Wi-Fi, or port forwards, or to make confirmed wifi, reboot, or backup changes from a terminal.
 ---
 
 # router-axi
@@ -29,6 +29,7 @@ documentation; run the CLI for live router state.
 - `leases` — observed Hosts-table lease metadata (100 entries by default,
   `--all` for the full list).
 - `dhcp` — read-only DHCP server configuration; never reservation inventory.
+- `dsl` — read-only DSL link diagnostics from documented WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo: link state, modulation, profile, current/max rates, noise margin, attenuation, and FEC/CRC error counters.
 - `wifi` — Wi-Fi inspection; `wifi detail [--instance N]` reports one radio's safe documented properties; `wifi enable|disable` changes a radio.
 - `guest` — documented guest Wi-Fi inspection (public SSID, aggregate state).
 - `forwards` — port-forwarding rules (100 entries by default, `--all` for the
@@ -102,6 +103,7 @@ commands:
   devices   connected and known LAN clients
   leases    observed Hosts table lease metadata
   dhcp      DHCP server configuration (never reservation inventory)
+  dsl       DSL link diagnostics
   wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm
   guest     documented guest Wi-Fi inspection
   forwards  port-forwarding rules

@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<root><device><serviceList><service><serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType><serviceId>urn:DeviceInfo-com:serviceId:DeviceInfo1</serviceId><controlURL>/device</controlURL><SCPDURL>/device.xml</SCPDURL></service><service><serviceType>urn:dslforum-org:service:WANDSLInterfaceConfig:1</serviceType><serviceId>urn:WANDSLInterfaceConfig-com:serviceId:WANDSLInterfaceConfig1</serviceId><controlURL>/dsl</controlURL><SCPDURL>/dsl.xml</SCPDURL></service></serviceList></device></root>
