@@ -445,6 +445,27 @@ func TestDHCPFailuresAreSanitizedAndInvalidActionIsUnsupported(t *testing.T) {
 	}
 }
 
+func TestDHCPHTTPAuthenticationStatuses(t *testing.T) {
+	for _, test := range []struct {
+		name, response string
+		status         int
+	}{
+		{name: "SCPD unauthorized", response: "GET /lan-host-config.xml", status: http.StatusUnauthorized},
+		{name: "SCPD forbidden", response: "GET /lan-host-config.xml", status: http.StatusForbidden},
+		{name: "GetInfo unauthorized", response: "GetInfo", status: http.StatusUnauthorized},
+		{name: "GetInfo forbidden", response: "GetInfo", status: http.StatusForbidden},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, _ := dhcpFixtureClient(t, dhcpDescriptionFixture, dhcpSCPDFixture, map[string]dhcpResponse{test.response: {status: test.status}})
+			result, err := client.DHCP(t.Context())
+			var protocolErr *Error
+			if !reflect.DeepEqual(result, DHCP{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != "auth" || protocolErr.StatusCode != test.status || protocolErr.Operation != "dhcp" {
+				t.Fatalf("result=%#v error=%#v", result, err)
+			}
+		})
+	}
+}
+
 func TestDHCPRefusesSCPDRedirect(t *testing.T) {
 	client, requests := dhcpFixtureClient(t, dhcpDescriptionFixture, dhcpSCPDFixture, map[string]dhcpResponse{"GET /lan-host-config.xml": {status: http.StatusFound, location: "__ORIGIN__/redirected.xml"}})
 	result, err := client.DHCP(t.Context())

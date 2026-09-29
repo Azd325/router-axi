@@ -2519,7 +2519,7 @@ func (c *Client) request(ctx context.Context, method string, u *url.URL, body []
 	if closeErr != nil {
 		return nil, 0, &Error{Kind: "network", Operation: method + " " + u.Path, Message: "could not close router response"}
 	}
-	if resp.StatusCode == http.StatusUnauthorized {
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
 		return nil, resp.StatusCode, &Error{Kind: "auth", Operation: method + " " + u.Path, StatusCode: resp.StatusCode, Message: "router rejected credentials"}
 	}
 	return responseBody, resp.StatusCode, nil
