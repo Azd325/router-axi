@@ -618,6 +618,9 @@ func TestDSLValidatesUnsignedWidths(t *testing.T) {
 			values := valid
 			test.change(&values)
 			result, err := parseDSLInfo(values)
+			var protocolErr *Error
+			if !reflect.DeepEqual(result, DSL{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || protocolErr.Operation != "dsl" {
+				t.Fatalf("result=%#v error=%#v", result, err)
 			}
 		})
 	}
