@@ -314,7 +314,7 @@ func TestDHCPAggregateGetInfo(t *testing.T) {
 				description := strings.Replace(dhcpDescriptionFixture, "LANHostConfigManagement:1", "LANHostConfigManagement:"+version, 1)
 				client, requests := dhcpFixtureClient(t, description, dhcpSCPDFixture, map[string]dhcpResponse{"GetInfo": {body: dhcpInfoFixture}})
 				result, err := client.DHCP(t.Context())
-				if err != nil || !result.ServerConfigurable || result.ServerEnabled == nil || !*result.ServerEnabled || result.RelayEnabled == nil || *result.RelayEnabled || result.AddressRangeStart == nil || *result.AddressRangeStart != "192.0.2.20" || result.AddressRangeEnd == nil || *result.AddressRangeEnd != "192.0.2.200" || result.SubnetMask == nil || *result.SubnetMask != "255.255.255.0" || !reflect.DeepEqual(result.Routers, []string{"192.0.2.1"}) || !reflect.DeepEqual(result.DNSServers, []string{"192.0.2.1", "192.0.2.53"}) || result.DomainName == nil || *result.DomainName != "synthetic.test" {
+				if err != nil || result.ServerConfigurable == nil || !*result.ServerConfigurable || result.ServerEnabled == nil || !*result.ServerEnabled || result.RelayEnabled == nil || *result.RelayEnabled || result.AddressRangeStart == nil || *result.AddressRangeStart != "192.0.2.20" || result.AddressRangeEnd == nil || *result.AddressRangeEnd != "192.0.2.200" || result.SubnetMask == nil || *result.SubnetMask != "255.255.255.0" || !reflect.DeepEqual(result.Routers, []string{"192.0.2.1"}) || !reflect.DeepEqual(result.DNSServers, []string{"192.0.2.1", "192.0.2.53"}) || result.DomainName == nil || *result.DomainName != "synthetic.test" {
 					t.Fatalf("result=%#v error=%v", result, err)
 				}
 				encoded, err := json.Marshal(result)
@@ -395,6 +395,14 @@ func TestDHCPValidatesServerConfiguration(t *testing.T) {
 				t.Fatalf("result=%#v error=%#v", result, err)
 			}
 		})
+	}
+}
+
+func TestDHCPAllowsMissingConfigurableState(t *testing.T) {
+	values := soapValues{DHCPServerEnable: "1", DHCPRelay: "0"}
+	result, err := parseDHCPInfo(values)
+	if err != nil || result.ServerConfigurable != nil {
+		t.Fatalf("result=%#v error=%v", result, err)
 	}
 }
 

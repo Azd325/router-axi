@@ -901,7 +901,7 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 		}
 	case "dhcp":
 		v := value.(tr064.DHCP)
-		_, err := fmt.Fprintf(w, "dhcp:\n  server_configurable: %t\n  server_enabled: %s\n  relay_enabled: %s\n  address_range_start: %s\n  address_range_end: %s\n  subnet_mask: %s\n  routers: %s\n  dns_servers: %s\n  domain_name: %s\n", v.ServerConfigurable, optionalBool(v.ServerEnabled), optionalBool(v.RelayEnabled), optionalText(v.AddressRangeStart), optionalText(v.AddressRangeEnd), optionalText(v.SubnetMask), scalar(strings.Join(v.Routers, ",")), scalar(strings.Join(v.DNSServers, ",")), optionalToon(v.DomainName))
+		_, err := fmt.Fprintf(w, "dhcp:\n  server_configurable: %s\n  server_enabled: %s\n  relay_enabled: %s\n  address_range_start: %s\n  address_range_end: %s\n  subnet_mask: %s\n  routers: %s\n  dns_servers: %s\n  domain_name: %s\n", optionalBool(v.ServerConfigurable), optionalBool(v.ServerEnabled), optionalBool(v.RelayEnabled), optionalText(v.AddressRangeStart), optionalText(v.AddressRangeEnd), optionalText(v.SubnetMask), scalar(strings.Join(v.Routers, ",")), scalar(strings.Join(v.DNSServers, ",")), optionalToon(v.DomainName))
 		return err
 	case "forwards":
 		result := value.(forwardResult)

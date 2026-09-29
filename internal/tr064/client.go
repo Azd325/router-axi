@@ -77,7 +77,7 @@ type WANDetail struct {
 }
 
 type DHCP struct {
-	ServerConfigurable bool     `json:"server_configurable"`
+	ServerConfigurable *bool    `json:"server_configurable"`
 	ServerEnabled      *bool    `json:"server_enabled"`
 	RelayEnabled       *bool    `json:"relay_enabled"`
 	AddressRangeStart  *string  `json:"address_range_start"`
@@ -803,11 +803,11 @@ func (c *Client) dhcpService(ctx context.Context) (service, error) {
 
 func parseDHCPInfo(values soapValues) (DHCP, error) {
 	result := DHCP{Routers: []string{}, DNSServers: []string{}}
-	configurable, err := parseDHCPBool(values.DHCPServerConfigurable, "server configurable state", false)
+	configurable, err := parseDHCPBool(values.DHCPServerConfigurable, "server configurable state", true)
 	if err != nil {
 		return DHCP{}, err
 	}
-	result.ServerConfigurable = *configurable
+	result.ServerConfigurable = configurable
 	result.ServerEnabled, err = parseDHCPBool(values.DHCPServerEnable, "server enabled state", true)
 	if err != nil {
 		return DHCP{}, err

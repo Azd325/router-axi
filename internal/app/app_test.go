@@ -141,7 +141,16 @@ func (f fakeReader) Leases(context.Context) ([]tr064.Lease, error) {
 func (f fakeReader) DHCP(context.Context) (tr064.DHCP, error) {
 	enabled, relay := true, false
 	start, end, mask, domain := "192.0.2.20", "192.0.2.200", "255.255.255.0", "synthetic.test"
-	return tr064.DHCP{ServerConfigurable: true, ServerEnabled: &enabled, RelayEnabled: &relay, AddressRangeStart: &start, AddressRangeEnd: &end, SubnetMask: &mask, Routers: []string{"192.0.2.1"}, DNSServers: []string{"192.0.2.1", "192.0.2.53"}, DomainName: &domain}, f.err
+	configurable := true
+	return tr064.DHCP{ServerConfigurable: &configurable, ServerEnabled: &enabled, RelayEnabled: &relay, AddressRangeStart: &start, AddressRangeEnd: &end, SubnetMask: &mask, Routers: []string{"192.0.2.1"}, DNSServers: []string{"192.0.2.1", "192.0.2.53"}, DomainName: &domain}, f.err
+}
+
+type fakeReaderWithoutDHCPConfig struct{ fakeReader }
+
+func (f fakeReaderWithoutDHCPConfig) DHCP(ctx context.Context) (tr064.DHCP, error) {
+	result, err := f.fakeReader.DHCP(ctx)
+	result.ServerConfigurable = nil
+	return result, err
 }
 
 func (f fakeReader) WiFi(context.Context) ([]tr064.Radio, error) {
@@ -1296,6 +1305,22 @@ func TestDHCPOutputContract(t *testing.T) {
 		code, stdout, stderr := runTest(t, test.args...)
 		if code != ExitOK || stdout != test.want || stderr != "" {
 			t.Fatalf("args=%q code=%d stdout=%q stderr=%q", test.args, code, stdout, stderr)
+		}
+	}
+}
+
+func TestDHCPOutputUnknownConfigurableState(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"dhcp"}, "dhcp:\n  server_configurable: unknown\n  server_enabled: true\n  relay_enabled: false\n  address_range_start: 192.0.2.20\n  address_range_end: 192.0.2.200\n  subnet_mask: 255.255.255.0\n  routers: 192.0.2.1\n  dns_servers: 192.0.2.1,192.0.2.53\n  domain_name: synthetic.test\n"},
+		{[]string{"dhcp", "--json"}, `{"server_configurable":null,"server_enabled":true,"relay_enabled":false,"address_range_start":"192.0.2.20","address_range_end":"192.0.2.200","subnet_mask":"255.255.255.0","routers":["192.0.2.1"],"dns_servers":["192.0.2.1","192.0.2.53"],"domain_name":"synthetic.test"}` + "\n"},
+	} {
+		var stdout, stderr bytes.Buffer
+		code := New(func(Config) (Reader, error) { return fakeReaderWithoutDHCPConfig{}, nil }, func(string) string { return "" }).Run(t.Context(), test.args, &stdout, &stderr)
+		if code != ExitOK || stdout.String() != test.want || stderr.Len() != 0 {
+			t.Fatalf("args=%q code=%d stdout=%q stderr=%q", test.args, code, stdout.String(), stderr.String())
 		}
 	}
 }
