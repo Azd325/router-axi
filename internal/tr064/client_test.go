@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -463,6 +464,26 @@ func TestDHCPHTTPAuthenticationStatuses(t *testing.T) {
 				t.Fatalf("result=%#v error=%#v", result, err)
 			}
 		})
+	}
+}
+
+func TestGenericGETPreservesForbiddenRouterError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	t.Cleanup(server.Close)
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateURL, err := url.Parse(server.URL + "/private")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = client.get(t.Context(), privateURL)
+	var protocolErr *Error
+	if !errors.As(err, &protocolErr) || protocolErr.Kind != "router" || protocolErr.StatusCode != http.StatusForbidden {
+		t.Fatalf("error=%#v", err)
 	}
 }
 
