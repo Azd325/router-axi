@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, reboot, and configuration export.
+The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, DHCP server configuration, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, reboot, and configuration export.
 
 ## Design constraints
 
@@ -82,6 +82,8 @@ router-axi devices --json
 router-axi leases
 router-axi leases --json
 router-axi leases --all
+router-axi dhcp
+router-axi dhcp --json
 router-axi wifi
 router-axi wifi --json
 router-axi wifi detail
@@ -118,7 +120,7 @@ description once and, when `DeviceInfo` is advertised, invokes only
 `DeviceInfo:GetInfo` to verify authentication and obtain model and firmware.
 It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
-`wan`, `traffic`, `watch`, `calls`, `devices`, `leases`, `wifi`, `forwards`, `reboot`, and
+`wan`, `traffic`, `watch`, `calls`, `devices`, `leases`, `dhcp`, `wifi`, `forwards`, `reboot`, and
 `backup`. `watch` is advertised only when the description includes Layer3Forwarding,
 WANCommonInterfaceConfig, and either WANIPConnection or WANPPPConnection; doctor does
 not invoke any of their actions. Doctor does not report a separate `guest` capability: WLANConfiguration
@@ -338,6 +340,54 @@ the invoking user, without a reveal flag: never paste real mappings, hostnames,
 MACs, private addresses, or live responses into logs, issues, fixtures, or
 commits. Tests use synthetic data only. Compatibility is fixture-backed, not
 inferred from model names; these actions cannot establish reservation semantics.
+
+### DHCP server configuration
+
+`dhcp` is a bounded read-only view of server-level configuration from the
+advertised `LANHostConfigManagement` service. It reports whether the server is
+configurable, plus available enabled/relay state, address range, subnet mask,
+router list, DNS server list, and domain name. It never enumerates, infers, or
+claims configured reservations; `NewReservedAddresses` returned as part of a
+documented aggregate response is discarded without being parsed or exposed.
+
+The command requires exactly one advertised service and fetches that service's
+same-origin SCPD before any SOAP action. Same-origin control and SCPD URLs must
+have no user information, query, or fragment, and redirects are refused. The
+SCPD must advertise the documented aggregate `GetInfo`, which is the only DHCP
+action the command invokes. No setter, reserved-address action, host-table
+action, browser endpoint, scan, DNS lookup, or model-name inference is used.
+
+Compact output has this fixed shape:
+
+```
+dhcp:
+  server_configurable: true
+  server_enabled: true
+  relay_enabled: false
+  address_range_start: 192.0.2.20
+  address_range_end: 192.0.2.200
+  subnet_mask: 255.255.255.0
+  routers: 192.0.2.1
+  dns_servers: 192.0.2.1,192.0.2.53
+  domain_name: synthetic.test
+```
+
+JSON fields follow the same order:
+
+```json
+{"server_configurable":true,"server_enabled":true,"relay_enabled":false,"address_range_start":"192.0.2.20","address_range_end":"192.0.2.200","subnet_mask":"255.255.255.0","routers":["192.0.2.1"],"dns_servers":["192.0.2.1","192.0.2.53"],"domain_name":"synthetic.test"}
+```
+
+Aggregate fields omitted by the router are `unknown` in compact output and
+`null` or `[]` in JSON; they are never inferred. Returned booleans, IPv4 ranges,
+contiguous subnet masks, routers, and DNS servers are validated before any
+output, and any failure discards the entire result. Missing or duplicate services,
+a missing `GetInfo` action, or an invalid-action fault `401` exit `5`;
+authentication exits `3`, network failures `4`, and malformed configuration or
+other router faults `6`. Errors discard router addresses, fault text, URLs, and
+response bodies. Doctor reports service advertisement only and does not fetch
+the SCPD or invoke a DHCP action. Compatibility is fixture-backed for aggregate
+`GetInfo` and service versions 1 and 2; it is not inferred from router models.
 
 ### Wi-Fi radio mutation
 
@@ -809,7 +859,9 @@ Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 SCPD-advertised `GetAddonInfos` on the active WANIPConnection/WANPPPConnection service, AVM's
 documented `X_AVM-DE_OnTel:GetCallList`, and the standard
 `Hosts:GetHostNumberOfEntries` plus zero-based `GetGenericHostEntry(NewIndex)`,
-and `WLANConfiguration:GetInfo`, `GetChannelInfo`, `GetTotalAssociations`, and
+the SCPD-advertised documented `LANHostConfigManagement:GetInfo` DHCP
+configuration read (never reservation inventory), and `WLANConfiguration:GetInfo`,
+`GetChannelInfo`, `GetTotalAssociations`, and
 `GetBeaconType`. Guest inspection additionally uses the documented AVM
 `WLANConfiguration:X_AVM-DE_GetWLANExtInfo` action only to read
 `NewX_AVM-DE_APType`, then the same four status actions for explicitly classified

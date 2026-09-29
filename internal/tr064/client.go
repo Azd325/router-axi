@@ -76,6 +76,18 @@ type WANDetail struct {
 	DNSServers                           []string `json:"dns_servers"`
 }
 
+type DHCP struct {
+	ServerConfigurable *bool    `json:"server_configurable"`
+	ServerEnabled      *bool    `json:"server_enabled"`
+	RelayEnabled       *bool    `json:"relay_enabled"`
+	AddressRangeStart  *string  `json:"address_range_start"`
+	AddressRangeEnd    *string  `json:"address_range_end"`
+	SubnetMask         *string  `json:"subnet_mask"`
+	Routers            []string `json:"routers"`
+	DNSServers         []string `json:"dns_servers"`
+	DomainName         *string  `json:"domain_name"`
+}
+
 type Overview struct {
 	Router  Status  `json:"router"`
 	WAN     WAN     `json:"wan"`
@@ -96,6 +108,7 @@ type DoctorCapabilities struct {
 	Calls    DoctorCheck `json:"calls"`
 	Devices  DoctorCheck `json:"devices"`
 	Leases   DoctorCheck `json:"leases"`
+	DHCP     DoctorCheck `json:"dhcp"`
 	WiFi     DoctorCheck `json:"wifi"`
 	Forwards DoctorCheck `json:"forwards"`
 	Reboot   DoctorCheck `json:"reboot"`
@@ -237,6 +250,8 @@ type soapValues struct {
 	PortMappingCount, ExternalPort, PortMappingProtocol                         string
 	InternalPort, InternalClient, PortMappingEnabled, PortMappingDescription    string
 	RemoteHost, LeaseDuration                                                   *string
+	DHCPServerConfigurable, DHCPServerEnable, DHCPRelay                         string
+	MinAddress, MaxAddress, SubnetMask, DNSServers, DomainName, IPRouters       string
 }
 
 type soapArgument struct{ Name, Value string }
@@ -355,6 +370,24 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 		case "NewLeaseDuration":
 			v.LeaseDuration = new(string)
 			target = v.LeaseDuration
+		case "NewDHCPServerConfigurable":
+			target = &v.DHCPServerConfigurable
+		case "NewDHCPServerEnable":
+			target = &v.DHCPServerEnable
+		case "NewDHCPRelay":
+			target = &v.DHCPRelay
+		case "NewMinAddress":
+			target = &v.MinAddress
+		case "NewMaxAddress":
+			target = &v.MaxAddress
+		case "NewSubnetMask":
+			target = &v.SubnetMask
+		case "NewDNSServers":
+			target = &v.DNSServers
+		case "NewDomainName":
+			target = &v.DomainName
+		case "NewIPRouters":
+			target = &v.IPRouters
 		case "errorCode":
 			target = &v.FaultCode
 		case "errorDescription":
@@ -410,7 +443,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 		Protocol:       unknown,
 		Authentication: unknown,
 		Capabilities: DoctorCapabilities{
-			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Watch: unknown, Calls: unknown, Devices: unknown, Leases: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown, Backup: unknown,
+			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Watch: unknown, Calls: unknown, Devices: unknown, Leases: unknown, DHCP: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown, Backup: unknown,
 		},
 	}
 	if err := c.discover(ctx); err != nil {
@@ -438,6 +471,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 	hostsCapability := c.advertisedCapability([]string{"urn:dslforum-org:service:Hosts:"}, "enable the Hosts TR-064 service or use supported firmware")
 	report.Capabilities.Devices = hostsCapability
 	report.Capabilities.Leases = hostsCapability
+	report.Capabilities.DHCP = c.advertisedCapability([]string{dhcpServicePrefix}, dhcpRemediation)
 	report.Capabilities.WiFi = c.advertisedCapability([]string{wlanServicePrefix}, wifiRemediation)
 	report.Capabilities.Forwards = c.advertisedCapability(wanMappingPrefixes, forwardsRemediation)
 	report.Capabilities.Reboot = c.rebootCapability()
@@ -696,6 +730,211 @@ func wanDetailError(err error) *Error {
 	}
 	if result.Kind == "unsupported" {
 		result.Message = "router does not support the documented WAN detail action; " + wanDetailRemediation
+	}
+	return result
+}
+
+const (
+	dhcpServicePrefix = "urn:dslforum-org:service:LANHostConfigManagement:"
+	dhcpRemediation   = "enable LANHostConfigManagement with documented DHCP configuration reads, or use supported firmware"
+)
+
+func (c *Client) DHCP(ctx context.Context) (DHCP, error) {
+	client := *c
+	httpClient := *c.http
+	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("DHCP inspection refuses redirects")
+	}
+	client.http = &httpClient
+	client.services, client.allServices, client.digestChallenge = nil, nil, nil
+	if err := client.discover(ctx); err != nil {
+		return DHCP{}, dhcpError(err)
+	}
+	target, err := client.dhcpService(ctx)
+	if err != nil {
+		return DHCP{}, err
+	}
+	values, err := client.actionOnService(ctx, target, "GetInfo")
+	if err != nil {
+		return DHCP{}, dhcpError(err)
+	}
+	return parseDHCPInfo(values)
+}
+
+func (c *Client) dhcpService(ctx context.Context) (service, error) {
+	var matches []service
+	for _, svc := range c.allServices {
+		if strings.HasPrefix(svc.Type, dhcpServicePrefix) {
+			matches = append(matches, svc)
+		}
+	}
+	if len(matches) != 1 {
+		return service{}, &Error{Kind: "unsupported", Operation: "dhcp", Message: "router does not advertise exactly one LANHostConfigManagement service; " + dhcpRemediation}
+	}
+	target := matches[0]
+	control, controlErr := c.base.Parse(target.ControlURL)
+	scpdURL, scpdErr := c.base.Parse(target.SCPDURL)
+	if controlErr != nil || target.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.ForceQuery || control.Fragment != "" || scpdErr != nil || target.SCPDURL == "" || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.ForceQuery || scpdURL.Fragment != "" {
+		return service{}, &Error{Kind: "protocol", Operation: "dhcp", Message: "router advertised an invalid LANHostConfigManagement service URL"}
+	}
+	body, err := c.get(ctx, scpdURL)
+	if err != nil {
+		return service{}, dhcpError(err)
+	}
+	var scpd struct {
+		XMLName xml.Name `xml:"scpd"`
+		Actions []struct {
+			Name string `xml:"name"`
+		} `xml:"actionList>action"`
+	}
+	if err := xml.Unmarshal(body, &scpd); err != nil || scpd.XMLName.Local != "scpd" {
+		return service{}, &Error{Kind: "protocol", Operation: "dhcp", Message: "router returned an invalid LANHostConfigManagement service description"}
+	}
+	actions := make(map[string]bool, len(scpd.Actions))
+	for _, action := range scpd.Actions {
+		actions[strings.TrimSpace(action.Name)] = true
+	}
+	if !actions["GetInfo"] {
+		return service{}, &Error{Kind: "unsupported", Operation: "dhcp", Message: "router does not advertise LANHostConfigManagement:GetInfo; " + dhcpRemediation}
+	}
+	target.ControlURL = control.Path
+	return target, nil
+}
+
+func parseDHCPInfo(values soapValues) (DHCP, error) {
+	result := DHCP{Routers: []string{}, DNSServers: []string{}}
+	configurable, err := parseDHCPBool(values.DHCPServerConfigurable, "server configurable state")
+	if err != nil {
+		return DHCP{}, err
+	}
+	result.ServerConfigurable = configurable
+	result.ServerEnabled, err = parseDHCPBool(values.DHCPServerEnable, "server enabled state")
+	if err != nil {
+		return DHCP{}, err
+	}
+	result.RelayEnabled, err = parseDHCPBool(values.DHCPRelay, "relay state")
+	if err != nil {
+		return DHCP{}, err
+	}
+	result.AddressRangeStart, result.AddressRangeEnd, err = parseDHCPRange(values.MinAddress, values.MaxAddress)
+	if err != nil {
+		return DHCP{}, err
+	}
+	result.SubnetMask, err = parseDHCPSubnetMask(values.SubnetMask)
+	if err != nil {
+		return DHCP{}, err
+	}
+	result.Routers, err = parseDHCPAddressList(values.IPRouters, "router list")
+	if err != nil {
+		return DHCP{}, err
+	}
+	result.DNSServers, err = parseDHCPAddressList(values.DNSServers, "DNS server list")
+	if err != nil {
+		return DHCP{}, err
+	}
+	result.DomainName = optionalDHCPText(values.DomainName)
+	return result, nil
+}
+
+func parseDHCPBool(value, field string) (*bool, error) {
+	switch strings.TrimSpace(value) {
+	case "0", "false":
+		result := false
+		return &result, nil
+	case "1", "true":
+		result := true
+		return &result, nil
+	case "":
+		return nil, nil
+	}
+	return nil, &Error{Kind: "protocol", Operation: "dhcp", Message: "router returned an invalid DHCP " + field}
+}
+
+func parseDHCPRange(start, end string) (*string, *string, error) {
+	start = strings.TrimSpace(start)
+	end = strings.TrimSpace(end)
+	var startAddress, endAddress netip.Addr
+	var startResult, endResult *string
+	if start != "" {
+		address, err := netip.ParseAddr(start)
+		if err != nil || !address.Is4() {
+			return nil, nil, &Error{Kind: "protocol", Operation: "dhcp", Message: "router returned an invalid DHCP address range"}
+		}
+		startAddress = address
+		normalized := address.String()
+		startResult = &normalized
+	}
+	if end != "" {
+		address, err := netip.ParseAddr(end)
+		if err != nil || !address.Is4() {
+			return nil, nil, &Error{Kind: "protocol", Operation: "dhcp", Message: "router returned an invalid DHCP address range"}
+		}
+		endAddress = address
+		normalized := address.String()
+		endResult = &normalized
+	}
+	if startResult != nil && endResult != nil && startAddress.Compare(endAddress) > 0 {
+		return nil, nil, &Error{Kind: "protocol", Operation: "dhcp", Message: "router returned an invalid DHCP address range"}
+	}
+	return startResult, endResult, nil
+}
+
+func parseDHCPSubnetMask(value string) (*string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	address, err := netip.ParseAddr(value)
+	if err != nil || !address.Is4() {
+		return nil, &Error{Kind: "protocol", Operation: "dhcp", Message: "router returned an invalid DHCP subnet mask"}
+	}
+	octets := address.As4()
+	mask := net.IPMask(octets[:])
+	if _, bits := mask.Size(); bits != 32 {
+		return nil, &Error{Kind: "protocol", Operation: "dhcp", Message: "router returned an invalid DHCP subnet mask"}
+	}
+	normalized := address.String()
+	return &normalized, nil
+}
+
+func parseDHCPAddressList(value, field string) ([]string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return []string{}, nil
+	}
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		address, err := netip.ParseAddr(strings.TrimSpace(part))
+		if err != nil || !address.Is4() {
+			return nil, &Error{Kind: "protocol", Operation: "dhcp", Message: "router returned an invalid DHCP " + field}
+		}
+		result = append(result, address.String())
+	}
+	return result, nil
+}
+
+func optionalDHCPText(value string) *string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func dhcpError(err error) *Error {
+	result := &Error{Kind: "protocol", Operation: "dhcp", Message: "DHCP server configuration inspection failed"}
+	var protocolErr *Error
+	if errors.As(err, &protocolErr) {
+		result.Kind, result.StatusCode, result.FaultCode = protocolErr.Kind, protocolErr.StatusCode, protocolErr.FaultCode
+		if result.Kind == "router" && result.FaultCode == "401" {
+			result.Kind = "unsupported"
+		} else if result.StatusCode == http.StatusUnauthorized || result.StatusCode == http.StatusForbidden {
+			result.Kind = "auth"
+		}
+	}
+	if result.Kind == "unsupported" {
+		result.Message = "router does not support documented DHCP configuration reads; " + dhcpRemediation
 	}
 	return result
 }
