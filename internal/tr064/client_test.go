@@ -383,6 +383,7 @@ func TestDHCPValidatesServerConfiguration(t *testing.T) {
 		{"relay", func(v *soapValues) { v.DHCPRelay = "TRUE" }},
 		{"range reversed", func(v *soapValues) { v.MinAddress, v.MaxAddress = v.MaxAddress, v.MinAddress }},
 		{"subnet mask", func(v *soapValues) { v.SubnetMask = "255.0.255.0" }},
+		{"subnet mapped IPv6", func(v *soapValues) { v.SubnetMask = "::ffff:255.255.255.0" }},
 		{"routers", func(v *soapValues) { v.IPRouters = "192.0.2.1,private-value" }},
 		{"DNS", func(v *soapValues) { v.DNSServers = "2001:db8::53" }},
 	} {

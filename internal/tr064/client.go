@@ -886,16 +886,17 @@ func parseDHCPSubnetMask(value string) (*string, error) {
 	if value == "" {
 		return nil, nil
 	}
-	address := net.ParseIP(value)
-	if address == nil || address.To4() == nil {
+	address, err := netip.ParseAddr(value)
+	if err != nil || !address.Is4() {
 		return nil, &Error{Kind: "protocol", Operation: "dhcp", Message: "router returned an invalid DHCP subnet mask"}
 	}
-	mask := net.IPMask(address.To4())
+	octets := address.As4()
+	mask := net.IPMask(octets[:])
 	if _, bits := mask.Size(); bits != 32 {
 		return nil, &Error{Kind: "protocol", Operation: "dhcp", Message: "router returned an invalid DHCP subnet mask"}
 	}
-	value = net.IP(address.To4()).String()
-	return &value, nil
+	normalized := address.String()
+	return &normalized, nil
 }
 
 func parseDHCPAddressList(value, field string) ([]string, error) {
