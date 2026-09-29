@@ -855,16 +855,30 @@ func parseDHCPBool(value, field string, optional bool) (*bool, error) {
 func parseDHCPRange(start, end string) (*string, *string, error) {
 	start = strings.TrimSpace(start)
 	end = strings.TrimSpace(end)
-	if start == "" && end == "" {
-		return nil, nil, nil
+	var startAddress, endAddress netip.Addr
+	var startResult, endResult *string
+	if start != "" {
+		address, err := netip.ParseAddr(start)
+		if err != nil || !address.Is4() {
+			return nil, nil, &Error{Kind: "protocol", Operation: "dhcp", Message: "router returned an invalid DHCP address range"}
+		}
+		startAddress = address
+		normalized := address.String()
+		startResult = &normalized
 	}
-	startAddress, startErr := netip.ParseAddr(start)
-	endAddress, endErr := netip.ParseAddr(end)
-	if startErr != nil || endErr != nil || !startAddress.Is4() || !endAddress.Is4() || startAddress.Compare(endAddress) > 0 {
+	if end != "" {
+		address, err := netip.ParseAddr(end)
+		if err != nil || !address.Is4() {
+			return nil, nil, &Error{Kind: "protocol", Operation: "dhcp", Message: "router returned an invalid DHCP address range"}
+		}
+		endAddress = address
+		normalized := address.String()
+		endResult = &normalized
+	}
+	if startResult != nil && endResult != nil && startAddress.Compare(endAddress) > 0 {
 		return nil, nil, &Error{Kind: "protocol", Operation: "dhcp", Message: "router returned an invalid DHCP address range"}
 	}
-	start, end = startAddress.String(), endAddress.String()
-	return &start, &end, nil
+	return startResult, endResult, nil
 }
 
 func parseDHCPSubnetMask(value string) (*string, error) {

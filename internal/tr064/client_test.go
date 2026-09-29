@@ -381,7 +381,6 @@ func TestDHCPValidatesServerConfiguration(t *testing.T) {
 		{"configurable", func(v *soapValues) { v.DHCPServerConfigurable = "private-value" }},
 		{"enabled", func(v *soapValues) { v.DHCPServerEnable = "2" }},
 		{"relay", func(v *soapValues) { v.DHCPRelay = "TRUE" }},
-		{"range missing end", func(v *soapValues) { v.MaxAddress = "" }},
 		{"range reversed", func(v *soapValues) { v.MinAddress, v.MaxAddress = v.MaxAddress, v.MinAddress }},
 		{"subnet mask", func(v *soapValues) { v.SubnetMask = "255.0.255.0" }},
 		{"routers", func(v *soapValues) { v.IPRouters = "192.0.2.1,private-value" }},
@@ -394,6 +393,24 @@ func TestDHCPValidatesServerConfiguration(t *testing.T) {
 			var protocolErr *Error
 			if !reflect.DeepEqual(result, DHCP{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || protocolErr.Operation != "dhcp" || strings.Contains(fmt.Sprintf("%#v", err), "private-value") {
 				t.Fatalf("result=%#v error=%#v", result, err)
+			}
+		})
+	}
+}
+
+func TestDHCPAllowsPartialAddressRange(t *testing.T) {
+	for _, test := range []struct {
+		name, start, end   string
+		wantStart, wantEnd string
+	}{
+		{name: "missing end", start: "192.0.2.20", wantStart: "192.0.2.20"},
+		{name: "missing start", end: "192.0.2.200", wantEnd: "192.0.2.200"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			values := soapValues{DHCPServerConfigurable: "1", DHCPServerEnable: "1", DHCPRelay: "0", MinAddress: test.start, MaxAddress: test.end}
+			result, err := parseDHCPInfo(values)
+			if err != nil || result.AddressRangeStart == nil && test.wantStart != "" || result.AddressRangeStart != nil && *result.AddressRangeStart != test.wantStart || result.AddressRangeEnd == nil && test.wantEnd != "" || result.AddressRangeEnd != nil && *result.AddressRangeEnd != test.wantEnd {
+				t.Fatalf("result=%#v error=%v", result, err)
 			}
 		})
 	}
