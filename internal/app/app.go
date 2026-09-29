@@ -47,6 +47,7 @@ type Reader interface {
 	Devices(context.Context) ([]tr064.Device, error)
 	Leases(context.Context) ([]tr064.Lease, error)
 	WiFi(context.Context) ([]tr064.Radio, error)
+	WiFiDetail(context.Context, uint64) (tr064.RadioDetail, error)
 	GuestWiFi(context.Context) ([]tr064.GuestNetwork, error)
 	WiFiMutation(context.Context, uint64, bool, bool) (tr064.WiFiMutation, error)
 	Forwards(context.Context) ([]tr064.Forward, error)
@@ -287,7 +288,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 
 	var value any
-	mutation := opts.command == "wifi" && opts.action != ""
+	mutation := opts.command == "wifi" && (opts.action == "enable" || opts.action == "disable")
 	if mutation {
 		var result tr064.WiFiMutation
 		result, err = reader.WiFiMutation(ctx, opts.instance, opts.action == "enable", opts.confirm)
@@ -329,6 +330,12 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 				value = callResult{Calls: calls, Total: total, Omitted: total - len(calls)}
 			}
 		case "wifi":
+			if opts.action == "detail" {
+				var radio tr064.RadioDetail
+				radio, err = reader.WiFiDetail(ctx, opts.instance)
+				value = radio
+				break
+			}
 			var radios []tr064.Radio
 			radios, err = reader.WiFi(ctx)
 			if radios == nil {
@@ -503,12 +510,12 @@ func parse(args []string) (options, error) {
 			if opts.command == "wan" && opts.action != "" {
 				return opts, errors.New("wan accepts one action: detail")
 			}
-			if opts.command == "wifi" && opts.action == "" && (args[i] == "enable" || args[i] == "disable") {
+			if opts.command == "wifi" && opts.action == "" && (args[i] == "enable" || args[i] == "disable" || args[i] == "detail") {
 				opts.action = args[i]
 				continue
 			}
 			if opts.command == "wifi" && opts.action != "" {
-				return opts, errors.New("wifi accepts one action: enable or disable")
+				return opts, errors.New("wifi accepts one action: detail, enable, or disable")
 			}
 			if opts.command == "skill" {
 				if args[i] == "install" && opts.action == "" {
@@ -574,7 +581,7 @@ var commandHelp = map[string]string{
 	"calls":    "usage: router-axi calls [--all] [--host ADDRESS] [--json] [--help]\nRead-only call history. Defaults to the 100 most recent entries; --all lists everything. No required arguments.\nexamples: router-axi calls; router-axi calls --all; router-axi calls --all --json\n",
 	"devices":  "usage: router-axi devices [--all] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi devices; router-axi devices --all --json\n",
 	"leases":   "usage: router-axi leases [--all] [--host ADDRESS] [--json] [--help]\nRead-only observed lease metadata from the Hosts table: name, addresses, address source, and remaining lease time. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi leases; router-axi leases --all --json\n",
-	"wifi":     "usage: router-axi wifi [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi disable --instance 1 --confirm\n",
+	"wifi":     "usage: router-axi wifi [detail [--instance N]] [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection; wifi detail reports one radio's safe documented properties. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi detail --instance 1; router-axi wifi disable --instance 1 --confirm\n",
 	"guest":    "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID and aggregate radio state only; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n",
 	"forwards": "usage: router-axi forwards [--all] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi forwards; router-axi forwards --all --json\n",
 	"version":  "usage: router-axi version [--json] [--help]\nPrint the router-axi version without contacting the router.\nexamples: router-axi version; router-axi version --json\n",
@@ -590,7 +597,11 @@ type flagSpec struct {
 
 func alwaysValid(options) bool { return true }
 
-func wifiMutation(opts options) bool { return opts.command == "wifi" && opts.action != "" }
+func wifiMutation(opts options) bool {
+	return opts.command == "wifi" && (opts.action == "enable" || opts.action == "disable")
+}
+
+func wifiTargeted(opts options) bool { return opts.command == "wifi" && opts.action != "" }
 
 func rebootOrWiFiMutation(opts options) bool { return opts.command == "reboot" || wifiMutation(opts) }
 
@@ -603,7 +614,7 @@ var flagSpecs = map[string]flagSpec{
 	"--all": {valid: func(opts options) bool {
 		return opts.command == "calls" || opts.command == "devices" || opts.command == "leases" || opts.command == "forwards"
 	}, invalid: "--all is valid only for calls, devices, leases, or forwards"},
-	"--instance": {valid: wifiMutation, invalid: "--instance is valid only with wifi enable or wifi disable"},
+	"--instance": {valid: wifiTargeted, invalid: "--instance is valid only with wifi detail, wifi enable, or wifi disable"},
 	"--confirm":  {valid: rebootOrWiFiMutation, invalid: "--confirm is valid only with reboot, wifi enable, or wifi disable"},
 	"--output":   {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--output is valid only with backup"},
 	"--force":    {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--force is valid only with backup"},
@@ -678,6 +689,9 @@ func help(command, action string) string {
 	if command == "wan" && action == "detail" {
 		return "usage: router-axi wan detail [--host ADDRESS] [--json] [--help]\nRead-only bounded WAN physical-link detail from documented WANCommonInterfaceConfig actions.\nGetCommonLinkProperties is required. Advertised GetAddonInfos adds router-reported byte rates, totals, and DNS servers; these rates are not watch's observed-delta rates.\nexamples: router-axi wan detail; router-axi wan detail --json\n"
 	}
+	if command == "wifi" && action == "detail" {
+		return "usage: router-axi wifi detail [--instance N] [--host ADDRESS] [--json] [--help]\nRead-only per-radio Wi-Fi detail from documented WLANConfiguration:GetInfo and GetChannelInfo, validated against the service description first.\nReports enable status, status, standard, max bitrate, channel, and band; absent optional fields are unknown. --instance N (1 or greater) is required when the router advertises more than one radio.\nBSSIDs, keys, and client details are never read or printed.\nexamples: router-axi wifi detail; router-axi wifi detail --instance 2; router-axi wifi detail --instance 1 --json\n"
+	}
 	if action != "" && command == "wifi" {
 		return "usage: router-axi wifi " + action + " [--instance N] --confirm [--host ADDRESS] [--json] [--help]\nEnables or disables one WLANConfiguration radio. Without --confirm: preview only, nothing changes.\nWith --confirm: idempotent change; the router must confirm the new state. --instance N is required when the router advertises more than one radio; bounds N 1 or greater.\nNo prompts or retries; SSIDs, BSSIDs, and keys are never read or printed.\nexamples: router-axi wifi " + action + "; router-axi wifi " + action + " --instance 1 --confirm; router-axi wifi " + action + " --instance 2 --confirm --json\n"
 	}
@@ -706,7 +720,7 @@ func help(command, action string) string {
 			extra = " [--all]"
 		}
 		if command == "wifi" {
-			extra = " [enable|disable [--instance N] --confirm]"
+			extra = " [detail [--instance N]] [enable|disable [--instance N] --confirm]"
 		}
 		if command == "skill" {
 			if action != "" {
@@ -716,7 +730,7 @@ func help(command, action string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + " [--help]\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -809,6 +823,10 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 			return err
 		}
 	case "wifi":
+		if v, ok := value.(tr064.RadioDetail); ok {
+			_, err := fmt.Fprintf(w, "wifi_detail:\n  instance: %s\n  enabled: %t\n  status: %s\n  standard: %s\n  max_bit_rate: %s\n  channel: %s\n  band: %s\n", scalar(v.ServiceID), v.Enabled, optionalText(v.Status), scalar(v.Standard), optionalText(v.MaxBitRate), optionalUint(v.Channel), scalar(v.Band))
+			return err
+		}
 		result := value.(wifiResult)
 		if len(result.Radios) == 0 {
 			_, err := io.WriteString(w, "radios[0]: no Wi-Fi services found\n")
@@ -910,6 +928,9 @@ func protocolError(err error) errorSpec {
 	switch protocolErr.Kind {
 	case "usage":
 		hint := "router-axi wifi enable|disable --instance N"
+		if protocolErr.Operation == "wifi detail" {
+			hint = "router-axi wifi detail --instance N"
+		}
 		if protocolErr.Operation == "reboot" {
 			hint = "router-axi reboot --help"
 		}
@@ -1162,6 +1183,13 @@ func optionalUint(value *uint64) string {
 		return "unknown"
 	}
 	return strconv.FormatUint(*value, 10)
+}
+
+func optionalText(value *string) string {
+	if value == nil {
+		return "unknown"
+	}
+	return *value
 }
 func duration(seconds uint64) string {
 	return fmt.Sprintf("%dd %02dh %02dm", seconds/86400, seconds%86400/3600, seconds%3600/60)

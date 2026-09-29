@@ -146,6 +146,27 @@ func (f fakeReader) GuestWiFi(context.Context) ([]tr064.GuestNetwork, error) {
 	return []tr064.GuestNetwork{{ServiceID: "urn:WLANConfiguration-com:serviceId:WLANConfiguration2", SSID: "synthetic-guest", Enabled: true, Channel: 36, Band: "5000", Standard: "ax", AssociatedClients: 1, SecurityMode: "11iandWPA3"}}, f.err
 }
 
+func (f fakeReader) WiFiDetail(context.Context, uint64) (tr064.RadioDetail, error) {
+	status, maxBitRate, channel := "Up", "Auto", uint64(36)
+	return tr064.RadioDetail{ServiceID: "urn:WLANConfiguration-com:serviceId:WLANConfiguration1", Enabled: true, Status: &status, Standard: "ax", MaxBitRate: &maxBitRate, Channel: &channel, Band: "5000"}, f.err
+}
+
+type wifiDetailReader struct {
+	fakeReader
+	instance uint64
+	omit     bool
+}
+
+func (f *wifiDetailReader) WiFiDetail(_ context.Context, instance uint64) (tr064.RadioDetail, error) {
+	f.instance = instance
+	detail := tr064.RadioDetail{ServiceID: "urn:WLANConfiguration-com:serviceId:WLANConfiguration" + fmt.Sprint(instance), Enabled: true, Standard: "ax", Band: "5000"}
+	if !f.omit {
+		status, channel := "Up", uint64(36)
+		detail.Status, detail.Channel = &status, &channel
+	}
+	return detail, f.err
+}
+
 func (f fakeReader) Reboot(_ context.Context, confirm bool) (tr064.RebootResult, error) {
 	return tr064.RebootResult{Endpoint: "http://router.test:49000", Preview: !confirm, Accepted: confirm}, f.err
 }
@@ -904,7 +925,7 @@ func TestWiFiFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "wifi", "--help")
-	if code != ExitOK || stdout != "usage: router-axi wifi [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi disable --instance 1 --confirm\n" || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi wifi [detail [--instance N]] [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection; wifi detail reports one radio's safe documented properties. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi detail --instance 1; router-axi wifi disable --instance 1 --confirm\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	for action, want := range map[string]string{
@@ -915,6 +936,113 @@ func TestWiFiFlagsAndHelp(t *testing.T) {
 		if code != ExitOK || stdout != want || stderr != "" {
 			t.Fatalf("action=%s code=%d stdout=%q stderr=%q", action, code, stdout, stderr)
 		}
+	}
+}
+
+func TestWiFiDetailPassesInstanceAndPrintsCompactAndJSON(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		args    []string
+		omit    bool
+		compact string
+		json    string
+	}{
+		{
+			name:    "single radio",
+			args:    []string{"wifi", "detail"},
+			compact: "wifi_detail:\n  instance: urn:WLANConfiguration-com:serviceId:WLANConfiguration0\n  enabled: true\n  status: Up\n  standard: ax\n  max_bit_rate: unknown\n  channel: 36\n  band: 5000\n",
+			json:    `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration0","enabled":true,"status":"Up","standard":"ax","max_bit_rate":null,"channel":36,"band":"5000"}` + "\n",
+		},
+		{
+			name:    "explicit instance",
+			args:    []string{"wifi", "detail", "--instance", "2"},
+			compact: "wifi_detail:\n  instance: urn:WLANConfiguration-com:serviceId:WLANConfiguration2\n  enabled: true\n  status: Up\n  standard: ax\n  max_bit_rate: unknown\n  channel: 36\n  band: 5000\n",
+			json:    `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","enabled":true,"status":"Up","standard":"ax","max_bit_rate":null,"channel":36,"band":"5000"}` + "\n",
+		},
+		{
+			name:    "missing optional fields",
+			args:    []string{"wifi", "detail", "--instance", "2"},
+			omit:    true,
+			compact: "wifi_detail:\n  instance: urn:WLANConfiguration-com:serviceId:WLANConfiguration2\n  enabled: true\n  status: unknown\n  standard: ax\n  max_bit_rate: unknown\n  channel: unknown\n  band: 5000\n",
+			json:    `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","enabled":true,"status":null,"standard":"ax","max_bit_rate":null,"channel":null,"band":"5000"}` + "\n",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			reader := &wifiDetailReader{omit: test.omit}
+			application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })
+			wantInstance := uint64(0)
+			if strings.Contains(strings.Join(test.args, " "), "--instance") {
+				wantInstance = 2
+			}
+			for _, output := range []struct {
+				jsonOutput bool
+				wanted     string
+			}{
+				{jsonOutput: false, wanted: test.compact},
+				{jsonOutput: true, wanted: test.json},
+			} {
+				var stdout, stderr bytes.Buffer
+				args := append([]string{}, test.args...)
+				if output.jsonOutput {
+					args = append(args, "--json")
+				}
+				code := application.Run(t.Context(), args, &stdout, &stderr)
+				if code != ExitOK || stderr.Len() != 0 || stdout.String() != output.wanted {
+					t.Fatalf("json=%t code=%d stdout=%q stderr=%q", output.jsonOutput, code, stdout.String(), stderr.String())
+				}
+				if reader.instance != wantInstance {
+					t.Fatalf("instance = %d, want %d", reader.instance, wantInstance)
+				}
+			}
+		})
+	}
+}
+
+func TestWiFiDetailUsageErrors(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"wifi", "detail", "--confirm"}, "--confirm is valid only with reboot, wifi enable, or wifi disable"},
+		{[]string{"wifi", "detail", "--instance", "0"}, "--instance requires a WLANConfiguration number of 1 or greater"},
+		{[]string{"wifi", "detail", "--bogus"}, "valid flags for wifi: --host, --json, --instance, --help"},
+		{[]string{"wifi", "detail", "enable"}, "wifi accepts one action: detail, enable, or disable"},
+	} {
+		t.Run(strings.Join(test.args, " "), func(t *testing.T) {
+			_, stdout, stderr := runTest(t, test.args...)
+			if stderr != "" || !strings.Contains(stdout, test.want) {
+				t.Fatalf("args=%v stdout=%q want=%q", test.args, stdout, test.want)
+			}
+		})
+	}
+}
+
+func TestWiFiDetailHelp(t *testing.T) {
+	code, stdout, stderr := runTest(t, "wifi", "detail", "--help")
+	wanted := "usage: router-axi wifi detail [--instance N] [--host ADDRESS] [--json] [--help]\n"
+	if code != ExitOK || stderr != "" || !strings.HasPrefix(stdout, wanted) || !strings.Contains(stdout, "examples: router-axi wifi detail") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestWiFiDetailStructuredErrors(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		code int
+		want string
+	}{
+		{name: "ambiguous instance", err: &tr064.Error{Kind: "usage", Code: "ambiguous_instance", Operation: "wifi detail", Message: "router advertises 3 WLAN instances; specify the target with --instance"}, code: ExitUsage, want: "hint: router-axi wifi detail --instance N"},
+		{name: "unsupported capability", err: &tr064.Error{Kind: "unsupported", Operation: "wifi detail", Message: "router does not support the documented Wi-Fi detail actions"}, code: ExitUnsupported, want: "unsupported_capability"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			application := New(func(Config) (Reader, error) { return fakeReader{err: test.err}, nil }, func(string) string { return "" })
+			var stdout, stderr bytes.Buffer
+			code := application.Run(t.Context(), []string{"wifi", "detail"}, &stdout, &stderr)
+			if code != test.code || stderr.Len() != 0 || !strings.Contains(stdout.String(), test.want) {
+				t.Fatalf("code=%d stdout=%q stderr=%q want=%q", code, stdout.String(), stderr.String(), test.want)
+			}
+		})
 	}
 }
 
@@ -1404,7 +1532,7 @@ func TestWiFiMutationUsageErrors(t *testing.T) {
 		{[]string{"wifi", "enable", "--instance", "0"}, "--instance requires a WLANConfiguration number of 1 or greater"},
 		{[]string{"wifi", "enable", "--confirm", "--all"}, "--all is valid only for calls, devices, leases, or forwards"},
 		{[]string{"status", "--confirm"}, "--confirm is valid only with reboot, wifi enable, or wifi disable"},
-		{[]string{"wifi", "enable", "disable"}, "wifi accepts one action: enable or disable"},
+		{[]string{"wifi", "enable", "disable"}, "wifi accepts one action: detail, enable, or disable"},
 		{[]string{"wifi", "restart"}, "exactly one command is required"},
 		{[]string{"wan", "enable"}, "exactly one command is required"},
 	}
