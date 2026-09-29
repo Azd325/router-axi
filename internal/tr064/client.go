@@ -803,16 +803,16 @@ func (c *Client) dhcpService(ctx context.Context) (service, error) {
 
 func parseDHCPInfo(values soapValues) (DHCP, error) {
 	result := DHCP{Routers: []string{}, DNSServers: []string{}}
-	configurable, err := parseDHCPBool(values.DHCPServerConfigurable, "server configurable state", true)
+	configurable, err := parseDHCPBool(values.DHCPServerConfigurable, "server configurable state")
 	if err != nil {
 		return DHCP{}, err
 	}
 	result.ServerConfigurable = configurable
-	result.ServerEnabled, err = parseDHCPBool(values.DHCPServerEnable, "server enabled state", true)
+	result.ServerEnabled, err = parseDHCPBool(values.DHCPServerEnable, "server enabled state")
 	if err != nil {
 		return DHCP{}, err
 	}
-	result.RelayEnabled, err = parseDHCPBool(values.DHCPRelay, "relay state", true)
+	result.RelayEnabled, err = parseDHCPBool(values.DHCPRelay, "relay state")
 	if err != nil {
 		return DHCP{}, err
 	}
@@ -836,7 +836,7 @@ func parseDHCPInfo(values soapValues) (DHCP, error) {
 	return result, nil
 }
 
-func parseDHCPBool(value, field string, optional bool) (*bool, error) {
+func parseDHCPBool(value, field string) (*bool, error) {
 	switch strings.TrimSpace(value) {
 	case "0", "false":
 		result := false
@@ -845,9 +845,7 @@ func parseDHCPBool(value, field string, optional bool) (*bool, error) {
 		result := true
 		return &result, nil
 	case "":
-		if optional {
-			return nil, nil
-		}
+		return nil, nil
 	}
 	return nil, &Error{Kind: "protocol", Operation: "dhcp", Message: "router returned an invalid DHCP " + field}
 }
