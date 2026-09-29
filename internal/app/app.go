@@ -46,6 +46,7 @@ type Reader interface {
 	Calls(context.Context) ([]tr064.Call, error)
 	Devices(context.Context) ([]tr064.Device, error)
 	Leases(context.Context) ([]tr064.Lease, error)
+	DHCP(context.Context) (tr064.DHCP, error)
 	WiFi(context.Context) ([]tr064.Radio, error)
 	WiFiDetail(context.Context, uint64) (tr064.RadioDetail, error)
 	GuestWiFi(context.Context) ([]tr064.GuestNetwork, error)
@@ -264,7 +265,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	reader, err := a.factory(Config{Host: host, Username: a.getenv("ROUTER_AXI_USERNAME"), Password: a.getenv("ROUTER_AXI_PASSWORD")})
 	if err != nil {
 		message := err.Error()
-		if opts.command == "reboot" || opts.command == "watch" {
+		if opts.command == "reboot" || opts.command == "watch" || opts.command == "dhcp" {
 			message = "invalid router endpoint; use an HTTP or HTTPS host without userinfo, query, fragment, or a non-root path"
 		}
 		return writeError(stderr, opts.json, ExitUsage, "invalid_configuration", message, "router-axi help")
@@ -372,6 +373,8 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 				}
 				value = leaseResult{Leases: leases, Total: total, Omitted: total - len(leases)}
 			}
+		case "dhcp":
+			value, err = reader.DHCP(ctx)
 		case "forwards":
 			var forwards []tr064.Forward
 			forwards, err = reader.Forwards(ctx)
@@ -567,7 +570,7 @@ func parse(args []string) (options, error) {
 }
 
 func validCommand(command string) bool {
-	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "backup" || command == "skill" || command == "setup" || command == "session" || command == "version"
+	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "dhcp" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "backup" || command == "skill" || command == "setup" || command == "session" || command == "version"
 }
 
 // commandHelp holds dedicated per-command help text: usage line, purpose,
@@ -581,6 +584,7 @@ var commandHelp = map[string]string{
 	"calls":    "usage: router-axi calls [--all] [--host ADDRESS] [--json] [--help]\nRead-only call history. Defaults to the 100 most recent entries; --all lists everything. No required arguments.\nexamples: router-axi calls; router-axi calls --all; router-axi calls --all --json\n",
 	"devices":  "usage: router-axi devices [--all] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi devices; router-axi devices --all --json\n",
 	"leases":   "usage: router-axi leases [--all] [--host ADDRESS] [--json] [--help]\nRead-only observed lease metadata from the Hosts table: name, addresses, address source, and remaining lease time. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi leases; router-axi leases --all --json\n",
+	"dhcp":     "usage: router-axi dhcp [--host ADDRESS] [--json] [--help]\nRead-only DHCP server configuration from documented LANHostConfigManagement actions advertised by the router. Reports server state and available range, subnet, router, DNS, and domain settings; never reservation inventory.\nexamples: router-axi dhcp; router-axi dhcp --json\n",
 	"wifi":     "usage: router-axi wifi [detail [--instance N]] [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection; wifi detail reports one radio's safe documented properties. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi detail --instance 1; router-axi wifi disable --instance 1 --confirm\n",
 	"guest":    "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID and aggregate radio state only; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n",
 	"forwards": "usage: router-axi forwards [--all] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi forwards; router-axi forwards --all --json\n",
@@ -633,6 +637,7 @@ var commandFlags = map[string][]string{
 	"calls":    {"--host", "--json", "--all", "--help"},
 	"devices":  {"--host", "--json", "--all", "--help"},
 	"leases":   {"--host", "--json", "--all", "--help"},
+	"dhcp":     {"--host", "--json", "--help"},
 	"forwards": {"--host", "--json", "--all", "--help"},
 	"wifi":     {"--host", "--json", "--instance", "--confirm", "--help"},
 	"reboot":   {"--host", "--json", "--confirm", "--help"},
@@ -730,7 +735,7 @@ func help(command, action string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + " [--help]\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  dhcp      DHCP server configuration (never reservation inventory)\n  wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -777,7 +782,7 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 			name  string
 			check tr064.DoctorCheck
 		}{
-			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"watch", v.Capabilities.Watch}, {"calls", v.Capabilities.Calls}, {"devices", v.Capabilities.Devices}, {"leases", v.Capabilities.Leases}, {"wifi", v.Capabilities.WiFi}, {"forwards", v.Capabilities.Forwards}, {"reboot", v.Capabilities.Reboot}, {"backup", v.Capabilities.Backup},
+			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"watch", v.Capabilities.Watch}, {"calls", v.Capabilities.Calls}, {"devices", v.Capabilities.Devices}, {"leases", v.Capabilities.Leases}, {"dhcp", v.Capabilities.DHCP}, {"wifi", v.Capabilities.WiFi}, {"forwards", v.Capabilities.Forwards}, {"reboot", v.Capabilities.Reboot}, {"backup", v.Capabilities.Backup},
 		} {
 			if _, err := fmt.Fprintf(w, "  %s: %s\n", capability.name, check(capability.check)); err != nil {
 				return err
@@ -894,6 +899,10 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 			_, err := fmt.Fprintf(w, "omitted: %d\nnext: router-axi leases --all\n", result.Omitted)
 			return err
 		}
+	case "dhcp":
+		v := value.(tr064.DHCP)
+		_, err := fmt.Fprintf(w, "dhcp:\n  server_configurable: %t\n  server_enabled: %s\n  relay_enabled: %s\n  address_range_start: %s\n  address_range_end: %s\n  subnet_mask: %s\n  routers: %s\n  dns_servers: %s\n  domain_name: %s\n", v.ServerConfigurable, optionalBool(v.ServerEnabled), optionalBool(v.RelayEnabled), optionalText(v.AddressRangeStart), optionalText(v.AddressRangeEnd), optionalText(v.SubnetMask), scalar(strings.Join(v.Routers, ",")), scalar(strings.Join(v.DNSServers, ",")), optionalToon(v.DomainName))
+		return err
 	case "forwards":
 		result := value.(forwardResult)
 		if len(result.Forwards) == 0 {
@@ -1190,6 +1199,20 @@ func optionalText(value *string) string {
 		return "unknown"
 	}
 	return *value
+}
+
+func optionalToon(value *string) string {
+	if value == nil {
+		return "unknown"
+	}
+	return toon(*value)
+}
+
+func optionalBool(value *bool) string {
+	if value == nil {
+		return "unknown"
+	}
+	return strconv.FormatBool(*value)
 }
 func duration(seconds uint64) string {
 	return fmt.Sprintf("%dd %02dh %02dm", seconds/86400, seconds%86400/3600, seconds%3600/60)

@@ -93,7 +93,7 @@ func (f fakeReader) Doctor(context.Context) (tr064.Doctor, error) {
 		Endpoint: "http://router.test:49000", Reachability: tr064.DoctorCheck{State: "reachable"},
 		Protocol: tr064.DoctorCheck{State: "available"}, Authentication: tr064.DoctorCheck{State: "authenticated"},
 		Model: "FRITZ!Box 7590 AX", Firmware: "8.02",
-		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Watch: advertised, Calls: advertised, Devices: advertised, Leases: advertised, WiFi: advertised, Forwards: advertised, Reboot: advertised, Backup: advertised},
+		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Watch: advertised, Calls: advertised, Devices: advertised, Leases: advertised, DHCP: advertised, WiFi: advertised, Forwards: advertised, Reboot: advertised, Backup: advertised},
 	}, f.err
 }
 func (f fakeReader) Status(context.Context) (tr064.Status, error) {
@@ -136,6 +136,12 @@ func (f fakeReader) Devices(context.Context) ([]tr064.Device, error) {
 func (f fakeReader) Leases(context.Context) ([]tr064.Lease, error) {
 	remaining := int64(3600)
 	return []tr064.Lease{{Name: "sanitized-static-device", IPAddress: "192.0.2.10", MACAddress: "02:00:00:00:00:10", AddressSource: "Static", InterfaceType: "Ethernet", Active: true}, {IPAddress: "192.0.2.20", MACAddress: "02:00:00:00:00:20", AddressSource: "DHCP", LeaseTimeRemaining: &remaining, InterfaceType: "802.11"}}, f.err
+}
+
+func (f fakeReader) DHCP(context.Context) (tr064.DHCP, error) {
+	enabled, relay := true, false
+	start, end, mask, domain := "192.0.2.20", "192.0.2.200", "255.255.255.0", "synthetic.test"
+	return tr064.DHCP{ServerConfigurable: true, ServerEnabled: &enabled, RelayEnabled: &relay, AddressRangeStart: &start, AddressRangeEnd: &end, SubnetMask: &mask, Routers: []string{"192.0.2.1"}, DNSServers: []string{"192.0.2.1", "192.0.2.53"}, DomainName: &domain}, f.err
 }
 
 func (f fakeReader) WiFi(context.Context) ([]tr064.Radio, error) {
@@ -273,6 +279,7 @@ func TestCompactCommands(t *testing.T) {
 		{"calls", "calls[1]{id,direction,remote,name,date,duration}:"},
 		{"devices", "devices[1]{name,ip_address,mac_address,interface_type,active}:"},
 		{"leases", "leases[2]{name,ip_address,mac_address,address_source,lease_time_remaining,interface_type,active}:"},
+		{"dhcp", "server_configurable: true"},
 		{"wifi", "radios[1]{service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode}:"},
 		{"guest", "guests[1]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}:"},
 		{"forwards", "forwards[1]{enabled,protocol,external_port,internal_client,internal_port,description,remote_host,lease_duration}:"},
@@ -439,7 +446,7 @@ func TestTopLevelHelpListsPublicCommands(t *testing.T) {
 	if code != ExitOK || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "watch", "calls", "devices", "leases", "wifi", "guest", "forwards", "reboot", "backup", "skill", "version"} {
+	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "watch", "calls", "devices", "leases", "dhcp", "wifi", "guest", "forwards", "reboot", "backup", "skill", "version"} {
 		if !strings.Contains(stdout, "\n  "+command+" ") {
 			t.Fatalf("top-level help does not list %q: %q", command, stdout)
 		}
@@ -448,7 +455,7 @@ func TestTopLevelHelpListsPublicCommands(t *testing.T) {
 
 func TestDoctorJSONIsDeterministic(t *testing.T) {
 	code, stdout, stderr := runTest(t, "doctor", "--json")
-	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"watch":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"leases":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"},"reboot":{"state":"advertised"},"backup":{"state":"advertised"}}}` + "\n"
+	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"watch":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"leases":{"state":"advertised"},"dhcp":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"},"reboot":{"state":"advertised"},"backup":{"state":"advertised"}}}` + "\n"
 	if code != ExitOK || stdout != want || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -899,7 +906,7 @@ func TestWiFiClientPrivacyBoundary(t *testing.T) {
 // TestEverySubcommandHelpDepth asserts the AXI help contract: every
 // subcommand help must include a usage line, flags, and concrete examples.
 func TestEverySubcommandHelpDepth(t *testing.T) {
-	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "calls", "devices", "leases", "wifi", "guest", "forwards", "watch", "reboot", "backup"} {
+	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "calls", "devices", "leases", "dhcp", "wifi", "guest", "forwards", "watch", "reboot", "backup"} {
 		text := help(command, "")
 		if !strings.HasPrefix(text, "usage: router-axi "+command) || !strings.Contains(text, "--host ADDRESS") || !strings.Contains(text, "--json") || !strings.Contains(text, "examples: router-axi "+command) && !strings.Contains(text, "Examples: router-axi "+command) {
 			t.Fatalf("help for %s lacks usage, flags, or examples: %q", command, text)
@@ -1253,6 +1260,15 @@ func TestFactoryFailureIsConfigurationError(t *testing.T) {
 	}
 }
 
+func TestDHCPFactoryErrorsDoNotExposeRouterAddresses(t *testing.T) {
+	application := New(func(Config) (Reader, error) { return nil, errors.New(`invalid router address "192.0.2.1/private"`) }, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"dhcp"}, &stdout, &stderr)
+	if code != ExitUsage || stderr.Len() != 0 || strings.Contains(stdout.String(), "192.0.2.1") || !strings.Contains(stdout.String(), "invalid router endpoint") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
 func TestLeasesOutputContract(t *testing.T) {
 	for _, test := range []struct {
 		args []string
@@ -1265,6 +1281,59 @@ func TestLeasesOutputContract(t *testing.T) {
 		code := New(func(Config) (Reader, error) { return fakeReader{}, nil }, func(string) string { return "" }).Run(t.Context(), test.args, &stdout, &stderr)
 		if code != ExitOK || stdout.String() != test.want || stderr.Len() != 0 {
 			t.Fatalf("args=%q code=%d stdout=%q stderr=%q", test.args, code, stdout.String(), stderr.String())
+		}
+	}
+}
+
+func TestDHCPOutputContract(t *testing.T) {
+	for _, test := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"dhcp"}, "dhcp:\n  server_configurable: true\n  server_enabled: true\n  relay_enabled: false\n  address_range_start: 192.0.2.20\n  address_range_end: 192.0.2.200\n  subnet_mask: 255.255.255.0\n  routers: 192.0.2.1\n  dns_servers: 192.0.2.1,192.0.2.53\n  domain_name: synthetic.test\n"},
+		{[]string{"dhcp", "--json"}, `{"server_configurable":true,"server_enabled":true,"relay_enabled":false,"address_range_start":"192.0.2.20","address_range_end":"192.0.2.200","subnet_mask":"255.255.255.0","routers":["192.0.2.1"],"dns_servers":["192.0.2.1","192.0.2.53"],"domain_name":"synthetic.test"}` + "\n"},
+	} {
+		code, stdout, stderr := runTest(t, test.args...)
+		if code != ExitOK || stdout != test.want || stderr != "" {
+			t.Fatalf("args=%q code=%d stdout=%q stderr=%q", test.args, code, stdout, stderr)
+		}
+	}
+}
+
+func TestDHCPHelpAndFlags(t *testing.T) {
+	code, stdout, stderr := runTest(t, "dhcp", "--help")
+	want := "usage: router-axi dhcp [--host ADDRESS] [--json] [--help]\nRead-only DHCP server configuration from documented LANHostConfigManagement actions advertised by the router. Reports server state and available range, subnet, router, DNS, and domain settings; never reservation inventory.\nexamples: router-axi dhcp; router-axi dhcp --json\n"
+	if code != ExitOK || stdout != want || stderr != "" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	code, stdout, stderr = runTest(t, "dhcp", "--all")
+	if code != ExitUsage || stderr != "" || !strings.Contains(stdout, "--all is valid only") {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestDHCPStructuredErrors(t *testing.T) {
+	for _, test := range []struct {
+		err  error
+		exit int
+	}{
+		{&tr064.Error{Kind: "auth", Message: "DHCP server configuration inspection failed"}, ExitAuth},
+		{&tr064.Error{Kind: "network", Message: "DHCP server configuration inspection failed"}, ExitNetwork},
+		{&tr064.Error{Kind: "unsupported", Message: "router does not support documented DHCP configuration reads"}, ExitUnsupported},
+		{&tr064.Error{Kind: "protocol", Message: "DHCP server configuration inspection failed"}, ExitRouter},
+	} {
+		for _, jsonOutput := range []bool{false, true} {
+			application := New(func(Config) (Reader, error) { return fakeReader{err: test.err}, nil }, func(string) string { return "" })
+			args := []string{"dhcp"}
+			if jsonOutput {
+				args = append(args, "--json")
+			}
+			var stdout, stderr bytes.Buffer
+			code := application.Run(t.Context(), args, &stdout, &stderr)
+			if code != test.exit {
+				t.Fatalf("json=%t code=%d", jsonOutput, code)
+			}
+			assertStructuredError(t, stdout.String(), stderr.String(), jsonOutput, "error")
 		}
 	}
 }

@@ -101,6 +101,15 @@ var configFileURLFixture string
 //go:embed testdata/config-export.txt
 var configExportFixture string
 
+//go:embed testdata/dhcp-description.xml
+var dhcpDescriptionFixture string
+
+//go:embed testdata/dhcp-scpd.xml
+var dhcpSCPDFixture string
+
+//go:embed testdata/dhcp-info.xml
+var dhcpInfoFixture string
+
 func fixtureServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	responses := map[string]string{
@@ -229,6 +238,202 @@ func wifiFixtureClient(t *testing.T, description string, overrides map[string]wi
 		t.Fatal(err)
 	}
 	return client, requests
+}
+
+type dhcpResponse struct {
+	body, location string
+	status         int
+}
+
+func dhcpFixtureClient(t *testing.T, description, scpd string, responses map[string]dhcpResponse) (*Client, *[]string) {
+	t.Helper()
+	requests := []string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == descriptionPath {
+			requests = append(requests, "GET "+r.URL.RequestURI())
+			_, _ = io.WriteString(w, strings.ReplaceAll(description, "__ORIGIN__", "http://"+r.Host))
+			return
+		}
+		if r.Method == http.MethodGet {
+			requests = append(requests, "GET "+r.URL.RequestURI())
+			response := responses["GET "+r.URL.RequestURI()]
+			body := scpd
+			if response.body != "" {
+				body = response.body
+			}
+			if response.location != "" {
+				w.Header().Set("Location", strings.ReplaceAll(response.location, "__ORIGIN__", "http://"+r.Host))
+			}
+			if response.status != 0 {
+				w.WriteHeader(response.status)
+			}
+			_, _ = io.WriteString(w, body)
+			return
+		}
+		header := strings.Trim(r.Header.Get("SOAPAction"), `"`)
+		serviceType, action, ok := strings.Cut(header, "#")
+		requests = append(requests, r.URL.Path+"#"+action)
+		allowed := map[string]bool{"GetInfo": true}
+		validTarget := r.URL.Path == "/lan-host-config" || r.URL.Path == "/device" && action == "GetInfo"
+		if r.Method != http.MethodPost || !validTarget || !ok || !allowed[action] {
+			t.Errorf("forbidden DHCP request: %s %s %q", r.Method, r.URL.Path, header)
+			http.Error(w, "forbidden", http.StatusBadRequest)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		want := `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` + action + ` xmlns:u="` + serviceType + `"></u:` + action + `></s:Body></s:Envelope>`
+		if string(body) != want {
+			t.Errorf("unexpected DHCP SOAP request: %s", body)
+		}
+		response, exists := responses[action]
+		if !exists {
+			t.Errorf("missing DHCP fixture response for %s", action)
+			http.Error(w, "missing fixture", http.StatusBadRequest)
+			return
+		}
+		if response.status != 0 {
+			w.WriteHeader(response.status)
+		}
+		_, _ = io.WriteString(w, response.body)
+	}))
+	t.Cleanup(server.Close)
+	client, err := New(server.URL, "", "", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, &requests
+}
+
+func TestDHCPAggregateGetInfo(t *testing.T) {
+	t.Run("aggregate GetInfo", func(t *testing.T) {
+		for _, version := range []string{"1", "2"} {
+			t.Run("service "+version, func(t *testing.T) {
+				description := strings.Replace(dhcpDescriptionFixture, "LANHostConfigManagement:1", "LANHostConfigManagement:"+version, 1)
+				client, requests := dhcpFixtureClient(t, description, dhcpSCPDFixture, map[string]dhcpResponse{"GetInfo": {body: dhcpInfoFixture}})
+				result, err := client.DHCP(t.Context())
+				if err != nil || !result.ServerConfigurable || result.ServerEnabled == nil || !*result.ServerEnabled || result.RelayEnabled == nil || *result.RelayEnabled || result.AddressRangeStart == nil || *result.AddressRangeStart != "192.0.2.20" || result.AddressRangeEnd == nil || *result.AddressRangeEnd != "192.0.2.200" || result.SubnetMask == nil || *result.SubnetMask != "255.255.255.0" || !reflect.DeepEqual(result.Routers, []string{"192.0.2.1"}) || !reflect.DeepEqual(result.DNSServers, []string{"192.0.2.1", "192.0.2.53"}) || result.DomainName == nil || *result.DomainName != "synthetic.test" {
+					t.Fatalf("result=%#v error=%v", result, err)
+				}
+				encoded, err := json.Marshal(result)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if strings.Contains(string(encoded), "reservation") || string(encoded) != `{"server_configurable":true,"server_enabled":true,"relay_enabled":false,"address_range_start":"192.0.2.20","address_range_end":"192.0.2.200","subnet_mask":"255.255.255.0","routers":["192.0.2.1"],"dns_servers":["192.0.2.1","192.0.2.53"],"domain_name":"synthetic.test"}` {
+					t.Fatalf("DHCP JSON=%s", encoded)
+				}
+				if !reflect.DeepEqual(*requests, []string{"GET /tr64desc.xml", "GET /lan-host-config.xml", "/lan-host-config#GetInfo"}) {
+					t.Fatalf("requests=%v", *requests)
+				}
+			})
+		}
+	})
+
+	t.Run("absolute same-origin URLs", func(t *testing.T) {
+		description := strings.Replace(dhcpDescriptionFixture, "/lan-host-config</controlURL>", "__ORIGIN__/lan-host-config</controlURL>", 1)
+		description = strings.Replace(description, "/lan-host-config.xml</SCPDURL>", "__ORIGIN__/lan-host-config.xml</SCPDURL>", 1)
+		client, requests := dhcpFixtureClient(t, description, dhcpSCPDFixture, map[string]dhcpResponse{"GetInfo": {body: dhcpInfoFixture}})
+		if _, err := client.DHCP(t.Context()); err != nil || !reflect.DeepEqual(*requests, []string{"GET /tr64desc.xml", "GET /lan-host-config.xml", "/lan-host-config#GetInfo"}) {
+			t.Fatalf("error=%v requests=%v", err, *requests)
+		}
+	})
+
+}
+
+func TestDHCPPreflightFailsBeforeSOAP(t *testing.T) {
+	service := `<service><serviceType>urn:dslforum-org:service:LANHostConfigManagement:1</serviceType><serviceId>urn:LANHostConfigManagement-com:serviceId:LANHostConfigManagement1</serviceId><controlURL>/lan-host-config</controlURL><SCPDURL>/lan-host-config.xml</SCPDURL></service>`
+	for _, test := range []struct {
+		name, description, scpd, kind string
+	}{
+		{name: "missing service", description: `<root/>`, scpd: dhcpSCPDFixture, kind: "unsupported"},
+		{name: "duplicate service", description: `<root>` + service + service + `</root>`, scpd: dhcpSCPDFixture, kind: "unsupported"},
+		{name: "off-origin control", description: strings.Replace(dhcpDescriptionFixture, "/lan-host-config</controlURL>", "http://outside.test/control</controlURL>", 1), scpd: dhcpSCPDFixture, kind: "protocol"},
+		{name: "off-origin SCPD", description: strings.Replace(dhcpDescriptionFixture, "/lan-host-config.xml</SCPDURL>", "http://outside.test/scpd.xml</SCPDURL>", 1), scpd: dhcpSCPDFixture, kind: "protocol"},
+		{name: "control query", description: strings.Replace(dhcpDescriptionFixture, "/lan-host-config</controlURL>", "/lan-host-config?</controlURL>", 1), scpd: dhcpSCPDFixture, kind: "protocol"},
+		{name: "SCPD query", description: strings.Replace(dhcpDescriptionFixture, "/lan-host-config.xml</SCPDURL>", "/lan-host-config.xml?private=1</SCPDURL>", 1), scpd: dhcpSCPDFixture, kind: "protocol"},
+		{name: "invalid SCPD", description: dhcpDescriptionFixture, scpd: `<private>value</private>`, kind: "protocol"},
+		{name: "missing GetInfo", description: dhcpDescriptionFixture, scpd: `<scpd><actionList><action><name>GetAddressRange</name></action></actionList></scpd>`, kind: "unsupported"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, requests := dhcpFixtureClient(t, test.description, test.scpd, nil)
+			result, err := client.DHCP(t.Context())
+			var protocolErr *Error
+			if !reflect.DeepEqual(result, DHCP{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != test.kind || protocolErr.Operation != "dhcp" || strings.Contains(fmt.Sprintf("%#v", err), "outside.test") || strings.Contains(fmt.Sprintf("%#v", err), "private=1") {
+				t.Fatalf("result=%#v error=%#v", result, err)
+			}
+			for _, request := range *requests {
+				if strings.Contains(request, "#") {
+					t.Fatalf("preflight sent SOAP request: %v", *requests)
+				}
+			}
+		})
+	}
+}
+
+func TestDHCPValidatesServerConfiguration(t *testing.T) {
+	valid := soapValues{DHCPServerConfigurable: "1", DHCPServerEnable: "1", DHCPRelay: "0", MinAddress: "192.0.2.20", MaxAddress: "192.0.2.200", SubnetMask: "255.255.255.0", IPRouters: "192.0.2.1", DNSServers: "192.0.2.53"}
+	for _, test := range []struct {
+		name   string
+		change func(*soapValues)
+	}{
+		{"configurable", func(v *soapValues) { v.DHCPServerConfigurable = "private-value" }},
+		{"enabled", func(v *soapValues) { v.DHCPServerEnable = "2" }},
+		{"relay", func(v *soapValues) { v.DHCPRelay = "TRUE" }},
+		{"range missing end", func(v *soapValues) { v.MaxAddress = "" }},
+		{"range reversed", func(v *soapValues) { v.MinAddress, v.MaxAddress = v.MaxAddress, v.MinAddress }},
+		{"subnet mask", func(v *soapValues) { v.SubnetMask = "255.0.255.0" }},
+		{"routers", func(v *soapValues) { v.IPRouters = "192.0.2.1,private-value" }},
+		{"DNS", func(v *soapValues) { v.DNSServers = "2001:db8::53" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			values := valid
+			test.change(&values)
+			result, err := parseDHCPInfo(values)
+			var protocolErr *Error
+			if !reflect.DeepEqual(result, DHCP{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || protocolErr.Operation != "dhcp" || strings.Contains(fmt.Sprintf("%#v", err), "private-value") {
+				t.Fatalf("result=%#v error=%#v", result, err)
+			}
+		})
+	}
+}
+
+func TestDHCPFailuresAreSanitizedAndInvalidActionIsUnsupported(t *testing.T) {
+	for _, test := range []struct {
+		name, body, kind string
+		status           int
+	}{
+		{name: "invalid action", body: `<Fault><errorCode>401</errorCode><errorDescription>private-fault</errorDescription></Fault>`, kind: "unsupported", status: http.StatusInternalServerError},
+		{name: "router fault", body: `<Fault><errorCode>501</errorCode><errorDescription>private-fault</errorDescription></Fault>`, kind: "router", status: http.StatusInternalServerError},
+		{name: "invalid XML", body: `<private-value`, kind: "protocol", status: http.StatusOK},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, _ := dhcpFixtureClient(t, dhcpDescriptionFixture, dhcpSCPDFixture, map[string]dhcpResponse{"GetInfo": {body: test.body, status: test.status}})
+			result, err := client.DHCP(t.Context())
+			var protocolErr *Error
+			if !reflect.DeepEqual(result, DHCP{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != test.kind || protocolErr.Operation != "dhcp" || strings.Contains(fmt.Sprintf("%#v", err), "private") || strings.Contains(fmt.Sprintf("%#v", err), client.base.Host) {
+				t.Fatalf("result=%#v error=%#v", result, err)
+			}
+		})
+	}
+}
+
+func TestDHCPRefusesSCPDRedirect(t *testing.T) {
+	client, requests := dhcpFixtureClient(t, dhcpDescriptionFixture, dhcpSCPDFixture, map[string]dhcpResponse{"GET /lan-host-config.xml": {status: http.StatusFound, location: "__ORIGIN__/redirected.xml"}})
+	result, err := client.DHCP(t.Context())
+	var protocolErr *Error
+	if !reflect.DeepEqual(result, DHCP{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != "network" || protocolErr.Operation != "dhcp" || len(*requests) != 2 {
+		t.Fatalf("result=%#v error=%#v requests=%v", result, err, *requests)
+	}
+}
+
+func TestDoctorAdvertisesDHCPWithoutReadingItsSCPDOrActions(t *testing.T) {
+	client, requests := dhcpFixtureClient(t, dhcpDescriptionFixture, dhcpSCPDFixture, map[string]dhcpResponse{"GetInfo": {body: deviceFixture}})
+	report, err := client.Doctor(t.Context())
+	if err != nil || report.Capabilities.DHCP.State != "advertised" || !reflect.DeepEqual(*requests, []string{"GET /tr64desc.xml", "/device#GetInfo"}) {
+		t.Fatalf("report=%#v error=%v requests=%v", report, err, *requests)
+	}
 }
 
 func TestWiFiEnumeratesNestedInstancesInNumericOrder(t *testing.T) {

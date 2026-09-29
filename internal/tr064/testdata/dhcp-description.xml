@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<root>
+  <device>
+    <serviceList>
+      <service>
+        <serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType>
+        <serviceId>urn:DeviceInfo-com:serviceId:DeviceInfo1</serviceId>
+        <controlURL>/device</controlURL>
+        <SCPDURL>/device.xml</SCPDURL>
+      </service>
+      <service>
+        <serviceType>urn:dslforum-org:service:LANHostConfigManagement:1</serviceType>
+        <serviceId>urn:LANHostConfigManagement-com:serviceId:LANHostConfigManagement1</serviceId>
+        <controlURL>/lan-host-config</controlURL>
+        <SCPDURL>/lan-host-config.xml</SCPDURL>
+      </service>
+    </serviceList>
+  </device>
+</root>
