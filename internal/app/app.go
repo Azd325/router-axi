@@ -27,6 +27,8 @@ const (
 	ExitNetwork     = 4
 	ExitUnsupported = 5
 	ExitRouter      = 6
+
+	invalidRouterEndpoint = "invalid router endpoint; use an HTTP or HTTPS host without userinfo, query, fragment, or a non-root path"
 )
 
 // defaultListLimit caps rows shown by the calls, devices, leases and forwards
@@ -265,11 +267,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	reader, err := a.factory(Config{Host: host, Username: a.getenv("ROUTER_AXI_USERNAME"), Password: a.getenv("ROUTER_AXI_PASSWORD")})
 	if err != nil {
-		message := err.Error()
-		if opts.command == "reboot" || opts.command == "watch" || opts.command == "dhcp" {
-			message = "invalid router endpoint; use an HTTP or HTTPS host without userinfo, query, fragment, or a non-root path"
-		}
-		return writeError(stderr, opts.json, ExitUsage, "invalid_configuration", message, "router-axi help")
+		return writeError(stderr, opts.json, ExitUsage, "invalid_configuration", invalidRouterEndpoint, "router-axi help")
 	}
 	if opts.command == "watch" {
 		return runWatch(ctx, reader, opts, stdout, diagnostics, a.watchSignals)
