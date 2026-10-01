@@ -5,10 +5,6 @@ router-axi releases are source-only. Do not attach prebuilt binaries.
 Set `VERSION` to the SemVer tag being released, merge the release-preparation
 pull request, then run this checklist from a clean checkout:
 
-```sh
-VERSION=v0.4.0
-```
-
 - [ ] Update `main` without creating a merge commit, and confirm it is clean.
 
   ```sh
