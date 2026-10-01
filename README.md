@@ -964,7 +964,7 @@ command line:
 export ROUTER_AXI_HOST='fritz.box'
 read -rs 'ROUTER_AXI_USERNAME?Router username: '; export ROUTER_AXI_USERNAME; printf '\n'
 read -rs 'ROUTER_AXI_PASSWORD?Router password: '; export ROUTER_AXI_PASSWORD; printf '\n'
-ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^(TestLiveReadOnlyCommands|TestLiveWiFi|TestLiveGuestWiFi|TestLiveForwards|TestLiveLeases)$' -count=1
+ROUTER_AXI_LIVE_TEST=1 go test ./internal/tr064 -run '^(TestLiveReadOnlyCommands|TestLiveWiFi|TestLiveGuestWiFi|TestLiveForwards|TestLiveDSL|TestLiveLeases)$' -count=1
 unset ROUTER_AXI_PASSWORD ROUTER_AXI_USERNAME ROUTER_AXI_HOST
 ```
 
@@ -985,7 +985,10 @@ claims to validate reservation semantics or countdown accuracy. The forwards liv
 resolves the active WAN service and uses only the two enumeration actions; it
 does not create test mappings;
 unsupported enumeration is skipped explicitly, not counted as hardware mapping
-validation. Wi-Fi live reads use only the four actions
+validation. DSL live coverage makes exactly one documented
+`WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo` query, discards the response, and
+skips explicitly when cable or fiber hardware does not support that DSL action.
+Wi-Fi live reads use only the four actions
 above, including `GetInfo`, and never any key-returning action; missing
 advertisement is checked as unsupported. Guest live coverage adds the documented
 AP-type action, has a 30-second deadline, discards returned values, never logs them,
