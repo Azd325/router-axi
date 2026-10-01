@@ -1864,11 +1864,16 @@ func validateRebootResponse(body []byte, status int) error {
 }
 
 const (
-	configExportRemediation = "enable the DeviceConfig TR-064 service with X_AVM-DE_GetConfigFile, or use supported firmware"
-	configExportAction      = "X_AVM-DE_GetConfigFile"
-	configExportPasswordArg = "NewX_AVM-DE_Password"
-	tlsUntrustedCode        = "tls_untrusted"
-	tlsRemediation          = "the router's HTTPS certificate is not trusted by this system; install the router certificate locally or use supported firmware"
+	configExportRemediation     = "enable the DeviceConfig TR-064 service with X_AVM-DE_GetConfigFile, or use supported firmware"
+	configExportAction          = "X_AVM-DE_GetConfigFile"
+	configExportPasswordArg     = "NewX_AVM-DE_Password"
+	backupActionRejectedCode    = "backup_action_rejected"
+	backupInvalidResponseCode   = "backup_invalid_response"
+	backupUnsafeDownloadURLCode = "backup_unsafe_download_url"
+	backupDownloadRejectedCode  = "backup_download_rejected"
+	backupExportTooLargeCode    = "backup_export_too_large"
+	tlsUntrustedCode            = "tls_untrusted"
+	tlsRemediation              = "the router's HTTPS certificate is not trusted by this system; install the router certificate locally or use supported firmware"
 )
 
 // maxConfigExportBytes bounds the accepted configuration export payload.
@@ -1929,10 +1934,10 @@ func (c *Client) ConfigExport(ctx context.Context, passphrase string) ([]byte, e
 	}
 	u, err := url.Parse(strings.TrimSpace(configFileURL))
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
-		return nil, &Error{Kind: "protocol", Operation: "backup", Message: "router did not return a documented HTTPS configuration download URL"}
+		return nil, &Error{Kind: "protocol", Code: backupUnsafeDownloadURLCode, Operation: "backup", Message: "router did not return a documented HTTPS configuration download URL"}
 	}
 	if !strings.EqualFold(u.Hostname(), client.base.Hostname()) {
-		return nil, &Error{Kind: "protocol", Operation: "backup", Message: "configuration download URL is outside the router host"}
+		return nil, &Error{Kind: "protocol", Code: backupUnsafeDownloadURLCode, Operation: "backup", Message: "configuration download URL is outside the router host"}
 	}
 	return client.downloadConfig(ctx, u)
 }
@@ -1948,7 +1953,7 @@ func validateConfigExportResponse(body []byte, status int) (string, error) {
 	var envelopeSeen, bodySeen, responseSeen, faultSeen, urlSeen bool
 	var configFileURL string
 	invalid := func() error {
-		return &Error{Kind: "protocol", Operation: "backup", StatusCode: status, Message: "router returned an invalid configuration export response"}
+		return &Error{Kind: "protocol", Code: backupInvalidResponseCode, Operation: "backup", StatusCode: status, Message: "router returned an invalid configuration export response"}
 	}
 	for {
 		token, err := decoder.Token()
@@ -2018,7 +2023,7 @@ func validateConfigExportResponse(body []byte, status int) (string, error) {
 		if values.FaultCode == "401" {
 			return "", &Error{Kind: "unsupported", Operation: "backup", StatusCode: status, Message: "router does not support DeviceConfig:X_AVM-DE_GetConfigFile; " + configExportRemediation}
 		}
-		return "", &Error{Kind: "router", Operation: "backup", StatusCode: status, Message: "router rejected the configuration export"}
+		return "", &Error{Kind: "router", Code: backupActionRejectedCode, Operation: "backup", StatusCode: status, Message: "router rejected the configuration export"}
 	}
 	if !responseSeen || !urlSeen || status < 200 || status >= 300 {
 		return "", invalid()
@@ -2062,14 +2067,14 @@ func (c *Client) downloadConfig(ctx context.Context, u *url.URL) ([]byte, error)
 		return nil, &Error{Kind: "auth", Operation: "backup", StatusCode: resp.StatusCode, Message: "router rejected the configuration download credentials"}
 	}
 	if resp.StatusCode >= 400 {
-		return nil, &Error{Kind: "router", Operation: "backup", StatusCode: resp.StatusCode, Message: "router refused the configuration download"}
+		return nil, &Error{Kind: "router", Code: backupDownloadRejectedCode, Operation: "backup", StatusCode: resp.StatusCode, Message: "router refused the configuration download"}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigExportBytes+1))
 	if err != nil {
 		return nil, &Error{Kind: "network", Operation: "backup", Message: "configuration download could not be read"}
 	}
 	if int64(len(body)) > maxConfigExportBytes {
-		return nil, &Error{Kind: "protocol", Operation: "backup", Message: "router returned an implausibly large configuration export"}
+		return nil, &Error{Kind: "protocol", Code: backupExportTooLargeCode, Operation: "backup", Message: "router returned an implausibly large configuration export"}
 	}
 	return body, nil
 }
