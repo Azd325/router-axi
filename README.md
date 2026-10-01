@@ -881,6 +881,12 @@ errors use stdout; stderr is reserved for diagnostics, currently including watch
 `output_failed` fallback after stdout itself fails. `calls` returns at most 100 entries by default,
 reports the omitted count, and accepts `--all` for the complete list.
 
+If the router client cannot be constructed, every router-facing command
+returns `invalid_configuration` with the same endpoint guidance: use an HTTP
+or HTTPS host without userinfo, a query, a fragment, or a non-root path.
+The underlying factory error and supplied endpoint are never included in
+compact or JSON output.
+
 `version` prints the CLI version without contacting the router. The bare `--version`, `-v`,
 and `-V` aliases print only the version and must be used without other arguments. Compact
 `status` output begins with the executable path and CLI description so callers can identify
