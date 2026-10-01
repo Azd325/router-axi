@@ -1265,23 +1265,29 @@ func TestForwardsFlagsAndHelp(t *testing.T) {
 	}
 }
 
-func TestFactoryFailureIsConfigurationError(t *testing.T) {
-	for _, command := range []string{"status", "wifi"} {
-		application := New(func(Config) (Reader, error) { return nil, errors.New("bad address") }, func(string) string { return "" })
-		var stdout, stderr bytes.Buffer
-		code := application.Run(t.Context(), []string{command}, &stdout, &stderr)
-		if code != ExitUsage || stderr.Len() != 0 || !strings.Contains(stdout.String(), "invalid_configuration") || !strings.Contains(stdout.String(), "bad address") {
-			t.Fatalf("command=%s code=%d stdout=%q stderr=%q", command, code, stdout.String(), stderr.String())
-		}
+func TestFactoryFailuresDoNotExposeRouterEndpoints(t *testing.T) {
+	const host = "http://username:password@192.0.2.1/private"
+	const factoryError = "invalid router address " + host
+	commands := [][]string{
+		{"watch"}, {"doctor"}, {"status"}, {"overview"}, {"wan"}, {"traffic"}, {"calls"}, {"devices"},
+		{"leases"}, {"dhcp"}, {"dsl"}, {"wifi"}, {"guest"}, {"forwards"}, {"reboot"}, {"backup", "--output", "backup.export"},
 	}
-}
-
-func TestDHCPFactoryErrorsDoNotExposeRouterAddresses(t *testing.T) {
-	application := New(func(Config) (Reader, error) { return nil, errors.New(`invalid router address "192.0.2.1/private"`) }, func(string) string { return "" })
-	var stdout, stderr bytes.Buffer
-	code := application.Run(t.Context(), []string{"dhcp"}, &stdout, &stderr)
-	if code != ExitUsage || stderr.Len() != 0 || strings.Contains(stdout.String(), "192.0.2.1") || !strings.Contains(stdout.String(), "invalid router endpoint") {
-		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	for _, command := range commands {
+		for _, jsonOutput := range []bool{false, true} {
+			args := append(append([]string{}, command...), "--host", host)
+			if jsonOutput {
+				args = append(args, "--json")
+			}
+			application := New(func(Config) (Reader, error) { return nil, errors.New(factoryError) }, func(string) string { return "" })
+			var stdout, stderr bytes.Buffer
+			code := application.Run(t.Context(), args, &stdout, &stderr)
+			if code != ExitUsage || stderr.Len() != 0 || !strings.Contains(stdout.String(), "invalid_configuration") || !strings.Contains(stdout.String(), invalidRouterEndpoint) || strings.Contains(stdout.String(), host) || strings.Contains(stdout.String(), factoryError) {
+				t.Fatalf("args=%q code=%d stdout=%q stderr=%q", args, code, stdout.String(), stderr.String())
+			}
+			if jsonOutput && !json.Valid(stdout.Bytes()) {
+				t.Fatalf("args=%q stdout=%q", args, stdout.String())
+			}
+		}
 	}
 }
 
