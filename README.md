@@ -22,7 +22,7 @@ router-axi setup check --agent claude
 router-axi setup uninstall --agent opencode
 ```
 
-Repeated installs repair the executable path and are idempotent. Uninstall removes only router-axi-managed configuration.
+Repeated installs repair the executable path and are idempotent. OpenCode setup adds `@opencode-ai/plugin` when needed; uninstall removes that declaration only when router-axi added it and its value remains unchanged. Pre-existing or modified dependencies and all unrelated package metadata are preserved.
 
 The bundled Agent Skill is a secondary on-demand discovery path for agents that support the agentskills.io format:
 
