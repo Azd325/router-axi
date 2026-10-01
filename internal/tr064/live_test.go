@@ -157,6 +157,28 @@ func TestLiveForwards(t *testing.T) {
 	}
 }
 
+func TestLiveDSL(t *testing.T) {
+	settings, enabled := liveTestConfig(os.Getenv)
+	if !enabled {
+		t.Skip("live router tests require explicit local opt-in and complete configuration")
+	}
+	client, err := New(settings.host, settings.username, settings.password, nil)
+	if err != nil {
+		t.Fatal("live router configuration was rejected")
+	}
+	result, err := client.DSL(t.Context())
+	if err != nil {
+		var protocolErr *Error
+		if errors.As(err, &protocolErr) && protocolErr.Kind == "unsupported" {
+			t.Skip("WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo is unsupported; DSL hardware diagnostics were not validated")
+		}
+		t.Fatal("DSL diagnostic live inspection failed")
+	}
+	if result.LinkStatus == "" || result.ModulationType == "" || result.CurrentProfile == "" {
+		t.Fatal("DSL diagnostic live inspection returned incomplete fields")
+	}
+}
+
 func TestLiveLeases(t *testing.T) {
 	settings, enabled := liveTestConfig(os.Getenv)
 	if !enabled {
