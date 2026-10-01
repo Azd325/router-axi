@@ -12,7 +12,10 @@ import (
 	"strings"
 )
 
-const sessionHookMarker = "router-axi-session-hook"
+const (
+	sessionHookMarker        = "router-axi-session-hook"
+	openCodePluginDependency = "^1.18.30"
+)
 
 type setupResult struct {
 	Agent   string `json:"agent"`
@@ -21,8 +24,9 @@ type setupResult struct {
 }
 
 type ownerRecord struct {
-	Command   string `json:"command"`
-	ShapeHash string `json:"shape_hash"`
+	Command            string `json:"command"`
+	ShapeHash          string `json:"shape_hash"`
+	OpenCodeDependency string `json:"opencode_dependency,omitempty"`
 }
 
 type hookLocation struct {
@@ -338,27 +342,71 @@ func openCodeDependency(path string) (bool, error) {
 	return ok, nil
 }
 
-func ensureOpenCodeDependency(path string) error {
+func ensureOpenCodeDependency(path string) (bool, error) {
 	root := map[string]any{}
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
-		return err
+		return false, err
 	}
 	if len(data) > 0 && (json.Unmarshal(data, &root) != nil || root == nil) {
-		return errors.New("OpenCode package.json is not a JSON object")
+		return false, errors.New("OpenCode package.json is not a JSON object")
 	}
 	dependencies, ok := root["dependencies"].(map[string]any)
 	if !ok {
 		if _, exists := root["dependencies"]; exists {
-			return errors.New("OpenCode package.json has incompatible dependencies")
+			return false, errors.New("OpenCode package.json has incompatible dependencies")
 		}
 		dependencies = map[string]any{}
 		root["dependencies"] = dependencies
 	}
 	if _, ok := dependencies["@opencode-ai/plugin"].(string); ok {
+		return false, nil
+	}
+	dependencies["@opencode-ai/plugin"] = openCodePluginDependency
+	encoded, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return false, err
+	}
+	if err := atomicWrite(path, append(encoded, '\n'), 0o600); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func openCodeDependencyVersion(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	root := map[string]any{}
+	if json.Unmarshal(data, &root) != nil || root == nil {
+		return ""
+	}
+	dependencies, ok := root["dependencies"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	version, _ := dependencies["@opencode-ai/plugin"].(string)
+	return version
+}
+
+func removeOwnedOpenCodeDependency(path string, owner ownerRecord) error {
+	if owner.OpenCodeDependency == "" {
 		return nil
 	}
-	dependencies["@opencode-ai/plugin"] = "^1.18.30"
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	root := map[string]any{}
+	if json.Unmarshal(data, &root) != nil || root == nil {
+		return nil
+	}
+	dependencies, ok := root["dependencies"].(map[string]any)
+	if !ok || dependencies["@opencode-ai/plugin"] != owner.OpenCodeDependency {
+		return nil
+	}
+	delete(dependencies, "@opencode-ai/plugin")
 	encoded, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
 		return err
@@ -390,6 +438,9 @@ func manageOpenCodePlugin(action string, location hookLocation, command string, 
 		if !managed {
 			return setupResult{Agent: location.agent, State: "missing"}, nil
 		}
+		if err := removeOwnedOpenCodeDependency(location.manifestPath, owner); err != nil {
+			return setupResult{}, err
+		}
 		if err := os.Remove(location.path); err != nil {
 			return setupResult{}, err
 		}
@@ -401,7 +452,8 @@ func manageOpenCodePlugin(action string, location hookLocation, command string, 
 		if manifestErr != nil && !os.IsNotExist(manifestErr) {
 			return setupResult{}, manifestErr
 		}
-		if err := ensureOpenCodeDependency(location.manifestPath); err != nil {
+		dependencyAdded, err := ensureOpenCodeDependency(location.manifestPath)
+		if err != nil {
 			return setupResult{}, err
 		}
 		plugin := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport type { Plugin } from \"@opencode-ai/plugin\";\n\nconst injected = new Set<string>();\n\nexport const RouterAxiPlugin: Plugin = async () => ({\n  \"experimental.chat.system.transform\": async (input, output) => {\n    if (input.sessionID && injected.has(input.sessionID)) return;\n    const context = execFileSync(" + jsonStringCommand(command) + ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    if (input.sessionID) injected.add(input.sessionID);\n    output.system.push(context);\n  },\n});\n\nexport default RouterAxiPlugin;\n"
@@ -412,7 +464,11 @@ func manageOpenCodePlugin(action string, location hookLocation, command string, 
 			return setupResult{}, err
 		}
 		_, shapeHash, _ := openCodePluginParts([]byte(plugin))
-		if err := writeOwner(location.markerPath, ownerRecord{Command: command, ShapeHash: shapeHash}); err != nil {
+		dependencyOwner := ""
+		if dependencyAdded || owner.OpenCodeDependency == openCodePluginDependency && openCodeDependencyVersion(location.manifestPath) == openCodePluginDependency {
+			dependencyOwner = openCodePluginDependency
+		}
+		if err := writeOwner(location.markerPath, ownerRecord{Command: command, ShapeHash: shapeHash, OpenCodeDependency: dependencyOwner}); err != nil {
 			pluginErr := restoreFile(location.path, data, len(data) > 0)
 			manifestErr := restoreFile(location.manifestPath, manifestData, manifestExists)
 			if pluginErr != nil || manifestErr != nil {

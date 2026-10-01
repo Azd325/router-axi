@@ -76,6 +76,116 @@ func TestSetupInstallCheckAndUninstall(t *testing.T) {
 		if code := application.Run(t.Context(), []string{"setup", "uninstall", "--agent", agent}, &stdout, &stderr); code != ExitOK || !strings.Contains(stdout.String(), "state: removed") {
 			t.Fatalf("uninstall %s: code=%d stdout=%q", agent, code, stdout.String())
 		}
+		if agent == "opencode" {
+			manifest := filepath.Join(home, ".config", "opencode", "package.json")
+			data, err := os.ReadFile(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var packageJSON struct {
+				Dependencies map[string]string `json:"dependencies"`
+			}
+			if err := json.Unmarshal(data, &packageJSON); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := packageJSON.Dependencies["@opencode-ai/plugin"]; exists || packageJSON.Dependencies == nil {
+				t.Fatalf("owned dependency was not removed without preserving its container: %s", data)
+			}
+		}
+	}
+}
+
+func TestSetupUninstallOpenCodePreservesUnownedDependencies(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		manifest string
+		mutate   func(*testing.T, string)
+		version  string
+	}{
+		{
+			name:     "pre-existing",
+			manifest: `{"name":"keep","dependencies":{"other":"1.0.0","@opencode-ai/plugin":"^1.18.30"}}`,
+			version:  "^1.18.30",
+		},
+		{
+			name:    "changed after install",
+			version: "^2.0.0",
+			mutate: func(t *testing.T, manifest string) {
+				t.Helper()
+				data, err := os.ReadFile(manifest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var root map[string]any
+				if err := json.Unmarshal(data, &root); err != nil {
+					t.Fatal(err)
+				}
+				root["dependencies"].(map[string]any)["@opencode-ai/plugin"] = "^2.0.0"
+				data, err = json.Marshal(root)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(manifest, data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name:    "legacy owner record",
+			version: "^1.18.30",
+			mutate: func(t *testing.T, manifest string) {
+				t.Helper()
+				marker := filepath.Join(filepath.Dir(manifest), "plugins", ".router-axi-session-hook")
+				owner, err := readOwner(marker)
+				if err != nil {
+					t.Fatal(err)
+				}
+				owner.OpenCodeDependency = ""
+				if err := writeOwner(marker, owner); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			manifest := filepath.Join(home, ".config", "opencode", "package.json")
+			if test.manifest != "" {
+				if err := os.MkdirAll(filepath.Dir(manifest), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(manifest, []byte(test.manifest), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			application := setupApp(t, home)
+			var stdout, stderr bytes.Buffer
+			if code := application.Run(t.Context(), []string{"setup", "install", "--agent", "opencode"}, &stdout, &stderr); code != ExitOK {
+				t.Fatalf("install: code=%d stdout=%q", code, stdout.String())
+			}
+			if test.mutate != nil {
+				test.mutate(t, manifest)
+			}
+			stdout.Reset()
+			if code := application.Run(t.Context(), []string{"setup", "uninstall", "--agent", "opencode"}, &stdout, &stderr); code != ExitOK {
+				t.Fatalf("uninstall: code=%d stdout=%q", code, stdout.String())
+			}
+			data, err := os.ReadFile(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var root map[string]any
+			if err := json.Unmarshal(data, &root); err != nil {
+				t.Fatal(err)
+			}
+			dependencies := root["dependencies"].(map[string]any)
+			if dependencies["@opencode-ai/plugin"] != test.version {
+				t.Fatalf("unowned dependency changed: %s", data)
+			}
+			if test.manifest != "" && (root["name"] != "keep" || dependencies["other"] != "1.0.0") {
+				t.Fatalf("unrelated manifest content changed: %s", data)
+			}
+		})
 	}
 }
 
@@ -122,6 +232,10 @@ func TestSetupUninstallOpenCodeIgnoresMalformedManifest(t *testing.T) {
 	stdout.Reset()
 	if code := application.Run(t.Context(), []string{"setup", "uninstall", "--agent", "opencode"}, &stdout, &stderr); code != ExitOK || !strings.Contains(stdout.String(), "state: removed") {
 		t.Fatalf("uninstall: code=%d stdout=%q", code, stdout.String())
+	}
+	data, err := os.ReadFile(manifest)
+	if err != nil || string(data) != "not json" {
+		t.Fatalf("malformed manifest changed: %q, %v", data, err)
 	}
 }
 
