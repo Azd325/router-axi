@@ -3798,16 +3798,16 @@ func TestConfigExportResponsesAreValidated(t *testing.T) {
 		name, body, kind, code string
 		status, statusWant     int
 	}{
-		{"empty-url", strings.Replace(configFileURLFixture, "https://__ORIGIN__/TR064/synthetic-export-token", "", 1), "protocol", "", 200, 0},
-		{"missing-url", `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:X_AVM-DE_GetConfigFileResponse xmlns:u="urn:dslforum-org:service:DeviceConfig:1"/></s:Body></s:Envelope>`, "protocol", "", 200, 200},
-		{"malformed", "<private-body", "protocol", "", 200, 200},
-		{"wrong-namespace", strings.Replace(configFileURLFixture, "DeviceConfig:1", "DeviceConfig:2", 1), "protocol", "", 200, 200},
-		{"trailing-root", configFileURLFixture + `<private/>`, "protocol", "", 200, 200},
+		{"empty-url", strings.Replace(configFileURLFixture, "https://__ORIGIN__/TR064/synthetic-export-token", "", 1), "protocol", backupUnsafeDownloadURLCode, 200, 0},
+		{"missing-url", `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:X_AVM-DE_GetConfigFileResponse xmlns:u="urn:dslforum-org:service:DeviceConfig:1"/></s:Body></s:Envelope>`, "protocol", backupInvalidResponseCode, 200, 200},
+		{"malformed", "<private-body", "protocol", backupInvalidResponseCode, 200, 200},
+		{"wrong-namespace", strings.Replace(configFileURLFixture, "DeviceConfig:1", "DeviceConfig:2", 1), "protocol", backupInvalidResponseCode, 200, 200},
+		{"trailing-root", configFileURLFixture + `<private/>`, "protocol", backupInvalidResponseCode, 200, 200},
 		{"http403", "private-body", "auth", "", 403, 403},
 		{"invalid-action-fault", fault, "unsupported", "", 500, 500},
 		{"invalid-action-fault-http200", fault, "unsupported", "", 200, 200},
-		{"router-fault", strings.Replace(fault, ">401<", ">private-code<", 1), "router", "", 500, 500},
-		{"missing-fault-code", strings.Replace(fault, "<errorCode>401</errorCode>", "", 1), "router", "", 200, 200},
+		{"router-fault", strings.Replace(fault, ">401<", ">private-code<", 1), "router", backupActionRejectedCode, 500, 500},
+		{"missing-fault-code", strings.Replace(fault, "<errorCode>401</errorCode>", "", 1), "router", backupActionRejectedCode, 200, 200},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			script := backupScript(false)[:1]
@@ -3842,7 +3842,7 @@ func TestConfigExportRefusesUnsafeDownloadURLs(t *testing.T) {
 			script := backupScript(false)[:1]
 			script = append(script, backupExchange{method: http.MethodPost, path: "/config", soapAction: backupGetConfigFileAction, body: test.url})
 			client, downloads := backupFixtureClient(t, script, false)
-			_ = assertBackupError(t, client, test.kind, "")
+			_ = assertBackupError(t, client, test.kind, backupUnsafeDownloadURLCode)
 			if downloads.Load() != 0 {
 				t.Fatal("an unsafe download URL was fetched")
 			}
@@ -3877,6 +3877,9 @@ func TestConfigExportDownloadFailuresAreSanitized(t *testing.T) {
 			script := backupScript(true)
 			script[4].status, script[4].body = test.status, "private-body"
 			client, downloads := backupFixtureClient(t, script, true)
+			if test.name == "router" {
+				test.code = backupDownloadRejectedCode
+			}
 			err := assertBackupError(t, client, test.kind, test.code)
 			if err.StatusCode != test.status {
 				t.Fatalf("status=%#v", err)
@@ -3927,7 +3930,7 @@ func TestConfigExportRejectsOversizedDownload(t *testing.T) {
 	maxConfigExportBytes = 8
 	t.Cleanup(func() { maxConfigExportBytes = original })
 	client, downloads := backupFixtureClient(t, backupScript(false), false)
-	_ = assertBackupError(t, client, "protocol", "")
+	_ = assertBackupError(t, client, "protocol", backupExportTooLargeCode)
 	if downloads.Load() != 1 {
 		t.Fatal("an oversized export was downloaded more than once")
 	}

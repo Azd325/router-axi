@@ -964,7 +964,30 @@ func protocolError(err error) errorSpec {
 	case "unsupported":
 		return errorSpec{ExitUnsupported, errorDetail{"unsupported_capability", protocolErr.Message, ""}}
 	default:
+		if hint, ok := backupDiagnosticHint(protocolErr.Operation, protocolErr.Code); ok {
+			return errorSpec{ExitRouter, errorDetail{protocolErr.Code, protocolErr.Message, hint}}
+		}
 		return errorSpec{ExitRouter, errorDetail{"router_protocol_error", protocolErr.Message, ""}}
+	}
+}
+
+func backupDiagnosticHint(operation, code string) (string, bool) {
+	if operation != "backup" {
+		return "", false
+	}
+	switch code {
+	case "backup_action_rejected":
+		return "the router advertised DeviceConfig but rejected configuration export; check supported firmware or use the FRITZ!Box web interface", true
+	case "backup_invalid_response":
+		return "the router returned an unexpected configuration export response; check supported firmware", true
+	case "backup_unsafe_download_url":
+		return "the router returned an unsafe configuration download address; export was refused", true
+	case "backup_download_rejected":
+		return "the router rejected the configuration download; check supported firmware or use the FRITZ!Box web interface", true
+	case "backup_export_too_large":
+		return "the router returned an export larger than the supported safety limit", true
+	default:
+		return "", false
 	}
 }
 

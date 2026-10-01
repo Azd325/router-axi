@@ -365,7 +365,7 @@ func TestBackupClientFailuresAreSanitized(t *testing.T) {
 	})
 	var stdout, stderr bytes.Buffer
 	code := application.Run(t.Context(), []string{"backup", "--output", path, "--host", server.URL}, &stdout, &stderr)
-	if code != ExitRouter || stderr.Len() != 0 || !strings.Contains(stdout.String(), "router_protocol_error") {
+	if code != ExitRouter || stderr.Len() != 0 || !strings.Contains(stdout.String(), "backup_action_rejected") || !strings.Contains(stdout.String(), "FRITZ!Box web interface") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if strings.Contains(stdout.String()+stderr.String(), "synthetic-sensitive") || strings.Contains(stdout.String()+stderr.String(), backupTestPassphrase) || strings.Contains(stdout.String()+stderr.String(), server.URL) {
