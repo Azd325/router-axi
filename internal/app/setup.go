@@ -359,8 +359,11 @@ func ensureOpenCodeDependency(path string) (bool, error) {
 		dependencies = map[string]any{}
 		root["dependencies"] = dependencies
 	}
-	if _, ok := dependencies["@opencode-ai/plugin"].(string); ok {
-		return false, nil
+	if dependency, exists := dependencies["@opencode-ai/plugin"]; exists {
+		if _, ok := dependency.(string); ok {
+			return false, nil
+		}
+		return false, errors.New("OpenCode package.json has incompatible @opencode-ai/plugin dependency")
 	}
 	dependencies["@opencode-ai/plugin"] = openCodePluginDependency
 	encoded, err := json.MarshalIndent(root, "", "  ")

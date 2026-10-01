@@ -239,6 +239,41 @@ func TestSetupUninstallOpenCodeIgnoresMalformedManifest(t *testing.T) {
 	}
 }
 
+func TestSetupInstallOpenCodePreservesMalformedDependency(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		dependency string
+	}{
+		{name: "null", dependency: "null"},
+		{name: "number", dependency: "7"},
+		{name: "object", dependency: `{"version":"^1.18.30"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			manifest := filepath.Join(home, ".config", "opencode", "package.json")
+			original := []byte(`{"name":"keep","dependencies":{"@opencode-ai/plugin":` + test.dependency + `}}`)
+			if err := os.MkdirAll(filepath.Dir(manifest), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(manifest, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			application := setupApp(t, home)
+			var stdout, stderr bytes.Buffer
+			if code := application.Run(t.Context(), []string{"setup", "install", "--agent", "opencode"}, &stdout, &stderr); code != ExitInternal {
+				t.Fatalf("install: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			data, err := os.ReadFile(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(data, original) {
+				t.Fatalf("malformed dependency manifest changed: got %q want %q", data, original)
+			}
+		})
+	}
+}
+
 func TestSetupRollsBackWhenOwnerRecordCannotBeWritten(t *testing.T) {
 	home := t.TempDir()
 	application := setupApp(t, home)
