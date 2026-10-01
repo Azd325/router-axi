@@ -616,8 +616,22 @@ credentials exit `3`; transport failures `4`; malformed responses, refused
 HTTPS URLs, and other router faults `6`; unusable destinations, a plaintext
 router origin, and a missing passphrase exit `2`; local write failures,
 including `backup_link_unsupported`, exit `1`. An untrusted router
-certificate exits `4` with the code `tls_untrusted`. The export is bounded at 64 MiB; larger downloads are a
-protocol error. Compatibility is fixture-backed with synthetic servers only;
+certificate exits `4` with the code `tls_untrusted`.
+
+Backup failures below have stable structured codes and hints in both compact
+and JSON output, all with exit `6`:
+
+| Code | Meaning and hint |
+| --- | --- |
+| `backup_action_rejected` | The router rejected the export action despite advertising DeviceConfig; check supported firmware or use the FRITZ!Box web interface. |
+| `backup_invalid_response` | The export response was malformed or unexpected; check supported firmware. |
+| `backup_unsafe_download_url` | The returned download address failed HTTPS or same-host safety validation; export was refused. |
+| `backup_download_rejected` | The download was rejected with HTTP status 400 or higher, except authentication failures; check supported firmware or use the FRITZ!Box web interface. |
+| `backup_export_too_large` | The export exceeded the supported 64 MiB safety limit. |
+
+These diagnostics suppress SOAP fault details, URLs, passphrases, and export
+contents. Other router/protocol failures retain `router_protocol_error`.
+Compatibility is fixture-backed with synthetic servers only;
 the FRITZ!Box export flow is **not hardware-validated**, and `backup` does not
 verify that the export can be restored.
 
