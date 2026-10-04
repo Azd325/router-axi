@@ -754,7 +754,7 @@ func usageHint(opts options) string {
 
 func help(command, action string) string {
 	if command == "wan" && action == "detail" {
-		return "usage: router-axi wan detail [--host ADDRESS] [--json] [--help]\nRead-only bounded WAN physical-link detail from documented WANCommonInterfaceConfig actions.\nGetCommonLinkProperties is required. Advertised GetAddonInfos adds router-reported byte rates, totals, and DNS servers; these rates are not watch's observed-delta rates.\nexamples: router-axi wan detail; router-axi wan detail --json\n"
+		return "usage: router-axi wan detail [--host ADDRESS] [--json] [--help]\nRead-only bounded WAN physical-link detail from documented WANCommonInterfaceConfig actions.\nGetCommonLinkProperties is required. Advertised common-interface actions add sync/tariff bit rates, provider, byte/packet totals, and bounded per-sync-group byte-rate series. Active WAN X_GetDNSServers adds DNS servers. These are not watch's observed-delta rates. Scalar byte rates require one group with one value; monitor series preserve router order.\nexamples: router-axi wan detail; router-axi wan detail --json\n"
 	}
 	if command == "wan" && action == "reconnect" {
 		return "usage: router-axi wan reconnect [--confirm] [--host ADDRESS] [--json] [--help]\nWithout --confirm: preview only. With --confirm: send one documented ForceTermination to the active WAN connection service; the internet connection drops and a new external address may be assigned.\nNo prompts, retries, or recovery polling; wan reconnect is not idempotent.\nexamples: router-axi wan reconnect; router-axi wan reconnect --confirm\n"
@@ -868,6 +868,35 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 	case "wan":
 		if v, ok := value.(tr064.WANDetail); ok {
 			_, err := fmt.Fprintf(w, "wan_detail:\n  access_type: %s\n  physical_link_status: %s\n  max_download_bits_per_second: %d\n  max_upload_bits_per_second: %d\n  router_reported_download_bytes_per_second: %s\n  router_reported_upload_bytes_per_second: %s\n  total_download_bytes: %s\n  total_upload_bytes: %s\n  dns_servers: %s\n", scalar(v.AccessType), scalar(v.PhysicalLinkStatus), v.MaxDownloadBitsPerSecond, v.MaxUploadBitsPerSecond, optionalUint(v.RouterReportedDownloadBytesPerSecond), optionalUint(v.RouterReportedUploadBytesPerSecond), optionalUint(v.TotalDownloadBytes), optionalUint(v.TotalUploadBytes), strings.Join(v.DNSServers, ","))
+			if err != nil {
+				return err
+			}
+			provider := "unknown"
+			if v.Provider != nil {
+				provider = strconv.Quote(*v.Provider)
+			}
+			_, err = fmt.Fprintf(w, "  total_download_packets: %s\n  total_upload_packets: %s\n  sync_download_bits_per_second: %s\n  sync_upload_bits_per_second: %s\n  tariff_download_bits_per_second: %s\n  tariff_upload_bits_per_second: %s\n  provider: %s\n", optionalUint(v.TotalDownloadPackets), optionalUint(v.TotalUploadPackets), optionalUint(v.SyncDownloadBitsPerSecond), optionalUint(v.SyncUploadBitsPerSecond), optionalUint(v.TariffDownloadBitsPerSecond), optionalUint(v.TariffUploadBitsPerSecond), provider)
+			if err != nil {
+				return err
+			}
+			if v.SyncGroups == nil {
+				_, err = fmt.Fprintln(w, "  sync_groups: unknown")
+				return err
+			}
+			if len(v.SyncGroups) == 0 {
+				_, err = fmt.Fprintln(w, "  sync_groups: 0 groups found")
+				return err
+			}
+			_, err = fmt.Fprintf(w, "  sync_groups[%d]{index,max_download_bytes_per_second,max_upload_bytes_per_second,ds_current_bytes_per_second,mc_current_bytes_per_second,upload_bytes_per_second,realtime_upload_bytes_per_second,high_upload_bytes_per_second,default_upload_bytes_per_second,low_upload_bytes_per_second}:\n", len(v.SyncGroups))
+			if err != nil {
+				return err
+			}
+			for _, group := range v.SyncGroups {
+				_, err = fmt.Fprintf(w, "    %d,%d,%d,%s,%s,%s,%s,%s,%s,%s\n", group.Index, group.MaxDownloadBytesPerSecond, group.MaxUploadBytesPerSecond, wanRateSeries(group.DSCurrentBytesPerSecond), wanRateSeries(group.MCCurrentBytesPerSecond), wanRateSeries(group.UploadBytesPerSecond), wanRateSeries(group.RealtimeUploadBytesPerSecond), wanRateSeries(group.HighUploadBytesPerSecond), wanRateSeries(group.DefaultUploadBytesPerSecond), wanRateSeries(group.LowUploadBytesPerSecond))
+				if err != nil {
+					return err
+				}
+			}
 			return err
 		}
 		v := value.(tr064.WAN)
@@ -1337,3 +1366,11 @@ func duration(seconds uint64) string {
 	return fmt.Sprintf("%dd %02dh %02dm", seconds/86400, seconds%86400/3600, seconds%3600/60)
 }
 func size(bytes uint64) string { return fmt.Sprintf("%.2f GB", float64(bytes)/1_000_000_000) }
+
+func wanRateSeries(values []uint64) string {
+	parts := make([]string, len(values))
+	for index, value := range values {
+		parts[index] = strconv.FormatUint(value, 10)
+	}
+	return strconv.Quote(strings.Join(parts, ","))
+}

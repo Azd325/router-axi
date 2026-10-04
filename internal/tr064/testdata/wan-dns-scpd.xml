@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<scpd xmlns="urn:dslforum-org:service-1-0"><actionList><action><name>X_GetDNSServers</name></action><action><name>GetAddonInfos</name></action><action><name>SetConnectionType</name></action></actionList></scpd>
