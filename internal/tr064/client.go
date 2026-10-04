@@ -281,7 +281,7 @@ func (d *description) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement)
 type soapValues struct {
 	Status, LastError, ExternalIP                                                 string
 	Manufacturer, Model, Serial, Software, Hardware                               string
-	Uptime, DownloadRate, UploadRate, TotalDownload, TotalUpload                  string
+	Uptime, TotalDownload, TotalUpload                                            string
 	WANAccessType, PhysicalLinkStatus, DownstreamMaxBitRate, UpstreamMaxBitRate   string
 	TotalPacketsSent, TotalPacketsReceived                                        string
 	SyncDownstream, SyncUpstream, TariffDownstream, TariffUpstream                string
@@ -349,10 +349,6 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.Hardware
 		case "NewUpTime", "NewUptime":
 			target = &v.Uptime
-		case "NewByteReceiveRate":
-			target = &v.DownloadRate
-		case "NewByteSendRate":
-			target = &v.UploadRate
 		case "NewTotalBytesReceived":
 			target = &v.TotalDownload
 		case "NewTotalBytesSent":
@@ -814,17 +810,21 @@ func (c *Client) wanDetailCommonReads(ctx context.Context, common service, actio
 			return wanDetailError(err)
 		}
 		for _, field := range []struct {
-			value  string
-			target **uint64
+			value        string
+			target       **uint64
+			zeroIsAbsent bool
 		}{
-			{values.SyncDownstream, &result.SyncDownloadBitsPerSecond},
-			{values.SyncUpstream, &result.SyncUploadBitsPerSecond},
-			{values.TariffDownstream, &result.TariffDownloadBitsPerSecond},
-			{values.TariffUpstream, &result.TariffUploadBitsPerSecond},
+			{values.SyncDownstream, &result.SyncDownloadBitsPerSecond, false},
+			{values.SyncUpstream, &result.SyncUploadBitsPerSecond, false},
+			{values.TariffDownstream, &result.TariffDownloadBitsPerSecond, true},
+			{values.TariffUpstream, &result.TariffUploadBitsPerSecond, true},
 		} {
 			n, err := parseWANDetailUint(field.value, "sync or tariff bit rate")
 			if err != nil {
 				return err
+			}
+			if n == 0 && field.zeroIsAbsent {
+				continue
 			}
 			*field.target = &n
 		}
@@ -848,14 +848,6 @@ func (c *Client) wanDetailCommonReads(ctx context.Context, common service, actio
 			return err
 		}
 		result.SyncGroups = groups
-		if len(groups) == 1 {
-			if len(groups[0].MCCurrentBytesPerSecond) == 1 {
-				result.RouterReportedDownloadBytesPerSecond = &groups[0].MCCurrentBytesPerSecond[0]
-			}
-			if len(groups[0].UploadBytesPerSecond) == 1 {
-				result.RouterReportedUploadBytesPerSecond = &groups[0].UploadBytesPerSecond[0]
-			}
-		}
 	}
 	return nil
 }
@@ -914,6 +906,10 @@ func parseWANSyncGroup(values soapValues, index uint64) (WANSyncGroup, error) {
 		{values.PrioDefault, &group.DefaultUploadBytesPerSecond},
 		{values.PrioLow, &group.LowUploadBytesPerSecond},
 	} {
+		*field.target = []uint64{}
+		if strings.TrimSpace(field.value) == "" {
+			continue
+		}
 		parts := strings.Split(field.value, ",")
 		if len(parts) > maxWANRateSamples {
 			return WANSyncGroup{}, &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an excessive sync group rate series"}

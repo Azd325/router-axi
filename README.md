@@ -245,6 +245,8 @@ It never looks up or invokes the undocumented connection-service `GetAddonInfos`
 Each optional WANCommonInterfaceConfig action is checked in the common service's SCPD:
 
 - `X_AVM-DE_GetAddonInfos` supplies sync and tariff download/upload rates in **bits/s**.
+  Only some providers send a tariff rate, so a tariff rate of `0` is reported as
+  `null`/`unknown`. A sync rate of `0` is preserved and means no sync or not reported.
 - `X_AVM-DE_GetActiveProvider` supplies the provider name.
 - `GetTotalBytesReceived`, `GetTotalBytesSent`, `GetTotalPacketsReceived`, and
   `GetTotalPacketsSent` supply byte and packet counters. The documented counters cover all
@@ -256,6 +258,8 @@ Each optional WANCommonInterfaceConfig action is checked in the common service's
   priority classes. Group 0 supplies the count; subsequent groups are read once in index
   order. Reads are bounded to 16 groups and 256 values per series. An excessive or changing
   group count fails atomically. A zero count produces an empty `sync_groups` array.
+  An empty or absent series produces an empty array. A malformed non-empty series,
+  including one with a trailing comma, fails the command.
 
 An absent optional action is never probed: its numeric/provider JSON fields are `null`,
 compact output says `unknown`, and an unavailable monitor is `"sync_groups":null`.
@@ -291,8 +295,8 @@ sum is inferred. The document describes `ds_current_bps` as downstream multicast
 `mc_current_bps` as combined home, guest, and multicast downstream traffic; the output
 preserves the `ds_current_bytes_per_second` and `mc_current_bytes_per_second` names to avoid
 silently swapping them. The existing `router_reported_download_bytes_per_second` and
-`router_reported_upload_bytes_per_second` fields are populated only for one sync group with
-one combined downstream or upstream value respectively; otherwise they remain `null`/`unknown`.
+`router_reported_upload_bytes_per_second` fields keep their position for output stability and
+are always `null`/`unknown`; `sync_groups` carries the router-reported byte rates.
 These router-reported rates are not independently measured and differ from `watch`'s observed
 counter-delta rates.
 

@@ -1681,14 +1681,44 @@ func TestWANDetailNewFieldsAndPrivacy(t *testing.T) {
 	}
 }
 
-func TestWANDetailScalarMonitorRates(t *testing.T) {
+func TestWANDetailLegacyByteRatesStayUnknown(t *testing.T) {
 	script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)
 	last := len(script) - 1
 	script[last].body = strings.ReplaceAll(script[last].body, "2500000,2000000", "2500000")
 	script[last].body = strings.ReplaceAll(script[last].body, "125000,120000", "125000")
 	detail, err := forwardFixtureClient(t, script).WANDetail(t.Context())
-	if err != nil || detail.RouterReportedDownloadBytesPerSecond == nil || *detail.RouterReportedDownloadBytesPerSecond != 2500000 || detail.RouterReportedUploadBytesPerSecond == nil || *detail.RouterReportedUploadBytesPerSecond != 125000 || len(detail.SyncGroups) != 1 || !reflect.DeepEqual(detail.SyncGroups[0].MCCurrentBytesPerSecond, []uint64{2500000}) {
+	if err != nil || detail.RouterReportedDownloadBytesPerSecond != nil || detail.RouterReportedUploadBytesPerSecond != nil || len(detail.SyncGroups) != 1 || !reflect.DeepEqual(detail.SyncGroups[0].MCCurrentBytesPerSecond, []uint64{2500000}) || !reflect.DeepEqual(detail.SyncGroups[0].UploadBytesPerSecond, []uint64{125000}) {
 		t.Fatalf("detail=%#v error=%v", detail, err)
+	}
+}
+
+func TestWANDetailZeroTariffRateIsUnknown(t *testing.T) {
+	script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)
+	for index := range script {
+		if script[index].action == "X_AVM-DE_GetAddonInfos" {
+			for _, value := range []string{"1100000000", "55000000", "1000000000", "50000000"} {
+				script[index].body = strings.Replace(script[index].body, "stream>"+value+"<", "stream>0<", 1)
+			}
+		}
+	}
+	detail, err := forwardFixtureClient(t, script).WANDetail(t.Context())
+	if err != nil || detail.TariffDownloadBitsPerSecond != nil || detail.TariffUploadBitsPerSecond != nil || detail.SyncDownloadBitsPerSecond == nil || *detail.SyncDownloadBitsPerSecond != 0 || detail.SyncUploadBitsPerSecond == nil || *detail.SyncUploadBitsPerSecond != 0 {
+		t.Fatalf("detail=%#v error=%v", detail, err)
+	}
+}
+
+func TestWANDetailEmptyOrAbsentMonitorSeriesIsEmptyArray(t *testing.T) {
+	script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)
+	last := len(script) - 1
+	script[last].body = strings.Replace(script[last].body, ">100,200<", "><", 1)
+	script[last].body = strings.Replace(script[last].body, "<Newprio_low_bps>2000,1000</Newprio_low_bps>", "", 1)
+	detail, err := forwardFixtureClient(t, script).WANDetail(t.Context())
+	if err != nil || detail.AccessType != "Cable" || detail.PhysicalLinkStatus != "Up" || len(detail.SyncGroups) != 1 {
+		t.Fatalf("detail=%#v error=%v", detail, err)
+	}
+	encoded, err := json.Marshal(detail.SyncGroups[0])
+	if err != nil || !strings.Contains(string(encoded), `"ds_current_bytes_per_second":[]`) || !strings.Contains(string(encoded), `"low_upload_bytes_per_second":[]`) || !strings.Contains(string(encoded), `"mc_current_bytes_per_second":[2500000,2000000]`) {
+		t.Fatalf("JSON=%s error=%v", encoded, err)
 	}
 }
 
@@ -1905,6 +1935,8 @@ func TestWANDetailRejectsMalformedSafeFields(t *testing.T) {
 		{"invalid-counter", "GetTotalPacketsSent", strings.Replace(wanPacketsFixture, ">98765<", ">private<", 1)},
 		{"invalid-provider", "X_AVM-DE_GetActiveProvider", strings.Replace(wanProviderFixture, "Synthetic Provider", "private&#10;canary", 1)},
 		{"invalid-monitor-rate", "X_AVM-DE_GetOnlineMonitor", strings.Replace(wanOnlineMonitorFixture, ">100,200<", ">private<", 1)},
+		{"trailing-comma-monitor-series", "X_AVM-DE_GetOnlineMonitor", strings.Replace(wanOnlineMonitorFixture, ">100,200<", ">100,200,<", 1)},
+		{"empty-monitor-series-element", "X_AVM-DE_GetOnlineMonitor", strings.Replace(wanOnlineMonitorFixture, ">100,200<", ">100,,200<", 1)},
 		{"excessive-monitor-series", "X_AVM-DE_GetOnlineMonitor", strings.Replace(wanOnlineMonitorFixture, ">100,200<", ">"+strings.Repeat("1,", maxWANRateSamples)+"1<", 1)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
