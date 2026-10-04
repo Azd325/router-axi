@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<root><device><serviceList><service>
+  <serviceType>urn:dslforum-org:service:UserInterface:1</serviceType>
+  <serviceId>urn:UserInterface-com:serviceId:UserInterface1</serviceId>
+  <controlURL>/user-interface</controlURL>
+  <SCPDURL>/user-interface.xml</SCPDURL>
+</service></serviceList></device></root>

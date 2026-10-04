@@ -93,7 +93,7 @@ func (f fakeReader) Doctor(context.Context) (tr064.Doctor, error) {
 		Endpoint: "http://router.test:49000", Reachability: tr064.DoctorCheck{State: "reachable"},
 		Protocol: tr064.DoctorCheck{State: "available"}, Authentication: tr064.DoctorCheck{State: "authenticated"},
 		Model: "FRITZ!Box 7590 AX", Firmware: "8.02",
-		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Watch: advertised, Calls: advertised, Devices: advertised, Leases: advertised, DHCP: advertised, DSL: advertised, WiFi: advertised, Forwards: advertised, Reboot: advertised, Backup: advertised},
+		Capabilities: tr064.DoctorCapabilities{Status: advertised, Overview: advertised, WAN: advertised, Traffic: advertised, Watch: advertised, Calls: advertised, Devices: advertised, Leases: advertised, DHCP: advertised, DSL: advertised, Firmware: advertised, WiFi: advertised, Forwards: advertised, Reboot: advertised, Backup: advertised},
 	}, f.err
 }
 func (f fakeReader) Status(context.Context) (tr064.Status, error) {
@@ -462,7 +462,7 @@ func TestTopLevelHelpListsPublicCommands(t *testing.T) {
 	if code != ExitOK || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "watch", "calls", "devices", "leases", "dhcp", "dsl", "wifi", "guest", "forwards", "reboot", "backup", "skill", "version"} {
+	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "watch", "calls", "devices", "leases", "dhcp", "dsl", "firmware", "wifi", "guest", "forwards", "reboot", "backup", "skill", "version"} {
 		if !strings.Contains(stdout, "\n  "+command+" ") {
 			t.Fatalf("top-level help does not list %q: %q", command, stdout)
 		}
@@ -471,7 +471,7 @@ func TestTopLevelHelpListsPublicCommands(t *testing.T) {
 
 func TestDoctorJSONIsDeterministic(t *testing.T) {
 	code, stdout, stderr := runTest(t, "doctor", "--json")
-	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"watch":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"leases":{"state":"advertised"},"dhcp":{"state":"advertised"},"dsl":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"},"reboot":{"state":"advertised"},"backup":{"state":"advertised"}}}` + "\n"
+	want := `{"endpoint":"http://router.test:49000","reachability":{"state":"reachable"},"protocol":{"state":"available"},"authentication":{"state":"authenticated"},"model":"FRITZ!Box 7590 AX","firmware":"8.02","capabilities":{"status":{"state":"advertised"},"overview":{"state":"advertised"},"wan":{"state":"advertised"},"traffic":{"state":"advertised"},"watch":{"state":"advertised"},"calls":{"state":"advertised"},"devices":{"state":"advertised"},"leases":{"state":"advertised"},"dhcp":{"state":"advertised"},"dsl":{"state":"advertised"},"firmware":{"state":"advertised"},"wifi":{"state":"advertised"},"forwards":{"state":"advertised"},"reboot":{"state":"advertised"},"backup":{"state":"advertised"}}}` + "\n"
 	if code != ExitOK || stdout != want || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
@@ -922,7 +922,7 @@ func TestWiFiClientPrivacyBoundary(t *testing.T) {
 // TestEverySubcommandHelpDepth asserts the AXI help contract: every
 // subcommand help must include a usage line, flags, and concrete examples.
 func TestEverySubcommandHelpDepth(t *testing.T) {
-	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "calls", "devices", "leases", "dhcp", "dsl", "wifi", "guest", "forwards", "watch", "reboot", "backup"} {
+	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "calls", "devices", "leases", "dhcp", "dsl", "firmware", "wifi", "guest", "forwards", "watch", "reboot", "backup"} {
 		text := help(command, "")
 		if !strings.HasPrefix(text, "usage: router-axi "+command) || !strings.Contains(text, "--host ADDRESS") || !strings.Contains(text, "--json") || !strings.Contains(text, "examples: router-axi "+command) && !strings.Contains(text, "Examples: router-axi "+command) {
 			t.Fatalf("help for %s lacks usage, flags, or examples: %q", command, text)
@@ -1270,7 +1270,7 @@ func TestFactoryFailuresDoNotExposeRouterEndpoints(t *testing.T) {
 	const factoryError = "invalid router address " + host
 	commands := [][]string{
 		{"watch"}, {"doctor"}, {"status"}, {"overview"}, {"wan"}, {"traffic"}, {"calls"}, {"devices"},
-		{"leases"}, {"dhcp"}, {"dsl"}, {"wifi"}, {"guest"}, {"forwards"}, {"reboot"}, {"backup", "--output", "backup.export"},
+		{"leases"}, {"dhcp"}, {"dsl"}, {"firmware"}, {"wifi"}, {"guest"}, {"forwards"}, {"reboot"}, {"backup", "--output", "backup.export"},
 	}
 	for _, command := range commands {
 		for _, jsonOutput := range []bool{false, true} {
