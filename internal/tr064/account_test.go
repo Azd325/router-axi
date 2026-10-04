@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -220,12 +221,56 @@ func TestAccountMalformedResponses(t *testing.T) {
 }
 
 func TestAccountRightsValidation(t *testing.T) {
-	for _, value := range []string{"", "<rights", "<rights>private</rights>", "<rights/>private", "<rights/><other/>", "<other/>", "<rights><path>NAS</path></rights>", "<rights><access>none</access><path>NAS</path></rights>", "<rights><path>private</path><access>none</access></rights>", "<rights><path>NAS</path><access>private</access></rights>", "<rights><path>NAS</path><access>none</access><path>NAS</path><access>readonly</access></rights>", "<rights><path><other>NAS</other></path><access>none</access></rights>", strings.Repeat("x", 65537)} {
+	for _, value := range []string{"", "<rights", "<rights>private</rights>", "<rights/>private", "<rights/><other/>", "<other/>", "<rights><path>NAS</path></rights>", "<rights><access>none</access><path>NAS</path></rights>", "<rights><path>private path</path><access>none</access></rights>", "<rights><path>1private</path><access>none</access></rights>", "<rights><path>private/NAS</path><access>none</access></rights>", "<rights><path></path><access>none</access></rights>", "<rights><path>" + strings.Repeat("p", 33) + "</path><access>none</access></rights>", accountRightsList(accountMaxRights + 1), "<rights><path>NAS</path><access>private</access></rights>", "<rights><path>NAS</path><access>none</access><path>NAS</path><access>readonly</access></rights>", "<rights><path><other>NAS</other></path><access>none</access></rights>", strings.Repeat("x", 65537)} {
 		_, err := parseAccountRights(&value)
 		var protocolErr *Error
 		if !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || strings.Contains(err.Error(), "private") {
 			t.Fatalf("err=%v", err)
 		}
+	}
+}
+
+func accountRightsList(count int) string {
+	var list strings.Builder
+	list.WriteString("<rights>")
+	for i := range count {
+		list.WriteString("<path>Right" + strconv.Itoa(i) + "</path><access>none</access>")
+	}
+	list.WriteString("</rights>")
+	return list.String()
+}
+
+func TestAccountRightsEntryLimit(t *testing.T) {
+	value := accountRightsList(accountMaxRights)
+	rights, err := parseAccountRights(&value)
+	if err != nil || len(rights) != accountMaxRights || rights[0].Path != "Right0" || rights[accountMaxRights-1].Path != "Right"+strconv.Itoa(accountMaxRights-1) {
+		t.Fatalf("rights=%+v err=%v", rights, err)
+	}
+}
+
+func TestAccountRightsPaths(t *testing.T) {
+	for _, test := range []struct{ fixture, want string }{
+		{"app", `[{"path":"App","access":"readwrite"},{"path":"BoxAdmin","access":"none"},{"path":"Phone","access":"readwrite"},{"path":"Dial","access":"none"},{"path":"NAS","access":"readonly"},{"path":"HomeAuto","access":"readwrite"}]`},
+		{"unknown-path", `[{"path":"App","access":"readwrite"},{"path":"NAS","access":"readonly"},{"path":"Synthetic-Right_2","access":"readonly"},{"path":"Other","access":"none"}]`},
+		{"invalid-path", ""},
+	} {
+		t.Run(test.fixture, func(t *testing.T) {
+			fixtures := accountFixtures(t)
+			fixtures["/security#X_AVM-DE_GetCurrentUser"] = accountFixture(t, "current-user-"+test.fixture)
+			client, requests := accountFixtureClient(t, fixtures, 0, "")
+			result, err := client.Account(t.Context())
+			if test.want == "" {
+				var protocolErr *Error
+				if !reflect.DeepEqual(result, Account{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || strings.Contains(err.Error(), "private") || len(*requests) != 4 {
+					t.Fatalf("result=%+v err=%v requests=%v", result, err, *requests)
+				}
+				return
+			}
+			encoded, encodeErr := json.Marshal(result.Rights)
+			if err != nil || encodeErr != nil || string(encoded) != test.want || result.Username != "synthetic-account" {
+				t.Fatalf("rights=%s err=%v", encoded, err)
+			}
+		})
 	}
 }
 
@@ -241,6 +286,9 @@ func TestAccountFailuresAreSanitized(t *testing.T) {
 		var protocolErr *Error
 		if !reflect.DeepEqual(result, Account{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != test.kind || protocolErr.StatusCode != test.status || strings.Contains(err.Error(), "private") || len(*requests) != 4 {
 			t.Fatalf("result=%+v err=%v requests=%v", result, err, *requests)
+		}
+		if named := strings.Contains(protocolErr.Message, "App, Dial, Phone, NAS, or Homeauto right"); named != (test.fault == "606") {
+			t.Fatalf("fault=%s message=%q", test.fault, protocolErr.Message)
 		}
 	}
 }

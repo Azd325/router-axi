@@ -524,6 +524,9 @@ Auth `GetInfo` requires any right. Missing services or actions report
 `unsupported_capability` (exit 5); HTTP authentication failures report
 `authentication_failed` (exit 3). Malformed responses fail with a sanitized
 structured protocol error (exit 6), without echoing router response data.
+When the router denies `GetCurrentUser` with SOAP fault 606, the command fails
+as a whole with `router_protocol_error` (exit 6) and a message that names the
+required App, Dial, Phone, NAS, or Homeauto right.
 
 Synthetic compact output:
 
@@ -544,11 +547,15 @@ The JSON field order is stable:
 {"username":"synthetic-account","rights":[{"path":"BoxAdmin","access":"none"},{"path":"NAS","access":"readonly"}],"anonymous_login_enabled":false,"default_password_active":false,"second_factor_enabled":true}
 ```
 
-Rights use the documented paths `BoxAdmin`, `Phone`, `Dial`, `NAS`, and
-`HomeAuto`, in that order, with `none`, `readonly`, or `readwrite` access.
-The command reports these paths as returned and does not infer permission for
-`reboot`, `backup`, or any other action. Unknown paths or access values fail
-closed instead of inventing a rights mapping.
+Rights list the documented paths `App`, `BoxAdmin`, `Phone`, `Dial`, `NAS`, and
+`HomeAuto` first, in that order, with `none`, `readonly`, or `readwrite` access.
+The AVM path list is an example, not an enumeration: any other path follows the
+documented ones in router order when it starts with an ASCII letter and
+continues with ASCII letters, digits, `_`, or `-`, up to 32 characters. The
+command reports these paths as returned and does not infer permission for
+`reboot`, `backup`, or any other action. A path outside that pattern, a
+duplicate path, an unknown access value, or more than 32 rights fails closed
+with a protocol error.
 
 The current username can legitimately be empty, particularly with anonymous
 login. Older responses may omit the rights list or the default-password flag:

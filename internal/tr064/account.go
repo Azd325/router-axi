@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode"
@@ -15,6 +16,12 @@ const (
 	accountSecurityPrefix = "urn:dslforum-org:service:LANConfigSecurity:"
 	accountAuthPrefix     = "urn:dslforum-org:service:X_AVM-DE_Auth:"
 	accountRemediation    = "use firmware advertising LANConfigSecurity account reads and X_AVM-DE_Auth:GetInfo"
+	accountMaxRights      = 32
+)
+
+var (
+	accountRightPath   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,31}$`)
+	accountKnownRights = map[string]int{"App": 0, "BoxAdmin": 1, "Phone": 2, "Dial": 3, "NAS": 4, "HomeAuto": 5}
 )
 
 type AccountRight struct {
@@ -64,7 +71,11 @@ func (c *Client) Account(ctx context.Context) (Account, error) {
 	}
 	current, err := client.actionOnService(ctx, security, "X_AVM-DE_GetCurrentUser")
 	if err != nil {
-		return Account{}, accountError(err)
+		result := accountError(err)
+		if result.Kind == "router" && result.FaultCode == "606" {
+			result.Message = "router denied LANConfigSecurity:X_AVM-DE_GetCurrentUser; the logged-in account needs the App, Dial, Phone, NAS, or Homeauto right"
+		}
+		return Account{}, result
 	}
 	if current.CurrentUsername == nil || len(*current.CurrentUsername) > 256 || strings.ContainsFunc(*current.CurrentUsername, unicode.IsControl) {
 		return Account{}, accountProtocolError("current username")
@@ -159,7 +170,7 @@ func parseAccountRights(value *string) ([]AccountRight, error) {
 		} `xml:",any"`
 	}
 	decoder := xml.NewDecoder(strings.NewReader(*value))
-	if err := decoder.Decode(&rights); err != nil || strings.TrimSpace(rights.Text) != "" || len(rights.Entries)%2 != 0 || len(rights.Entries) > 10 {
+	if err := decoder.Decode(&rights); err != nil || strings.TrimSpace(rights.Text) != "" || len(rights.Entries)%2 != 0 || len(rights.Entries) > 2*accountMaxRights {
 		return nil, accountProtocolError("rights list")
 	}
 	for {
@@ -181,20 +192,25 @@ func parseAccountRights(value *string) ([]AccountRight, error) {
 		}
 	}
 	result := make([]AccountRight, 0, len(rights.Entries)/2)
-	order := map[string]int{"BoxAdmin": 0, "Phone": 1, "Dial": 2, "NAS": 3, "HomeAuto": 4}
 	seen := map[string]bool{}
 	for i := 0; i < len(rights.Entries); i += 2 {
 		path, access := rights.Entries[i], rights.Entries[i+1]
 		name, permission := strings.TrimSpace(path.Value), strings.TrimSpace(access.Value)
-		_, known := order[name]
-		if path.XMLName.Local != "path" || access.XMLName.Local != "access" || len(path.Children) != 0 || len(access.Children) != 0 || !known || seen[name] || (permission != "none" && permission != "readonly" && permission != "readwrite") {
+		if path.XMLName.Local != "path" || access.XMLName.Local != "access" || len(path.Children) != 0 || len(access.Children) != 0 || !accountRightPath.MatchString(name) || seen[name] || (permission != "none" && permission != "readonly" && permission != "readwrite") {
 			return nil, accountProtocolError("rights list")
 		}
 		seen[name] = true
 		result = append(result, AccountRight{Path: name, Access: permission})
 	}
-	sort.Slice(result, func(i, j int) bool { return order[result[i].Path] < order[result[j].Path] })
+	sort.SliceStable(result, func(i, j int) bool { return accountRightRank(result[i].Path) < accountRightRank(result[j].Path) })
 	return result, nil
+}
+
+func accountRightRank(path string) int {
+	if rank, known := accountKnownRights[path]; known {
+		return rank
+	}
+	return len(accountKnownRights)
 }
 
 func accountBool(value, field string, optional bool) (*bool, error) {
