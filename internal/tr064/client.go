@@ -131,6 +131,7 @@ type DoctorCapabilities struct {
 	DHCP     DoctorCheck `json:"dhcp"`
 	DSL      DoctorCheck `json:"dsl"`
 	Firmware DoctorCheck `json:"firmware"`
+	Account  DoctorCheck `json:"account"`
 	WiFi     DoctorCheck `json:"wifi"`
 	Forwards DoctorCheck `json:"forwards"`
 	Reboot   DoctorCheck `json:"reboot"`
@@ -270,7 +271,7 @@ type soapValues struct {
 	WLANStatus, MaxBitRate                                                      string
 	Channel, FrequencyBand, TotalAssociations, BeaconType, APType               string
 	PortMappingCount, ExternalPort, PortMappingProtocol                         string
-	InternalPort, InternalClient, PortMappingEnabled, PortMappingDescription    string
+	InternalPort, InternalClient, Enabled, PortMappingDescription               string
 	RemoteHost, LeaseDuration                                                   *string
 	DHCPServerConfigurable, DHCPServerEnable, DHCPRelay                         string
 	MinAddress, MaxAddress, SubnetMask, DNSServers, DomainName, IPRouters       string
@@ -279,6 +280,8 @@ type soapValues struct {
 	UpstreamNoiseMargin, DownstreamNoiseMargin                                  string
 	UpstreamAttenuation, DownstreamAttenuation, FECErrors, CRCErrors            string
 	ATURVendor, ATURCountry, UpstreamPower, DownstreamPower                     string
+	CurrentUsername, CurrentUserRights                                          *string
+	AnonymousLoginEnabled, DefaultPasswordActive                                string
 
 	UpgradeAvailable, OfferedVersion, UpdateState, BuildType string
 	AutoUpdateMode, UpdateTime, LastFWVersion                string
@@ -396,7 +399,7 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 		case "NewInternalClient":
 			target = &v.InternalClient
 		case "NewEnabled":
-			target = &v.PortMappingEnabled
+			target = &v.Enabled
 		case "NewPortMappingDescription":
 			target = &v.PortMappingDescription
 		case "NewLeaseDuration":
@@ -474,6 +477,16 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.CurrentFWVersion
 		case "NewX_AVM-DE_UpdateSuccessful":
 			target = &v.UpdateSuccessful
+		case "NewX_AVM-DE_CurrentUsername":
+			v.CurrentUsername = new(string)
+			target = v.CurrentUsername
+		case "NewX_AVM-DE_CurrentUserRights":
+			v.CurrentUserRights = new(string)
+			target = v.CurrentUserRights
+		case "NewX_AVM-DE_AnonymousLoginEnabled":
+			target = &v.AnonymousLoginEnabled
+		case "NewX_AVM-DE_IsDefaultPasswordActive":
+			target = &v.DefaultPasswordActive
 		case "errorCode":
 			target = &v.FaultCode
 		case "errorDescription":
@@ -529,7 +542,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 		Protocol:       unknown,
 		Authentication: unknown,
 		Capabilities: DoctorCapabilities{
-			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Watch: unknown, Calls: unknown, Devices: unknown, Leases: unknown, DHCP: unknown, DSL: unknown, Firmware: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown, Backup: unknown,
+			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Watch: unknown, Calls: unknown, Devices: unknown, Leases: unknown, DHCP: unknown, DSL: unknown, Firmware: unknown, Account: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown, Backup: unknown,
 		},
 	}
 	if err := c.discover(ctx); err != nil {
@@ -560,6 +573,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 	report.Capabilities.DHCP = c.advertisedCapability([]string{dhcpServicePrefix}, dhcpRemediation)
 	report.Capabilities.DSL = c.advertisedCapability([]string{dslServicePrefix}, dslRemediation)
 	report.Capabilities.Firmware = c.advertisedCapability([]string{firmwareServicePrefix}, firmwareRemediation)
+	report.Capabilities.Account = c.accountCapability()
 	report.Capabilities.WiFi = c.advertisedCapability([]string{wlanServicePrefix}, wifiRemediation)
 	report.Capabilities.Forwards = c.advertisedCapability(wanMappingPrefixes, forwardsRemediation)
 	report.Capabilities.Reboot = c.rebootCapability()
@@ -2604,7 +2618,7 @@ func portMappingCount(value string) (uint64, error) {
 
 func parseForward(values soapValues) (Forward, error) {
 	enabled := false
-	switch strings.TrimSpace(values.PortMappingEnabled) {
+	switch strings.TrimSpace(values.Enabled) {
 	case "0", "false":
 	case "1", "true":
 		enabled = true

@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, reboot, and configuration export.
+The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, account rights and login posture, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, reboot, and configuration export.
 
 ## Design constraints
 
@@ -88,6 +88,8 @@ router-axi dsl
 router-axi dsl --json
 router-axi firmware
 router-axi firmware --json
+router-axi account
+router-axi account --json
 router-axi wifi
 router-axi wifi --json
 router-axi wifi detail
@@ -124,7 +126,7 @@ description once and, when `DeviceInfo` is advertised, invokes only
 `DeviceInfo:GetInfo` to verify authentication and obtain model and firmware.
 It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
-`wan`, `traffic`, `watch`, `calls`, `devices`, `leases`, `dhcp`, `dsl`, `firmware`, `wifi`, `forwards`, `reboot`, and
+`wan`, `traffic`, `watch`, `calls`, `devices`, `leases`, `dhcp`, `dsl`, `firmware`, `account`, `wifi`, `forwards`, `reboot`, and
 `backup`. `watch` is advertised only when the description includes Layer3Forwarding,
 WANCommonInterfaceConfig, and either WANIPConnection or WANPPPConnection; doctor does
 not invoke any of their actions. Doctor does not report a separate `guest` capability: WLANConfiguration
@@ -499,6 +501,66 @@ reports service advertisement only and does not fetch the SCPD or invoke the DSL
 action. Compatibility is fixture-backed for service versions 1 and 2, with and
 without the optional vendor, country, and power fields; it is not inferred from
 router models.
+
+### Account rights and login posture
+
+`account` reports only the current account's username and configured rights,
+plus whether anonymous login, a default password, and second-factor
+authentication are enabled. The command name follows the existing noun commands
+such as `dsl` and `dhcp`. It never enumerates other users or retrieves passwords.
+
+The command requires exactly one advertised `LANConfigSecurity` service and
+one `X_AVM-DE_Auth` service. It validates same-origin service URLs and checks
+both SCPDs before invoking any action; redirects are refused. It calls only
+`LANConfigSecurity:X_AVM-DE_GetCurrentUser`, `GetInfo`,
+`X_AVM-DE_GetAnonymousLogin`, and `X_AVM-DE_Auth:GetInfo`, all without input
+arguments ([LANConfigSecurity v12, §§2.1–2.3 and 3.1](https://fritz.support/resources/TR-064_LAN_Config_Security.pdf),
+[Authentication v5, §3.1](https://fritz.support/resources/TR-064_Authentication.pdf)).
+It never calls `X_AVM-DE_GetUserList`, `GetState`, `SetConfig`, or a password action.
+
+`GetCurrentUser` requires App, Dial, Phone, NAS, or Homeauto rights;
+LANConfigSecurity `GetInfo` and `GetAnonymousLogin` require no rights, and
+Auth `GetInfo` requires any right. Missing services or actions report
+`unsupported_capability` (exit 5); HTTP authentication failures report
+`authentication_failed` (exit 3). Malformed responses fail with a sanitized
+structured protocol error (exit 6), without echoing router response data.
+
+Synthetic compact output:
+
+```text
+account:
+  username: "synthetic-account"
+  anonymous_login_enabled: false
+  default_password_active: false
+  second_factor_enabled: true
+  rights[2]{path,access}:
+    BoxAdmin,none
+    NAS,readonly
+```
+
+The JSON field order is stable:
+
+```json
+{"username":"synthetic-account","rights":[{"path":"BoxAdmin","access":"none"},{"path":"NAS","access":"readonly"}],"anonymous_login_enabled":false,"default_password_active":false,"second_factor_enabled":true}
+```
+
+Rights use the documented paths `BoxAdmin`, `Phone`, `Dial`, `NAS`, and
+`HomeAuto`, in that order, with `none`, `readonly`, or `readwrite` access.
+The command reports these paths as returned and does not infer permission for
+`reboot`, `backup`, or any other action. Unknown paths or access values fail
+closed instead of inventing a rights mapping.
+
+The current username can legitimately be empty, particularly with anonymous
+login. Older responses may omit the rights list or the default-password flag:
+these become `null` in JSON and `unknown` in compact output. An explicitly
+empty rights list is `[]` in JSON and `0 configured rights reported` in compact
+output. Required anonymous-login and second-factor flags must be valid booleans.
+`default_password_active` describes whether at least one account has a default
+password; it neither identifies that account nor reports its password.
+`second_factor_enabled` is the configuration flag from Auth `GetInfo`, not
+an active challenge state or proof that second-factor authentication is granted.
+`doctor` reports only advertisement of both required services and performs no
+account SCPD or account action reads.
 
 ### Wi-Fi radio mutation
 
@@ -993,7 +1055,8 @@ documented `X_AVM-DE_OnTel:GetCallList`, and the standard
 the SCPD-advertised documented `LANHostConfigManagement:GetInfo` DHCP
 configuration read (never reservation inventory), the SCPD-advertised documented
 `WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo` DSL link read, the SCPD-advertised
-`UserInterface:GetInfo` and `X_AVM-DE_GetInfo` firmware status reads, and `WLANConfiguration:GetInfo`,
+`UserInterface:GetInfo` and `X_AVM-DE_GetInfo` firmware status reads, the four documented
+account reads listed above, and `WLANConfiguration:GetInfo`,
 `GetChannelInfo`, `GetTotalAssociations`, and
 `GetBeaconType`. Guest inspection additionally uses the documented AVM
 `WLANConfiguration:X_AVM-DE_GetWLANExtInfo` action only to read

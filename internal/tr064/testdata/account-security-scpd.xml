@@ -1,0 +1,5 @@
+<scpd xmlns="urn:dslforum-org:service-1-0"><actionList>
+  <action><name>X_AVM-DE_GetCurrentUser</name></action>
+  <action><name>GetInfo</name></action>
+  <action><name>X_AVM-DE_GetAnonymousLogin</name></action>
+</actionList></scpd>
