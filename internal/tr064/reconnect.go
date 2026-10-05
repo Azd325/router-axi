@@ -127,33 +127,7 @@ func (c *Client) wanReconnectURL(raw string) (*url.URL, bool) {
 }
 
 func (c *Client) wanReconnectAdvertises(ctx context.Context, svc service, action string) error {
-	unsupported := &Error{Kind: "unsupported", Operation: wanReconnectOperation, Message: "router does not advertise " + action + " for wan reconnect; " + wanReconnectRemediation}
-	if svc.SCPDURL == "" {
-		return unsupported
-	}
-	scpdURL, safe := c.wanReconnectURL(svc.SCPDURL)
-	if !safe {
-		return &Error{Kind: "protocol", Operation: wanReconnectOperation, Message: "router advertised an unsafe wan reconnect service-description URL"}
-	}
-	body, err := c.get(ctx, scpdURL)
-	if err != nil {
-		return wanReconnectPreflightError(err)
-	}
-	var scpd struct {
-		XMLName xml.Name `xml:"scpd"`
-		Actions []struct {
-			Name string `xml:"name"`
-		} `xml:"actionList>action"`
-	}
-	if err := xml.Unmarshal(body, &scpd); err != nil || scpd.XMLName.Local != "scpd" {
-		return &Error{Kind: "protocol", Operation: wanReconnectOperation, Message: "router returned an invalid wan reconnect service description"}
-	}
-	for _, candidate := range scpd.Actions {
-		if strings.TrimSpace(candidate.Name) == action {
-			return nil
-		}
-	}
-	return unsupported
+	return c.advertisesAction(ctx, svc, wanReconnectOperation, action, wanReconnectRemediation, wanReconnectPreflightError)
 }
 
 func wanReconnectPreflightError(err error) *Error {

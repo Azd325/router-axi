@@ -61,6 +61,10 @@ Wake-on-LAN previews one validated operator-supplied MAC and the exact confirmed
 command; with `--confirm` it sends Hosts:X_AVM-DE_WakeOnLANByMACAddress once,
 without device lookup, retries, or polling, and reports router acceptance rather
 than device wake. A lost response is an uncertain outcome.
+Firmware update check previews the exact confirmed command; with `--confirm` it
+sends UserInterface:X_AVM-DE_CheckUpdate once, without retries or polling, never
+starts, prepares, or configures an update, and reports router acceptance rather
+than update availability. A lost response is an uncertain outcome.
 Commands report a machine-readable result or structured error on stdout and a non-zero exit code on failure. Doctor keeps completed compact checks followed by the error; its JSON partial failure is one `{"doctor":<doctor>,"error":<structured error>}` object.
 Exit codes follow 0 success (including confirmed no-ops), 1 internal, and
 2 usage, extended by 3 authentication, 4 network, 5 unsupported capability,

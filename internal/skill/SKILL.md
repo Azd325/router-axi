@@ -1,6 +1,6 @@
 ---
 name: router-axi
-description: Inspect and operate a supported home router through the router-axi CLI (FRITZ!Box TR-064). Use when an agent needs to review router status, WAN, traffic, calls, devices, leases, DHCP server configuration, DSL link diagnostics, account rights and login posture, Wi-Fi, guest Wi-Fi, or port forwards, or to make confirmed wifi, WAN reconnect, reboot, Wake-on-LAN, or backup changes from a terminal.
+description: Inspect and operate a supported home router through the router-axi CLI (FRITZ!Box TR-064). Use when an agent needs to review router status, WAN, traffic, calls, devices, leases, DHCP server configuration, DSL link diagnostics, account rights and login posture, Wi-Fi, guest Wi-Fi, or port forwards, or to make confirmed wifi, WAN reconnect, reboot, Wake-on-LAN, firmware update check, or backup changes from a terminal.
 ---
 
 # router-axi
@@ -30,7 +30,7 @@ documentation; run the CLI for live router state.
 - `leases` — observed Hosts-table lease metadata (100 entries by default,
   `--all` for the full list).
 - `dhcp` — read-only DHCP server configuration; never reservation inventory.
-- `firmware` — read-only installed firmware, reported update availability, and auto-update state; never checks for or installs updates.
+- `firmware` — read-only installed firmware, reported update availability, and auto-update state; `firmware check` requests one update check with `--confirm`; never installs updates.
 - `dsl` — read-only DSL link diagnostics from documented WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo: link state, modulation, profile, current/max rates, noise margin, attenuation, and FEC/CRC error counters.
 - `account` — read-only own username and configured rights, anonymous login, default-password posture, and second-factor enabled state; never user enumeration or passwords.
 - `wifi` — Wi-Fi inspection; `wifi detail [--instance N]` reports one radio's safe documented properties; `wifi enable|disable` changes a radio.
@@ -67,6 +67,11 @@ documentation; run the CLI for live router state.
   confirmed command; with `--confirm` it sends the documented Hosts wake
   action once. Acceptance does not mean the device woke. Never look up
   devices, retry, or poll; a lost response is uncertain, so check manually.
+- `firmware check` without `--confirm` previews the exact confirmed command;
+  with `--confirm` it sends the documented UserInterface update-check action
+  once. Acceptance does not mean an update exists; read the result with
+  `firmware`. It never installs an update. Never retry or poll; a lost
+  response is uncertain.
 - `backup --output PATH` writes the export with an atomic owner-only file,
   never overwrites without `--force`, and requires an HTTPS router origin
   (for example `--host https://fritz.box:49443`) with a locally trusted
@@ -119,7 +124,7 @@ commands:
   leases    observed Hosts table lease metadata
   dhcp      DHCP server configuration (never reservation inventory)
   dsl       DSL link diagnostics
-  firmware  installed firmware, reported update availability, and auto-update state
+  firmware  installed firmware, reported update availability, and auto-update state; firmware check requests one update check with --confirm
   account   own rights and login posture
   wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm
   guest     documented guest Wi-Fi inspection

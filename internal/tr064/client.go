@@ -2050,6 +2050,38 @@ func (c *Client) uniqueService(prefix, operation, remediation string) (service, 
 	return svc, nil
 }
 
+// advertisesAction requires the service description of svc to list action by
+// name. Send-once operations use it to fail before any action is sent.
+func (c *Client) advertisesAction(ctx context.Context, svc service, operation, action, remediation string, preflight func(error) *Error) error {
+	unsupported := &Error{Kind: "unsupported", Operation: operation, Message: "router does not advertise " + action + " for " + operation + "; " + remediation}
+	if svc.SCPDURL == "" {
+		return unsupported
+	}
+	scpdURL, err := c.base.Parse(svc.SCPDURL)
+	if err != nil || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.ForceQuery || scpdURL.Fragment != "" {
+		return &Error{Kind: "protocol", Operation: operation, Message: "router advertised an unsafe " + operation + " service-description URL"}
+	}
+	body, err := c.get(ctx, scpdURL)
+	if err != nil {
+		return preflight(err)
+	}
+	var scpd struct {
+		XMLName xml.Name `xml:"scpd"`
+		Actions []struct {
+			Name string `xml:"name"`
+		} `xml:"actionList>action"`
+	}
+	if err := xml.Unmarshal(body, &scpd); err != nil || scpd.XMLName.Local != "scpd" {
+		return &Error{Kind: "protocol", Operation: operation, Message: "router returned an invalid " + operation + " service description"}
+	}
+	for _, candidate := range scpd.Actions {
+		if strings.TrimSpace(candidate.Name) == action {
+			return nil
+		}
+	}
+	return unsupported
+}
+
 func rebootPreflightError(err error) *Error {
 	return preflightError("reboot", "reboot preflight failed; no reboot was sent", err)
 }
