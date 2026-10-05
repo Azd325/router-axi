@@ -1724,7 +1724,10 @@ func TestWANDetailEmptyOrAbsentMonitorSeriesIsEmptyArray(t *testing.T) {
 
 func TestWANDetailOptionalReadFailuresAreAtomicAndRedacted(t *testing.T) {
 	for _, action := range []string{"X_GetDNSServers", "GetTotalBytesReceived", "GetTotalBytesSent", "GetTotalPacketsReceived", "GetTotalPacketsSent", "X_AVM-DE_GetAddonInfos", "X_AVM-DE_GetActiveProvider", "X_AVM-DE_GetOnlineMonitor"} {
-		for _, fault := range []struct{ code, kind string }{{"401", "unsupported"}, {"606", "router"}} {
+		for _, fault := range []struct{ code, kind string }{{"401", "unsupported"}, {"606", "router"}, {"501", "router"}} {
+			if fault.code == "606" && (action == "X_AVM-DE_GetAddonInfos" || action == "X_AVM-DE_GetActiveProvider") {
+				continue
+			}
 			t.Run(action+fault.code, func(t *testing.T) {
 				script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)
 				for index := range script {
@@ -1742,6 +1745,29 @@ func TestWANDetailOptionalReadFailuresAreAtomicAndRedacted(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestWANDetailKeepsLinkPropertiesWithoutAppOrPhoneRights(t *testing.T) {
+	script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)
+	for index := range script {
+		if script[index].action == "X_AVM-DE_GetAddonInfos" || script[index].action == "X_AVM-DE_GetActiveProvider" {
+			script[index].status = http.StatusInternalServerError
+			script[index].body = `<Envelope><errorCode>606</errorCode><errorDescription>private-canary</errorDescription></Envelope>`
+		}
+	}
+	detail, err := forwardFixtureClient(t, script).WANDetail(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.AccessType != "Cable" || detail.PhysicalLinkStatus != "Up" || detail.MaxDownloadBitsPerSecond != 1100000000 || detail.MaxUploadBitsPerSecond != 55000000 {
+		t.Fatalf("detail=%#v", detail)
+	}
+	if detail.SyncDownloadBitsPerSecond != nil || detail.SyncUploadBitsPerSecond != nil || detail.TariffDownloadBitsPerSecond != nil || detail.TariffUploadBitsPerSecond != nil || detail.Provider != nil {
+		t.Fatalf("detail=%#v", detail)
+	}
+	if detail.TotalDownloadPackets == nil || len(detail.DNSServers) != 2 || len(detail.SyncGroups) != 1 {
+		t.Fatalf("detail=%#v", detail)
 	}
 }
 

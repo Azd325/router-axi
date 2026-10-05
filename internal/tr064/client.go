@@ -804,20 +804,20 @@ func (c *Client) wanDetailCommonReads(ctx context.Context, common service, actio
 		}
 		*counter.target = &n
 	}
-	if actions["X_AVM-DE_GetAddonInfos"] {
-		values, err := c.actionOnService(ctx, common, "X_AVM-DE_GetAddonInfos")
-		if err != nil {
-			return wanDetailError(err)
-		}
+	addon, addonAuthorized, err := c.wanDetailRightsRestrictedRead(ctx, common, actions, "X_AVM-DE_GetAddonInfos")
+	if err != nil {
+		return err
+	}
+	if addonAuthorized {
 		for _, field := range []struct {
 			value        string
 			target       **uint64
 			zeroIsAbsent bool
 		}{
-			{values.SyncDownstream, &result.SyncDownloadBitsPerSecond, false},
-			{values.SyncUpstream, &result.SyncUploadBitsPerSecond, false},
-			{values.TariffDownstream, &result.TariffDownloadBitsPerSecond, true},
-			{values.TariffUpstream, &result.TariffUploadBitsPerSecond, true},
+			{addon.SyncDownstream, &result.SyncDownloadBitsPerSecond, false},
+			{addon.SyncUpstream, &result.SyncUploadBitsPerSecond, false},
+			{addon.TariffDownstream, &result.TariffDownloadBitsPerSecond, true},
+			{addon.TariffUpstream, &result.TariffUploadBitsPerSecond, true},
 		} {
 			n, err := parseWANDetailUint(field.value, "sync or tariff bit rate")
 			if err != nil {
@@ -829,12 +829,12 @@ func (c *Client) wanDetailCommonReads(ctx context.Context, common service, actio
 			*field.target = &n
 		}
 	}
-	if actions["X_AVM-DE_GetActiveProvider"] {
-		values, err := c.actionOnService(ctx, common, "X_AVM-DE_GetActiveProvider")
-		if err != nil {
-			return wanDetailError(err)
-		}
-		provider := strings.TrimSpace(values.Provider)
+	active, providerAuthorized, err := c.wanDetailRightsRestrictedRead(ctx, common, actions, "X_AVM-DE_GetActiveProvider")
+	if err != nil {
+		return err
+	}
+	if providerAuthorized {
+		provider := strings.TrimSpace(active.Provider)
 		if len(provider) > 128 || strings.IndexFunc(provider, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
 			return &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an invalid provider name"}
 		}
@@ -850,6 +850,21 @@ func (c *Client) wanDetailCommonReads(ctx context.Context, common service, actio
 		result.SyncGroups = groups
 	}
 	return nil
+}
+
+func (c *Client) wanDetailRightsRestrictedRead(ctx context.Context, common service, actions map[string]bool, action string) (soapValues, bool, error) {
+	if !actions[action] {
+		return soapValues{}, false, nil
+	}
+	values, err := c.actionOnService(ctx, common, action)
+	if err != nil {
+		var protocolErr *Error
+		if errors.As(err, &protocolErr) && protocolErr.Kind == "router" && protocolErr.FaultCode == "606" {
+			return soapValues{}, false, nil
+		}
+		return soapValues{}, false, wanDetailError(err)
+	}
+	return values, true, nil
 }
 
 const maxWANSyncGroups = 16

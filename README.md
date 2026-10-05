@@ -265,7 +265,8 @@ An absent optional action is never probed: its numeric/provider JSON fields are 
 compact output says `unknown`, and an unavailable monitor is `"sync_groups":null`.
 An absent DNS action produces `"dns_servers":[]`, preserving the existing contract.
 An advertised action that fails or returns malformed data fails the entire command with a
-structured error; unavailable capability is never confused with a failed read.
+structured error; unavailable capability is never confused with a failed read. The only
+exception is the authorization refusal of the two rights-restricted reads described below.
 
 The [WANCommonInterfaceConfig document](https://fritz.support/resources/TR-064_WAN_Common_Interface_Config.pdf)
 (version 22, dated 2026-02-25) documents the prefixed `X_AVM-DE_GetAddonInfos` on the common
@@ -276,7 +277,10 @@ connection-service lookup. DNS comes from the documented
 The common document explicitly requires App or Phone rights for add-on rates and provider;
 link properties allow App, Phone, NAS, or Homeauto rights. It specifies no required-rights
 list for monitor or counter actions; the IP/PPP documents likewise specify none for DNS.
-Router authorization errors remain errors.
+An account with only NAS or Homeauto rights still gets the link properties: when the router
+refuses `X_AVM-DE_GetAddonInfos` or `X_AVM-DE_GetActiveProvider` with SOAP fault `606`
+(action not authorized), the fields that read fills are `null`/`unknown`. Every other error
+on these two reads, and an authorization error on any other read, remains an error.
 
 The existing nine JSON fields retain their order. New fields follow them in this order:
 `total_download_packets`, `total_upload_packets`, `sync_download_bits_per_second`,
