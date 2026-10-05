@@ -1,6 +1,6 @@
 ---
 name: router-axi
-description: Inspect and operate a supported home router through the router-axi CLI (FRITZ!Box TR-064). Use when an agent needs to review router status, WAN, traffic, calls, devices, leases, DHCP server configuration, DSL link diagnostics, account rights and login posture, Wi-Fi, guest Wi-Fi, or port forwards, or to make confirmed wifi, WAN reconnect, reboot, Wake-on-LAN, firmware update check, or backup changes from a terminal.
+description: Inspect and operate a supported home router through the router-axi CLI (FRITZ!Box TR-064). Use when an agent needs to review router status, WAN, traffic, calls, devices, leases, DHCP server configuration, DSL link diagnostics, account rights and login posture, Wi-Fi, guest Wi-Fi, port forwards, or service exposure flags, or to make confirmed wifi, WAN reconnect, reboot, Wake-on-LAN, firmware update check, or backup changes from a terminal.
 ---
 
 # router-axi
@@ -37,6 +37,7 @@ documentation; run the CLI for live router state.
 - `guest` — documented guest Wi-Fi inspection (public SSID, aggregate state, timeout and isolation configuration).
 - `forwards` — port-forwarding rules (100 entries by default, `--all` for the
   full list).
+- `exposure` — read-only enabled, port, and status flags of remote access, DDNS, MyFRITZ, storage, UPnP, WebDAV, speedtest, and TR-069; never usernames, e-mail addresses, host names, or URLs.
 - `reboot` — preview router restart; execute once with `--confirm`.
 - `wake MAC` — preview Wake-on-LAN to one supplied MAC; send once with `--confirm`.
 - `backup` — download the documented configuration export to a file.
@@ -129,6 +130,7 @@ commands:
   wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm
   guest     documented guest Wi-Fi inspection
   forwards  port-forwarding rules
+  exposure  remote-access and local-service exposure flags
   reboot    preview router restart; execute once with --confirm
   wake      preview Wake-on-LAN to one MAC; send once with --confirm
   backup    download the documented configuration export to a file

@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The current release provides device information, WAN status, traffic statistics, bounded event-log text with group filtering, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, account rights and login posture, Wi-Fi configuration detail, documented guest Wi-Fi with timeout and isolation detail, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, WAN reconnect, reboot, Wake-on-LAN, firmware update check, and configuration export.
+The current release provides device information, WAN status, traffic statistics, bounded event-log text with group filtering, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, account rights and login posture, Wi-Fi configuration detail, documented guest Wi-Fi with timeout and isolation detail, port-forward inspection, and service exposure flags through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, WAN reconnect, reboot, Wake-on-LAN, firmware update check, and configuration export.
 
 ## Design constraints
 
@@ -117,6 +117,8 @@ router-axi backup --host https://fritz.box:49443 --output fritz.export
 router-axi forwards
 router-axi forwards --json
 router-axi forwards --all
+router-axi exposure
+router-axi exposure --json
 router-axi wan --json
 ```
 
@@ -1337,6 +1339,122 @@ with remediation; there is no fallback to another instance.
 This table is not a firewall audit: IPv6 pinholes, exposed-host settings, or
 rules unavailable through these documented actions are outside its scope.
 
+### Service exposure flags
+
+`exposure` is a read-only view of which router services are exposed. It reports
+only enabled, port, and status values. It complements
+[`forwards`](#port-forward-inspection) and is not a firewall audit.
+
+| Part | Action | Document |
+| --- | --- | --- |
+| `remote.remote_access` | `X_AVM-DE_RemoteAccess:GetInfo` | [Remote Access v13, §1.1](https://fritz.support/resources/TR-064_Remote_Access_SCPD.pdf) |
+| `remote.ddns` | `X_AVM-DE_RemoteAccess:GetDDNSInfo` | [Remote Access v13, §1.3](https://fritz.support/resources/TR-064_Remote_Access_SCPD.pdf) |
+| `remote.myfritz` | `X_AVM-DE_MyFritz:GetInfo` | [MyFritz v9, §2.1](https://fritz.support/resources/TR-064_MyFRITZ.pdf) |
+| `local.storage` | `X_AVM-DE_Storage:GetInfo` | [X_AVM-DE_Storage v14, §1.1](https://fritz.support/resources/TR-064_Storage.pdf) |
+| `local.upnp` | `X_AVM-DE_UPnP:GetInfo` | [X_UPnP v3](https://fritz.support/resources/TR-064_UPnP.pdf) |
+| `local.webdav` | `X_AVM-DE_WebDAVClient:GetInfo` | [X_AVM-DE_WebDAVClient v2](https://fritz.support/resources/TR-064_WebDAV.pdf) |
+| `local.speedtest` | `X_AVM-DE_Speedtest:GetInfo` | [Speedtest v3](https://fritz.support/resources/TR-064_Speedtest.pdf) |
+| `local.tr069` | `ManagementServer:GetInfo` | [ManagementServer v10, §1.1](https://fritz.support/resources/TR-064_Management_Server.pdf) |
+
+For each part the command requires exactly one advertised service, fetches that
+service's same-origin SCPD, and invokes the action only when the SCPD lists it.
+Control and SCPD URLs must have no user information, query, or fragment, and
+redirects are refused. No other action of these services is used and nothing is
+changed.
+
+```
+exposure:
+  remote:
+    remote_access:
+      enabled: true
+      port: 443
+      letsencrypt_enabled: true
+      letsencrypt_state: valid
+    ddns:
+      enabled: false
+      status_ipv4: offline
+      status_ipv6: offline
+    myfritz:
+      enabled: true
+      port: 8443
+      device_registered: true
+      state: dyndns_verified
+  local:
+    storage:
+      ftp_enabled: true
+      ftp_status: Enable
+      smb_enabled: false
+      ftp_wan_enabled: false
+      ftp_wan_ssl_only: false
+      ftp_wan_port: 2121
+    upnp:
+      enabled: true
+      media_server_enabled: false
+    webdav: unsupported
+    speedtest:
+      tcp_enabled: false
+      udp_enabled: false
+      udp_bidirect_enabled: false
+      wan_tcp_enabled: false
+      wan_udp_enabled: false
+      tcp_port: 4711
+      udp_port: 4712
+      udp_bidirect_port: 4713
+    tr069:
+      periodic_inform_enabled: true
+      upgrades_managed: false
+```
+
+JSON fields follow the same order:
+
+```json
+{"remote":{"remote_access":{"enabled":true,"port":443,"letsencrypt_enabled":true,"letsencrypt_state":"valid"},"ddns":{"enabled":false,"status_ipv4":"offline","status_ipv6":"offline"},"myfritz":{"enabled":true,"port":8443,"device_registered":true,"state":"dyndns_verified"}},"local":{"storage":{"ftp_enabled":true,"ftp_status":"Enable","smb_enabled":false,"ftp_wan_enabled":false,"ftp_wan_ssl_only":false,"ftp_wan_port":2121},"upnp":{"enabled":true,"media_server_enabled":false},"webdav":null,"speedtest":{"tcp_enabled":false,"udp_enabled":false,"udp_bidirect_enabled":false,"wan_tcp_enabled":false,"wan_udp_enabled":false,"tcp_port":4711,"udp_port":4712,"udp_bidirect_port":4713},"tr069":{"periodic_inform_enabled":true,"upgrades_managed":false}}}
+```
+
+A part is `unsupported` in compact output and `null` in JSON when its service is
+not advertised exactly once, when the SCPD does not list its action, or when the
+action answers with the documented invalid-action fault `401`. The other parts
+are still reported. The command exits `5` when no part is available.
+
+Enabled flags and ports are required and validated before any output.
+Arguments that a document's history lists as later additions are optional:
+`letsencrypt_enabled`, `ftp_wan_enabled`, `ftp_wan_ssl_only`, and `ftp_wan_port`
+are `unknown` (`null` in JSON) when absent. Documented status values are
+preserved; an absent or undocumented value becomes `unknown`:
+
+- `letsencrypt_state`: `not_used`, `get`, `valid`, `invalid`, `unknown`.
+- `status_ipv4` and `status_ipv6`: `offline`, `checking`, `updating`, `updated`,
+  `verifying`, `complete`, `account-disabled`, `internet-not-connected`,
+  `undefined`, and the new-address state, which the document spells
+  `new address` for IPv4 and `new-address` for IPv6.
+- MyFRITZ `state`: `myfritz_disabled`, `register_failed`, `unregister`,
+  `dyndns_unknown`, `dyndns_active`, `dyndns_update_failed`, `dyndns_auth_error`,
+  `dyndns_server_unreachable`, `dyndns_server_error`, `dyndns_server_update`,
+  `dyndns_not_verified`, `dyndns_verified`, `reserved`, `unknown`.
+- `ftp_status`: `Enable`, `Disable`, `Error`.
+
+The documents state no unit for any reported field. `tr069` reports the
+periodic-inform and managed-upgrade flags; `ManagementServer:GetInfo` returns no
+TR-069 enable flag. `webdav` is the router's WebDAV client for online storage.
+
+These actions also return usernames, an e-mail address, the DynDNS and MyFRITZ
+host names, the DDNS provider, servers and update URL, the WebDAV host URL and
+mount point, and the TR-069 server and connection-request URLs, parameter key
+and hash. The client does not decode these arguments, so they never reach
+output or errors.
+
+The remote parts need the App, Phone, NAS, or Homeauto right and `storage` needs
+the App right, as their documents state. `upnp`, `webdav`, `speedtest`, and
+`tr069` state no required rights and therefore need the configuration right
+([First Steps v60, §6.1](https://fritz.support/resources/TR-064_First_Steps.pdf)). Router fault `606` is
+reported with the required right and exit `6`, and no part is reported.
+Authentication exits `3`, network failures `4`, and malformed values and other
+router faults `6`. Errors discard router addresses, fault text, URLs, and
+response bodies. Doctor reports no `exposure` capability. Compatibility is
+fixture-backed for the complete set, a missing or duplicate service, a missing
+action, an invalid-action fault, and responses without the later arguments; it
+is not inferred from router models.
+
 `event-log` is an explicit read-only view of router log text. **The text can
 contain usernames and client addresses; explicitly requested telephony logs can
 also contain call data.** Compact output quotes free text and control characters;
@@ -1457,7 +1575,10 @@ the SCPD-advertised documented `LANHostConfigManagement:GetInfo` DHCP
 configuration read (never reservation inventory), the SCPD-advertised documented
 `WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo` DSL link read, the SCPD-advertised
 documented `WANDSLInterfaceConfig:GetStatisticsTotal` and
-`X_AVM-DE_GetDSLDiagnoseInfo` reads of `dsl detail`, the SCPD-advertised
+`X_AVM-DE_GetDSLDiagnoseInfo` reads of `dsl detail`, the SCPD-advertised documented
+`X_AVM-DE_RemoteAccess:GetInfo` and `GetDDNSInfo` and the `GetInfo` reads of
+`X_AVM-DE_MyFritz`, `X_AVM-DE_Storage`, `X_AVM-DE_UPnP`, `X_AVM-DE_WebDAVClient`,
+`X_AVM-DE_Speedtest`, and `ManagementServer` of `exposure`, the SCPD-advertised
 `UserInterface:GetInfo` and `X_AVM-DE_GetInfo` firmware status reads, the four documented
 account reads listed above, the SCPD-advertised `DeviceInfo:X_AVM-DE_GetDeviceLogPath`
 event-log read and its grouped XML download, and `WLANConfiguration:GetInfo`,

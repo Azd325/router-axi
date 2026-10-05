@@ -316,6 +316,12 @@ type soapValues struct {
 	CurrentUsername, CurrentUserRights                                            *string
 	AnonymousLoginEnabled, DefaultPasswordActive                                  string
 	HostPort, HostSpeed, HostGuest, HostVPN, HostWANAccess, HostUpdateAvailable   string
+	Port, LetsEncryptEnabled, LetsEncryptState, StatusIPv4, StatusIPv6            string
+	DeviceRegistered, MyFritzState                                                string
+	FTPEnable, FTPStatus, SMBEnable, FTPWANEnable, FTPWANSSLOnly, FTPWANPort      string
+	UPnPMediaServer, PeriodicInformEnable, UpgradesManaged                        string
+	EnableTCP, EnableUDP, EnableUDPBidirect, WANEnableTCP, WANEnableUDP           string
+	PortTCP, PortUDP, PortUDPBidirect                                             string
 
 	UpgradeAvailable, OfferedVersion, UpdateState, BuildType string
 	AutoUpdateMode, UpdateTime, LastFWVersion                string
@@ -616,6 +622,54 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.HostWANAccess
 		case "NewX_AVM-DE_UpdateAvailable":
 			target = &v.HostUpdateAvailable
+		case "NewPort":
+			target = &v.Port
+		case "NewLetsEncryptEnabled":
+			target = &v.LetsEncryptEnabled
+		case "NewLetsEncryptState":
+			target = &v.LetsEncryptState
+		case "NewStatusIPv4":
+			target = &v.StatusIPv4
+		case "NewStatusIPv6":
+			target = &v.StatusIPv6
+		case "NewDeviceRegistered":
+			target = &v.DeviceRegistered
+		case "NewState":
+			target = &v.MyFritzState
+		case "NewFTPEnable":
+			target = &v.FTPEnable
+		case "NewFTPStatus":
+			target = &v.FTPStatus
+		case "NewSMBEnable":
+			target = &v.SMBEnable
+		case "NewFTPWANEnable":
+			target = &v.FTPWANEnable
+		case "NewFTPWANSSLOnly":
+			target = &v.FTPWANSSLOnly
+		case "NewFTPWANPort":
+			target = &v.FTPWANPort
+		case "NewUPnPMediaServer":
+			target = &v.UPnPMediaServer
+		case "NewEnableTcp":
+			target = &v.EnableTCP
+		case "NewEnableUdp":
+			target = &v.EnableUDP
+		case "NewEnableUdpBidirect":
+			target = &v.EnableUDPBidirect
+		case "NewWANEnableTcp":
+			target = &v.WANEnableTCP
+		case "NewWANEnableUdp":
+			target = &v.WANEnableUDP
+		case "NewPortTcp":
+			target = &v.PortTCP
+		case "NewPortUdp":
+			target = &v.PortUDP
+		case "NewPortUdpBidirect":
+			target = &v.PortUDPBidirect
+		case "NewPeriodicInformEnable":
+			target = &v.PeriodicInformEnable
+		case "NewUpgradesManaged":
+			target = &v.UpgradesManaged
 		case "errorCode":
 			target = &v.FaultCode
 		case "errorDescription":
@@ -1342,7 +1396,7 @@ func (c *Client) DSL(ctx context.Context) (DSL, error) {
 }
 
 func (c *Client) dslService(ctx context.Context) (service, error) {
-	target, actions, err := c.dslServiceActions(ctx, "dsl", dslRemediation, dslError)
+	target, actions, err := c.serviceActions(ctx, dslServicePrefix, "WANDSLInterfaceConfig", "dsl", dslRemediation, dslError)
 	if err != nil {
 		return service{}, err
 	}
@@ -1352,21 +1406,21 @@ func (c *Client) dslService(ctx context.Context) (service, error) {
 	return target, nil
 }
 
-func (c *Client) dslServiceActions(ctx context.Context, operation, remediation string, wrap func(error) *Error) (service, map[string]bool, error) {
+func (c *Client) serviceActions(ctx context.Context, prefix, name, operation, remediation string, wrap func(error) *Error) (service, map[string]bool, error) {
 	matches := make([]service, 0, 1)
 	for _, svc := range c.allServices {
-		if strings.HasPrefix(svc.Type, dslServicePrefix) {
+		if strings.HasPrefix(svc.Type, prefix) {
 			matches = append(matches, svc)
 		}
 	}
 	if len(matches) != 1 {
-		return service{}, nil, &Error{Kind: "unsupported", Operation: operation, Message: "router does not advertise exactly one WANDSLInterfaceConfig service; " + remediation}
+		return service{}, nil, &Error{Kind: "unsupported", Operation: operation, Message: "router does not advertise exactly one " + name + " service; " + remediation}
 	}
 	target := matches[0]
 	control, controlErr := c.base.Parse(target.ControlURL)
 	scpdURL, scpdErr := c.base.Parse(target.SCPDURL)
 	if controlErr != nil || target.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.ForceQuery || control.Fragment != "" || scpdErr != nil || target.SCPDURL == "" || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.ForceQuery || scpdURL.Fragment != "" {
-		return service{}, nil, &Error{Kind: "protocol", Operation: operation, Message: "router advertised an invalid WANDSLInterfaceConfig service URL"}
+		return service{}, nil, &Error{Kind: "protocol", Operation: operation, Message: "router advertised an invalid " + name + " service URL"}
 	}
 	body, err := c.get(ctx, scpdURL)
 	if err != nil {
@@ -1379,7 +1433,7 @@ func (c *Client) dslServiceActions(ctx context.Context, operation, remediation s
 		} `xml:"actionList>action"`
 	}
 	if err := xml.Unmarshal(body, &scpd); err != nil || scpd.XMLName.Local != "scpd" {
-		return service{}, nil, &Error{Kind: "protocol", Operation: operation, Message: "router returned an invalid WANDSLInterfaceConfig service description"}
+		return service{}, nil, &Error{Kind: "protocol", Operation: operation, Message: "router returned an invalid " + name + " service description"}
 	}
 	actions := make(map[string]bool, len(scpd.Actions))
 	for _, action := range scpd.Actions {
@@ -1504,10 +1558,10 @@ func optionalDSLText(value, field string) (*string, error) {
 }
 
 func dslError(err error) *Error {
-	return dslOperationError("dsl", "DSL diagnostic inspection failed", "router does not support documented DSL diagnostics; "+dslRemediation, err)
+	return readOperationError("dsl", "DSL diagnostic inspection failed", "router does not support documented DSL diagnostics; "+dslRemediation, err)
 }
 
-func dslOperationError(operation, message, unsupported string, err error) *Error {
+func readOperationError(operation, message, unsupported string, err error) *Error {
 	result := &Error{Kind: "protocol", Operation: operation, Message: message}
 	var protocolErr *Error
 	if errors.As(err, &protocolErr) {
