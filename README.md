@@ -1216,8 +1216,9 @@ Default groups are `sys` (system), `net` (Internet), `wlan` (Wi-Fi), and `usb`.
 `--group` accepts a comma-separated selection of those groups plus `fon` (phone).
 `--group fon` or `--group all` explicitly includes telephony; default output
 excludes it. Groups come from the documented XML `group` field, never guesses
-from message text. Missing, duplicate, or unknown groups fail closed with exit
-`6` because their telephony status cannot be established.
+from message text. A log entry with a missing, duplicate, or unknown group fails
+closed with exit `6` because its telephony status cannot be established. An
+invalid `--group` value is a usage error (exit `2`).
 
 The default limit is **100 lines**, with `--limit N` bounded to **1–1000**.
 Multiline messages count toward the line limit. Router order is preserved.
