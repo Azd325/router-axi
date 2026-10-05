@@ -147,7 +147,7 @@ func assertWakeError(t *testing.T, client *Client, confirm bool, kind string, un
 }
 
 func TestWakeTargetValidationBeforeRequests(t *testing.T) {
-	for _, raw := range []string{"", "device-name", "02:00:00:00:00", "02:00:00:00:00:00:00:AB", "0200.0000.00ab", "02:00-00:00:00:AB", "02:00:00:00:00:GG", " 02:00:00:00:00:AB", "02:00:00:00:00:AB ", "02:00:00:00:00:AB,02:00:00:00:00:AC", "ff:ff:ff:ff:ff:ff", "01:00:00:00:00:01", "00:00:00:00:00:00", "<private-input>"} {
+	for _, raw := range []string{"", "device-name", "02:00:00:00:00", "02:00:00:00:00:00:00:AB", "0200.0000.00ab", "02:00-00:00:00:AB", "02-00-00-00-00-ab", "02:00:00:00:00:GG", " 02:00:00:00:00:AB", "02:00:00:00:00:AB ", "02:00:00:00:00:AB,02:00:00:00:00:AC", "ff:ff:ff:ff:ff:ff", "01:00:00:00:00:01", "00:00:00:00:00:00", "<private-input>"} {
 		for _, confirm := range []bool{false, true} {
 			client, sends := wakeFixtureClient(t, nil, false)
 			result, err := client.Wake(t.Context(), raw, confirm)
@@ -160,7 +160,7 @@ func TestWakeTargetValidationBeforeRequests(t *testing.T) {
 }
 
 func TestWakePreviewAndAccepted(t *testing.T) {
-	for _, raw := range []string{wakeTestMAC, "02:00:00:00:00:ab", "02-00-00-00-00-ab"} {
+	for _, raw := range []string{wakeTestMAC, "02:00:00:00:00:ab"} {
 		for _, confirm := range []bool{false, true} {
 			client, sends := wakeFixtureClient(t, wakeScript(confirm), false)
 			result, err := client.Wake(t.Context(), raw, confirm)
@@ -188,8 +188,8 @@ func TestWakeDigestPreflight(t *testing.T) {
 				readIndex = 1
 			}
 			if stage == "soap" || stage == "no-challenge" {
-				script = append(script[:2], wakeExchange{path: "/device-scpd.xml", body: `<scpd><actionList><action><name>GetInfo</name></action></actionList></scpd>`}, wakeExchange{path: "/device", action: "GetInfo", body: deviceFixture}, script[2])
-				readIndex = 3
+				script = append(script[:2], wakeExchange{path: "/device", action: "GetInfo", body: deviceFixture}, script[2])
+				readIndex = 2
 			}
 			if stage != "no-challenge" {
 				read := script[readIndex]
@@ -218,7 +218,7 @@ func TestWakeRequiresUniqueSupportedService(t *testing.T) {
 }
 
 func TestWakeRequiresDocumentedSCPDSignature(t *testing.T) {
-	for _, scpd := range []string{`<scpd/>`, strings.ReplaceAll(wakeSCPDFixture, wakeAction, "X_AVM-DE_SetAutoWakeOnLANByMACAddress"), strings.ReplaceAll(wakeSCPDFixture, "NewMACAddress", "NewIPAddress"), strings.ReplaceAll(wakeSCPDFixture, ">in<", ">out<"), strings.ReplaceAll(wakeSCPDFixture, ">MACAddress<", ">IPAddress<"), strings.Replace(wakeSCPDFixture, "</argumentList>", `<argument><name>Other</name><direction>in</direction></argument></argumentList>`, 1), strings.Replace(wakeSCPDFixture, "</actionList>", `<action><name>`+wakeAction+`</name></action></actionList>`, 1)} {
+	for _, scpd := range []string{`<scpd/>`, strings.ReplaceAll(wakeSCPDFixture, wakeAction, "X_AVM-DE_SetAutoWakeOnLANByMACAddress"), strings.ReplaceAll(wakeSCPDFixture, "NewMACAddress", "NewIPAddress"), strings.ReplaceAll(wakeSCPDFixture, ">in<", ">out<"), strings.Replace(wakeSCPDFixture, "</argumentList>", `<argument><name>Other</name><direction>in</direction></argument></argumentList>`, 1), strings.Replace(wakeSCPDFixture, "</actionList>", `<action><name>`+wakeAction+`</name></action></actionList>`, 1)} {
 		for _, confirm := range []bool{false, true} {
 			script := wakeScript(false)
 			script[1].body = scpd

@@ -27,7 +27,7 @@ func TestWakeOutputContract(t *testing.T) {
 		want string
 	}{
 		{[]string{"wake", wakeAppMAC}, "wake:\n  endpoint: \"http://router.test:49000\"\n  mac: \"02:00:00:00:00:AB\"\n  preview: true\n  effect: the router will send a Wake-on-LAN request to the selected MAC address\n  execute: \"router-axi wake 02:00:00:00:00:AB --host http://router.test:49000 --confirm\"\n"},
-		{[]string{"wake", "02-00-00-00-00-ab", "--json"}, `{"wake":{"endpoint":"http://router.test:49000","mac":"02:00:00:00:00:AB","preview":true,"effect":"the router will send a Wake-on-LAN request to the selected MAC address","execute":"router-axi wake 02:00:00:00:00:AB --host http://router.test:49000 --confirm --json"}}` + "\n"},
+		{[]string{"wake", "02:00:00:00:00:ab", "--json"}, `{"wake":{"endpoint":"http://router.test:49000","mac":"02:00:00:00:00:AB","preview":true,"effect":"the router will send a Wake-on-LAN request to the selected MAC address","execute":"router-axi wake 02:00:00:00:00:AB --host http://router.test:49000 --confirm --json"}}` + "\n"},
 		{[]string{"wake", wakeAppMAC, "--confirm"}, "wake:\n  endpoint: \"http://router.test:49000\"\n  mac: \"02:00:00:00:00:AB\"\n  accepted: true\n  recovery: acceptance does not mean the device woke; check the device manually; do not automatically repeat wake\n"},
 		{[]string{"--confirm", "--json", "wake", wakeAppMAC}, `{"wake":{"endpoint":"http://router.test:49000","mac":"02:00:00:00:00:AB","accepted":true,"recovery":"acceptance does not mean the device woke; check the device manually; do not automatically repeat wake"}}` + "\n"},
 	} {
@@ -41,7 +41,7 @@ func TestWakeOutputContract(t *testing.T) {
 func TestWakeGrammarBeforeFactory(t *testing.T) {
 	for _, args := range [][]string{
 		{"wake"}, {"wake", "--confirm"}, {"wake", "--mac", wakeAppMAC}, {"wake", wakeAppMAC, wakeAppMAC},
-		{"wake", "private-target"}, {"wake", "02:00:00:00:00:GG"}, {"wake", "ff:ff:ff:ff:ff:ff"},
+		{"wake", "private-target"}, {"wake", "02-00-00-00-00-ab"}, {"wake", "02:00:00:00:00:GG"}, {"wake", "ff:ff:ff:ff:ff:ff"},
 		{"wake", wakeAppMAC, "--force"}, {"wake", wakeAppMAC, "--all"}, {"wake", wakeAppMAC, "--instance", "1"},
 		{"wake", wakeAppMAC, "--confrim"}, {"wake", wakeAppMAC, "--confirm=false"}, {"wake", wakeAppMAC, "--confirm", "false"},
 		{"wake", wakeAppMAC, "--host"}, {"wake", wakeAppMAC, "--host", "--confirm"},
@@ -125,7 +125,7 @@ func TestWakeClientBoundary(t *testing.T) {
 					}
 					return ""
 				})
-				args := []string{"wake", "02-00-00-00-00-ab"}
+				args := []string{"wake", "02:00:00:00:00:ab"}
 				if explicitHost {
 					args = append(args, "--host", server.URL)
 				}
@@ -186,7 +186,11 @@ func TestWakeErrorExitCodesAndPrivacy(t *testing.T) {
 					t.Fatal("error exposed discarded data")
 				}
 			}
-			if (test.drop || test.body == "private-invalid") && !strings.Contains(stdout.String(), "wake_uncertain") {
+			wantCode := "router_protocol_error"
+			if test.drop {
+				wantCode = "router_unreachable"
+			}
+			if (test.drop || test.body == "private-invalid") && (!strings.Contains(stdout.String(), wantCode) || !strings.Contains(stdout.String(), "wake outcome is uncertain")) {
 				t.Fatal("lost response not uncertain")
 			}
 		}

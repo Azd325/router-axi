@@ -24,12 +24,12 @@ type WakeResult struct {
 
 // WakeMAC accepts one six-octet unicast target and returns its canonical form.
 func WakeMAC(raw string) (string, error) {
-	invalid := &Error{Kind: "usage", Code: "invalid_wake_target", Operation: "wake", Message: "wake requires exactly one nonzero unicast MAC address of six hexadecimal octets separated by colons or hyphens"}
-	if len(raw) != 17 || (raw[2] != ':' && raw[2] != '-') {
+	invalid := &Error{Kind: "usage", Code: "invalid_wake_target", Operation: "wake", Message: "wake requires exactly one nonzero unicast MAC address of six colon-separated hexadecimal octets"}
+	if len(raw) != 17 {
 		return "", invalid
 	}
-	for _, index := range []int{5, 8, 11, 14} {
-		if raw[index] != raw[2] {
+	for _, index := range []int{2, 5, 8, 11, 14} {
+		if raw[index] != ':' {
 			return "", invalid
 		}
 	}
@@ -64,7 +64,7 @@ func (c *Client) Wake(ctx context.Context, rawMAC string, confirm bool) (WakeRes
 	if err != nil {
 		return WakeResult{}, err
 	}
-	if err := client.wakeAdvertises(ctx, target, wakeAction); err != nil {
+	if err := client.wakeAdvertises(ctx, target); err != nil {
 		return WakeResult{}, err
 	}
 	endpoint := *client.base
@@ -77,9 +77,6 @@ func (c *Client) Wake(ctx context.Context, rawMAC string, confirm bool) (WakeRes
 	if client.username != "" && challenge == "" {
 		info, err := client.uniqueService("urn:dslforum-org:service:DeviceInfo:", "wake", "enable DeviceInfo:GetInfo for wake authentication preflight")
 		if err != nil {
-			return WakeResult{}, err
-		}
-		if err := client.wakeAdvertises(ctx, info, "GetInfo"); err != nil {
 			return WakeResult{}, err
 		}
 		if _, err := client.actionOnService(ctx, info, "GetInfo"); err != nil {
@@ -110,8 +107,8 @@ func (c *Client) Wake(ctx context.Context, rawMAC string, confirm bool) (WakeRes
 	return result, nil
 }
 
-func (c *Client) wakeAdvertises(ctx context.Context, svc service, action string) error {
-	unsupported := &Error{Kind: "unsupported", Operation: "wake", Message: "router does not advertise the documented " + action + " signature for wake; " + wakeRemediation}
+func (c *Client) wakeAdvertises(ctx context.Context, svc service) error {
+	unsupported := &Error{Kind: "unsupported", Operation: "wake", Message: "router does not advertise the documented " + wakeAction + " signature for wake; " + wakeRemediation}
 	if svc.SCPDURL == "" {
 		return unsupported
 	}
@@ -130,7 +127,6 @@ func (c *Client) wakeAdvertises(ctx context.Context, svc service, action string)
 			Arguments []struct {
 				Name      string `xml:"name"`
 				Direction string `xml:"direction"`
-				State     string `xml:"relatedStateVariable"`
 			} `xml:"argumentList>argument"`
 		} `xml:"actionList>action"`
 	}
@@ -139,19 +135,12 @@ func (c *Client) wakeAdvertises(ctx context.Context, svc service, action string)
 	}
 	matches := 0
 	for _, candidate := range scpd.Actions {
-		if strings.TrimSpace(candidate.Name) != action {
+		if strings.TrimSpace(candidate.Name) != wakeAction {
 			continue
 		}
 		matches++
-		if action == wakeAction && (len(candidate.Arguments) != 1 || strings.TrimSpace(candidate.Arguments[0].Name) != "NewMACAddress" || strings.TrimSpace(candidate.Arguments[0].Direction) != "in" || strings.TrimSpace(candidate.Arguments[0].State) != "MACAddress") {
+		if len(candidate.Arguments) != 1 || strings.TrimSpace(candidate.Arguments[0].Name) != "NewMACAddress" || strings.TrimSpace(candidate.Arguments[0].Direction) != "in" {
 			return unsupported
-		}
-		if action == "GetInfo" {
-			for _, argument := range candidate.Arguments {
-				if strings.TrimSpace(argument.Direction) != "out" {
-					return unsupported
-				}
-			}
 		}
 	}
 	if matches != 1 {
