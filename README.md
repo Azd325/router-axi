@@ -1423,6 +1423,8 @@ the SCPD-advertised documented `Hosts:X_AVM-DE_GetSpecificHostEntryByIP` read of
 the SCPD-advertised documented `LANHostConfigManagement:GetInfo` DHCP
 configuration read (never reservation inventory), the SCPD-advertised documented
 `WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo` DSL link read, the SCPD-advertised
+documented `WANDSLInterfaceConfig:GetStatisticsTotal` and
+`X_AVM-DE_GetDSLDiagnoseInfo` reads of `dsl detail`, the SCPD-advertised
 `UserInterface:GetInfo` and `X_AVM-DE_GetInfo` firmware status reads, the four documented
 account reads listed above, the SCPD-advertised `DeviceInfo:X_AVM-DE_GetDeviceLogPath`
 event-log read and its grouped XML download, and `WLANConfiguration:GetInfo`,
