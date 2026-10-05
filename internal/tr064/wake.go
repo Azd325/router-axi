@@ -53,10 +53,6 @@ func (c *Client) Wake(ctx context.Context, rawMAC string, confirm bool) (WakeRes
 	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return errors.New("wake refuses redirects") }
 	client.http = &httpClient
 	client.services, client.allServices, client.digestChallenge = nil, nil, nil
-	var challenge string
-	if client.username != "" {
-		client.digestChallenge = &challenge
-	}
 	if err := client.discover(ctx); err != nil {
 		return WakeResult{}, wakePreflightError(err)
 	}
@@ -74,11 +70,13 @@ func (c *Client) Wake(ctx context.Context, rawMAC string, confirm bool) (WakeRes
 		result.Preview = true
 		return result, nil
 	}
-	if client.username != "" && challenge == "" {
+	var challenge string
+	if client.username != "" {
 		info, err := client.uniqueService("urn:dslforum-org:service:DeviceInfo:", "wake", "enable DeviceInfo:GetInfo for wake authentication preflight")
 		if err != nil {
 			return WakeResult{}, err
 		}
+		client.digestChallenge = &challenge
 		if _, err := client.actionOnService(ctx, info, "GetInfo"); err != nil {
 			return WakeResult{}, wakePreflightError(err)
 		}

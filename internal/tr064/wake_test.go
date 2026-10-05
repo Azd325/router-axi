@@ -180,25 +180,19 @@ func TestWakePreviewAndAccepted(t *testing.T) {
 }
 
 func TestWakeDigestPreflight(t *testing.T) {
-	for _, stage := range []string{"description", "scpd", "soap", "no-challenge"} {
+	for _, stage := range []string{"soap", "no-challenge"} {
 		t.Run(stage, func(t *testing.T) {
 			script := wakeScript(true)
-			readIndex := 0
-			if stage == "scpd" {
-				readIndex = 1
-			}
-			if stage == "soap" || stage == "no-challenge" {
-				script = append(script[:2], wakeExchange{path: "/device", action: "GetInfo", body: deviceFixture}, script[2])
-				readIndex = 2
-			}
-			if stage != "no-challenge" {
-				read := script[readIndex]
+			read := wakeExchange{path: "/device", action: "GetInfo", body: deviceFixture}
+			preflight := []wakeExchange{read}
+			if stage == "soap" {
 				challenge, authorized := read, read
 				challenge.status, challenge.challenge, challenge.body = 401, rebootDigestChallenge, ""
 				authorized.auth = true
-				script[len(script)-1].auth = true
-				script = append(script[:readIndex], append([]wakeExchange{challenge, authorized}, script[readIndex+1:]...)...)
+				script[2].auth = true
+				preflight = []wakeExchange{challenge, authorized}
 			}
+			script = append(script[:2], append(preflight, script[2])...)
 			client, sends := wakeFixtureClient(t, script, true)
 			result, err := client.Wake(t.Context(), wakeTestMAC, true)
 			if err != nil || !result.Accepted || sends.Load() != 1 {

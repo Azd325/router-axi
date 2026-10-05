@@ -62,6 +62,23 @@ func TestWakeGrammarBeforeFactory(t *testing.T) {
 	}
 }
 
+func TestWakeMalformedTargetMessage(t *testing.T) {
+	application := New(func(Config) (Reader, error) { t.Fatal("malformed target reached factory"); return nil, nil }, func(string) string { return "" })
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), []string{"wake", "02-00-00-00-00-ab", "--json"}, &stdout, &stderr)
+	var output struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatal(err)
+	}
+	if want := "wake requires exactly one nonzero unicast MAC address of six colon-separated hexadecimal octets"; code != ExitUsage || output.Error.Message != want {
+		t.Fatalf("code=%d message=%q", code, output.Error.Message)
+	}
+}
+
 func TestWakeHelpIsOffline(t *testing.T) {
 	application := New(func(Config) (Reader, error) { t.Fatal("help reached factory"); return nil, nil }, func(string) string { t.Fatal("help read environment"); return "" })
 	for _, args := range [][]string{{"wake", "--help"}, {"wake", "--confirm", "--help"}, {"wake", wakeAppMAC, "--help"}} {

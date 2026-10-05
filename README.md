@@ -806,8 +806,8 @@ nonzero exit code; check the device manually and do not automatically repeat.
 The [AVM Hosts document](https://fritz.support/resources/TR-064_Hosts.pdf),
 section 2.9, specifies one input and no outputs, and gives no required-rights declaration
 for this action. Router authentication and fault responses remain authoritative.
-If credentials are configured and discovery/SCPD reads yield no Digest
-challenge, a `DeviceInfo:GetInfo` read prepares authentication before sending. No device inventory is read. Doctor's generic Hosts advertisement
+If credentials are configured, a `DeviceInfo:GetInfo` read supplies the Digest
+challenge before sending. No device inventory is read. Doctor's generic Hosts advertisement
 is not proof of Wake-on-LAN support; `wake` checks its action before execution.
 Tests use synthetic servers only. No live Wake-on-LAN test is provided, and
 existing live-test flags cannot wake a device; future coverage needs a distinct

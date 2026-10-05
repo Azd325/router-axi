@@ -556,6 +556,10 @@ func parse(args []string) (options, error) {
 					return opts, errors.New("wake requires exactly one MAC address")
 				}
 				mac, err := tr064.WakeMAC(args[i])
+				var invalid *tr064.Error
+				if errors.As(err, &invalid) {
+					return opts, errors.New(invalid.Message)
+				}
 				if err != nil {
 					return opts, err
 				}
