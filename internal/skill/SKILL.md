@@ -1,6 +1,6 @@
 ---
 name: router-axi
-description: Inspect and operate a supported home router through the router-axi CLI (FRITZ!Box TR-064). Use when an agent needs to review router status, WAN, traffic, calls, devices, leases, DHCP server configuration, DSL link diagnostics, account rights and login posture, Wi-Fi, guest Wi-Fi, or port forwards, or to make confirmed wifi, WAN reconnect, reboot, or backup changes from a terminal.
+description: Inspect and operate a supported home router through the router-axi CLI (FRITZ!Box TR-064). Use when an agent needs to review router status, WAN, traffic, calls, devices, leases, DHCP server configuration, DSL link diagnostics, account rights and login posture, Wi-Fi, guest Wi-Fi, or port forwards, or to make confirmed wifi, WAN reconnect, reboot, Wake-on-LAN, or backup changes from a terminal.
 ---
 
 # router-axi
@@ -38,6 +38,7 @@ documentation; run the CLI for live router state.
 - `forwards` — port-forwarding rules (100 entries by default, `--all` for the
   full list).
 - `reboot` — preview router restart; execute once with `--confirm`.
+- `wake MAC` — preview Wake-on-LAN to one supplied MAC; send once with `--confirm`.
 - `backup` — download the documented configuration export to a file.
 - `setup install|check|uninstall --agent claude|codex|opencode|all` — explicitly manage offline session integrations; nothing is registered automatically.
 - `session dashboard` — offline context for the installed session integration; never contacts the router.
@@ -62,6 +63,10 @@ documentation; run the CLI for live router state.
   internet connection drops and a new external address may be assigned.
   **WAN reconnect is not idempotent** — never repeat it after an error or
   lost response; check the connection manually with `wan`.
+- `wake MAC` without `--confirm` previews one validated MAC and the exact
+  confirmed command; with `--confirm` it sends the documented Hosts wake
+  action once. Acceptance does not mean the device woke. Never look up
+  devices, retry, or poll; a lost response is uncertain, so check manually.
 - `backup --output PATH` writes the export with an atomic owner-only file,
   never overwrites without `--force`, and requires an HTTPS router origin
   (for example `--host https://fritz.box:49443`) with a locally trusted
@@ -119,6 +124,7 @@ commands:
   guest     documented guest Wi-Fi inspection
   forwards  port-forwarding rules
   reboot    preview router restart; execute once with --confirm
+  wake      preview Wake-on-LAN to one MAC; send once with --confirm
   backup    download the documented configuration export to a file
   skill     install the router-axi agent skill (explicit opt-in)
   setup     manage opt-in Claude Code, Codex, and OpenCode session integrations

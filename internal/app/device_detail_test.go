@@ -84,7 +84,7 @@ func TestDeviceDetailTargetIsExactlyOneAddress(t *testing.T) {
 		{[]string{"devices", "--ip", "192.0.2.20"}, "--ip is valid only with devices detail"},
 		{[]string{"leases", "--ip", "192.0.2.20"}, "--ip is valid only with devices detail"},
 		{[]string{"devices", "192.0.2.20"}, "exactly one command is required"},
-		{[]string{"devices", "detail", "--ip", "192.0.2.20", "--confirm"}, "--confirm is valid only with reboot, wan reconnect, wifi enable, or wifi disable"},
+		{[]string{"devices", "detail", "--ip", "192.0.2.20", "--confirm"}, "--confirm is valid only with reboot, wake, wan reconnect, wifi enable, or wifi disable"},
 	} {
 		for _, jsonOutput := range []bool{false, true} {
 			args := test.args

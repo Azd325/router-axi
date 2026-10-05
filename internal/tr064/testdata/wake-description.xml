@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<root xmlns="urn:dslforum-org:device-1-0"><device><serviceList>
+  <service><serviceType>urn:dslforum-org:service:Hosts:1</serviceType><serviceId>urn:LanDeviceHosts-com:serviceId:Hosts1</serviceId><controlURL>/hosts</controlURL><SCPDURL>/hosts-scpd.xml</SCPDURL></service>
+  <service><serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType><controlURL>/device</controlURL><SCPDURL>/device-scpd.xml</SCPDURL></service>
+</serviceList></device></root>

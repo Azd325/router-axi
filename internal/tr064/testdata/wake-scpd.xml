@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<scpd xmlns="urn:dslforum-org:service-1-0"><actionList>
+  <action><name>X_AVM-DE_WakeOnLANByMACAddress</name><argumentList><argument><name>NewMACAddress</name><direction>in</direction><relatedStateVariable>MACAddress</relatedStateVariable></argument></argumentList></action>
+</actionList><serviceStateTable><stateVariable sendEvents="no"><name>MACAddress</name><dataType>string</dataType></stateVariable></serviceStateTable></scpd>
