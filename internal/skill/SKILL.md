@@ -114,6 +114,7 @@ commands:
   traffic   byte totals
   watch     bounded WAN state and traffic polling (6 samples, 5s interval)
   calls     call history
+  event-log bounded router events (telephony excluded by default)
   devices   connected and known LAN clients; devices detail adds one device's link and access state
   leases    observed Hosts table lease metadata
   dhcp      DHCP server configuration (never reservation inventory)

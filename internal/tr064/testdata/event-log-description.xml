@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<root><device><serviceList><service>
+  <serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType>
+  <serviceId>urn:DeviceInfo-com:serviceId:DeviceInfo1</serviceId>
+  <controlURL>/device-info</controlURL>
+  <SCPDURL>/device-info.xml</SCPDURL>
+</service></serviceList></device></root>

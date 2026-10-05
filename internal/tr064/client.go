@@ -157,6 +157,7 @@ type DoctorCapabilities struct {
 	Forwards DoctorCheck `json:"forwards"`
 	Reboot   DoctorCheck `json:"reboot"`
 	Backup   DoctorCheck `json:"backup"`
+	EventLog DoctorCheck `json:"event_log"`
 }
 
 type Doctor struct {
@@ -605,7 +606,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 		Protocol:       unknown,
 		Authentication: unknown,
 		Capabilities: DoctorCapabilities{
-			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Watch: unknown, Calls: unknown, Devices: unknown, Leases: unknown, DHCP: unknown, DSL: unknown, Firmware: unknown, Account: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown, Backup: unknown,
+			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Watch: unknown, Calls: unknown, Devices: unknown, Leases: unknown, DHCP: unknown, DSL: unknown, Firmware: unknown, Account: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown, Backup: unknown, EventLog: unknown,
 		},
 	}
 	if err := c.discover(ctx); err != nil {
@@ -641,6 +642,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 	report.Capabilities.Forwards = c.advertisedCapability(wanMappingPrefixes, forwardsRemediation)
 	report.Capabilities.Reboot = c.rebootCapability()
 	report.Capabilities.Backup = c.backupCapability()
+	report.Capabilities.EventLog = c.advertisedCapability([]string{eventLogServicePrefix}, eventLogRemediation)
 	if report.Capabilities.Status.State == "advertised" && report.Capabilities.WAN.State == "advertised" && report.Capabilities.Traffic.State == "advertised" {
 		report.Capabilities.Overview = DoctorCheck{State: "advertised"}
 	} else {

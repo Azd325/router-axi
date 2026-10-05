@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>
+  <u:X_AVM-DE_GetDeviceLogPathResponse xmlns:u="urn:dslforum-org:service:DeviceInfo:1">
+    <NewDeviceLogPath>/event-log.lua?token=synthetic-token</NewDeviceLogPath>
+  </u:X_AVM-DE_GetDeviceLogPathResponse>
+</s:Body></s:Envelope>
