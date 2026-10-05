@@ -305,6 +305,11 @@ type soapValues struct {
 	UpstreamNoiseMargin, DownstreamNoiseMargin                                    string
 	UpstreamAttenuation, DownstreamAttenuation, FECErrors, CRCErrors              string
 	ATURVendor, ATURCountry, UpstreamPower, DownstreamPower                       string
+	ReceiveBlocks, TransmitBlocks, CellDelin, LinkRetrain, InitErrors             string
+	InitTimeouts, LossOfFraming, ErroredSecs, SeverelyErroredSecs                 string
+	ATUCFECErrors, HECErrors, ATUCHECErrors, ATUCCRCErrors                        string
+	DSLDiagnoseState, CableNokDistance, DSLLastDiagnoseTime, DSLSignalLossTime    string
+	DSLActive, DSLSync                                                            string
 	CurrentUsername, CurrentUserRights                                            *string
 	AnonymousLoginEnabled, DefaultPasswordActive                                  string
 	HostPort, HostSpeed, HostGuest, HostVPN, HostWANAccess, HostUpdateAvailable   string
@@ -509,6 +514,45 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.UpstreamPower
 		case "NewDownstreamPower":
 			target = &v.DownstreamPower
+		case "NewReceiveBlocks":
+			target = &v.ReceiveBlocks
+		case "NewTransmitBlocks":
+			target = &v.TransmitBlocks
+		case "NewCellDelin":
+			target = &v.CellDelin
+		case "NewLinkRetrain":
+			target = &v.LinkRetrain
+		case "NewInitErrors":
+			target = &v.InitErrors
+		case "NewInitTimeouts":
+			target = &v.InitTimeouts
+		case "NewLossOfFraming":
+			target = &v.LossOfFraming
+		case "NewErroredSecs":
+			target = &v.ErroredSecs
+		case "NewSeverelyErroredSecs":
+			target = &v.SeverelyErroredSecs
+		case "NewATUCFECErrors":
+			target = &v.ATUCFECErrors
+		case "NewHECErrors":
+			target = &v.HECErrors
+		case "NewATUCHECErrors":
+			target = &v.ATUCHECErrors
+		case "NewATUCCRCErrors":
+			target = &v.ATUCCRCErrors
+		// The vendor document (WANDSLInterfaceConfig v9, §3.3) spells this argument "Digagnose".
+		case "NewX_AVM-DE_DSLDigagnoseState":
+			target = &v.DSLDiagnoseState
+		case "NewX_AVM-DE_CableNokDistance":
+			target = &v.CableNokDistance
+		case "NewX_AVM-DE_DSLLastDiagnoseTime":
+			target = &v.DSLLastDiagnoseTime
+		case "NewX_AVM-DE_DSLSignalLossTime":
+			target = &v.DSLSignalLossTime
+		case "NewX_AVM-DE_DSLActive":
+			target = &v.DSLActive
+		case "NewX_AVM-DE_DSLSync":
+			target = &v.DSLSync
 		case "GetInfoResponse", "X_AVM-DE_GetInfoResponse":
 			v.FirmwareResponseName = e.Name.Local
 		case "NewUpgradeAvailable":
@@ -1277,6 +1321,17 @@ func (c *Client) DSL(ctx context.Context) (DSL, error) {
 }
 
 func (c *Client) dslService(ctx context.Context) (service, error) {
+	target, actions, err := c.dslServiceActions(ctx, "dsl", dslRemediation, dslError)
+	if err != nil {
+		return service{}, err
+	}
+	if !actions["X_AVM-DE_GetDSLInfo"] {
+		return service{}, &Error{Kind: "unsupported", Operation: "dsl", Message: "router does not advertise WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo; " + dslRemediation}
+	}
+	return target, nil
+}
+
+func (c *Client) dslServiceActions(ctx context.Context, operation, remediation string, wrap func(error) *Error) (service, map[string]bool, error) {
 	matches := make([]service, 0, 1)
 	for _, svc := range c.allServices {
 		if strings.HasPrefix(svc.Type, dslServicePrefix) {
@@ -1284,17 +1339,17 @@ func (c *Client) dslService(ctx context.Context) (service, error) {
 		}
 	}
 	if len(matches) != 1 {
-		return service{}, &Error{Kind: "unsupported", Operation: "dsl", Message: "router does not advertise exactly one WANDSLInterfaceConfig service; " + dslRemediation}
+		return service{}, nil, &Error{Kind: "unsupported", Operation: operation, Message: "router does not advertise exactly one WANDSLInterfaceConfig service; " + remediation}
 	}
 	target := matches[0]
 	control, controlErr := c.base.Parse(target.ControlURL)
 	scpdURL, scpdErr := c.base.Parse(target.SCPDURL)
 	if controlErr != nil || target.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.ForceQuery || control.Fragment != "" || scpdErr != nil || target.SCPDURL == "" || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.ForceQuery || scpdURL.Fragment != "" {
-		return service{}, &Error{Kind: "protocol", Operation: "dsl", Message: "router advertised an invalid WANDSLInterfaceConfig service URL"}
+		return service{}, nil, &Error{Kind: "protocol", Operation: operation, Message: "router advertised an invalid WANDSLInterfaceConfig service URL"}
 	}
 	body, err := c.get(ctx, scpdURL)
 	if err != nil {
-		return service{}, dslError(err)
+		return service{}, nil, wrap(err)
 	}
 	var scpd struct {
 		XMLName xml.Name `xml:"scpd"`
@@ -1303,15 +1358,14 @@ func (c *Client) dslService(ctx context.Context) (service, error) {
 		} `xml:"actionList>action"`
 	}
 	if err := xml.Unmarshal(body, &scpd); err != nil || scpd.XMLName.Local != "scpd" {
-		return service{}, &Error{Kind: "protocol", Operation: "dsl", Message: "router returned an invalid WANDSLInterfaceConfig service description"}
+		return service{}, nil, &Error{Kind: "protocol", Operation: operation, Message: "router returned an invalid WANDSLInterfaceConfig service description"}
 	}
+	actions := make(map[string]bool, len(scpd.Actions))
 	for _, action := range scpd.Actions {
-		if strings.TrimSpace(action.Name) == "X_AVM-DE_GetDSLInfo" {
-			target.ControlURL = control.Path
-			return target, nil
-		}
+		actions[strings.TrimSpace(action.Name)] = true
 	}
-	return service{}, &Error{Kind: "unsupported", Operation: "dsl", Message: "router does not advertise WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo; " + dslRemediation}
+	target.ControlURL = control.Path
+	return target, actions, nil
 }
 
 func parseDSLInfo(values soapValues) (DSL, error) {
@@ -1429,7 +1483,11 @@ func optionalDSLText(value, field string) (*string, error) {
 }
 
 func dslError(err error) *Error {
-	result := &Error{Kind: "protocol", Operation: "dsl", Message: "DSL diagnostic inspection failed"}
+	return dslOperationError("dsl", "DSL diagnostic inspection failed", "router does not support documented DSL diagnostics; "+dslRemediation, err)
+}
+
+func dslOperationError(operation, message, unsupported string, err error) *Error {
+	result := &Error{Kind: "protocol", Operation: operation, Message: message}
 	var protocolErr *Error
 	if errors.As(err, &protocolErr) {
 		result.Kind, result.StatusCode, result.FaultCode = protocolErr.Kind, protocolErr.StatusCode, protocolErr.FaultCode
@@ -1440,7 +1498,7 @@ func dslError(err error) *Error {
 		}
 	}
 	if result.Kind == "unsupported" {
-		result.Message = "router does not support documented DSL diagnostics; " + dslRemediation
+		result.Message = unsupported
 	}
 	return result
 }

@@ -52,6 +52,7 @@ type Reader interface {
 	Leases(context.Context) ([]tr064.Lease, error)
 	DHCP(context.Context) (tr064.DHCP, error)
 	DSL(context.Context) (tr064.DSL, error)
+	DSLDetail(context.Context) (tr064.DSLDetail, error)
 	Firmware(context.Context) (tr064.Firmware, error)
 	EventLog(context.Context, string, int) (tr064.EventLog, error)
 	Account(context.Context) (tr064.Account, error)
@@ -415,7 +416,11 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		case "dhcp":
 			value, err = reader.DHCP(ctx)
 		case "dsl":
-			value, err = reader.DSL(ctx)
+			if opts.action == "detail" {
+				value, err = reader.DSLDetail(ctx)
+			} else {
+				value, err = reader.DSL(ctx)
+			}
 		case "event-log":
 			value, err = reader.EventLog(ctx, opts.group, opts.limit)
 		case "firmware":
@@ -628,6 +633,13 @@ func parse(args []string) (options, error) {
 			if opts.command == "devices" && opts.action != "" {
 				return opts, errors.New("devices accepts one action: detail; select the device with --ip ADDRESS")
 			}
+			if opts.command == "dsl" && opts.action == "" && args[i] == "detail" {
+				opts.action = args[i]
+				continue
+			}
+			if opts.command == "dsl" && opts.action != "" {
+				return opts, errors.New("dsl accepts one action: detail")
+			}
 			if opts.command == "skill" {
 				if args[i] == "install" && opts.action == "" {
 					opts.action = args[i]
@@ -707,7 +719,7 @@ var commandHelp = map[string]string{
 	"dhcp":     "usage: router-axi dhcp [--host ADDRESS] [--json] [--help]\nRead-only DHCP server configuration from documented LANHostConfigManagement actions advertised by the router. Reports server state and available range, subnet, router, DNS, and domain settings; never reservation inventory.\nexamples: router-axi dhcp; router-axi dhcp --json\n",
 	"firmware": "usage: router-axi firmware [--host ADDRESS] [--json] [check [--confirm]] [--help]\nRead-only installed firmware, reported update availability, and auto-update configuration from UserInterface:GetInfo and X_AVM-DE_GetInfo. Does not refresh the update check or change configuration. firmware check asks the router to check for an update once: preview without --confirm.\nexamples: router-axi firmware; router-axi firmware --json; router-axi firmware check\n",
 	"account":  "usage: router-axi account [--host ADDRESS] [--json] [--help]\nRead-only current username, configured rights, anonymous login, default password posture, and second-factor enabled state. Never enumerates users or retrieves passwords.\nexamples: router-axi account; router-axi account --json\n",
-	"dsl":      "usage: router-axi dsl [--host ADDRESS] [--json] [--help]\nRead-only DSL link diagnostics from documented WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo. Reports link state, rates, margins, attenuation, and error counters; never credentials or line identifiers.\nexamples: router-axi dsl; router-axi dsl --json\n",
+	"dsl":      "usage: router-axi dsl [detail] [--host ADDRESS] [--json] [--help]\nRead-only DSL link diagnostics from documented WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo. Reports link state, rates, margins, attenuation, and error counters; never credentials or line identifiers. dsl detail reports the total error counters and the router's line-fault diagnosis.\nexamples: router-axi dsl; router-axi dsl --json; router-axi dsl detail\n",
 	"wifi":     "usage: router-axi wifi [detail [--instance N]] [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection; wifi detail reports one radio's safe documented properties. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi detail --instance 1; router-axi wifi disable --instance 1 --confirm\n",
 	"guest":    "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID and aggregate radio state only; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n",
 	"forwards": "usage: router-axi forwards [--all] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi forwards; router-axi forwards --all --json\n",
@@ -845,6 +857,9 @@ func help(command, action string) string {
 	if command == "wifi" && action == "detail" {
 		return "usage: router-axi wifi detail [--instance N] [--host ADDRESS] [--json] [--help]\nRead-only per-radio Wi-Fi detail from documented WLANConfiguration:GetInfo and GetChannelInfo, validated against the service description first.\nReports enable status, status, standard, max bitrate, channel, and band; absent optional fields are unknown. --instance N (1 or greater) is required when the router advertises more than one radio.\nBSSIDs, keys, and client details are never read or printed.\nexamples: router-axi wifi detail; router-axi wifi detail --instance 2; router-axi wifi detail --instance 1 --json\n"
 	}
+	if command == "dsl" && action == "detail" {
+		return "usage: router-axi dsl detail [--host ADDRESS] [--json] [--help]\nRead-only DSL total error counters and the router's own line-fault diagnosis from documented WANDSLInterfaceConfig:GetStatisticsTotal and X_AVM-DE_GetDSLDiagnoseInfo, validated against the service description first.\nA part whose action the router does not advertise or rejects as an invalid action is unsupported (null in JSON); the command fails as unsupported only when neither part is available.\ncable_fault_distance_meters is unknown when the router reports -1. The document reports -1 in every state except DONE_CABLE_NOK with a detected location; in DONE_CABLE_NOK it means that the distance could not be detected or is too inaccurate. Nothing is reset, started, or changed.\nexamples: router-axi dsl detail; router-axi dsl detail --json\n"
+	}
 	if command == "devices" && action == "detail" {
 		return "usage: router-axi devices detail --ip ADDRESS [--host ADDRESS] [--json] [--help]\nRead-only detail for exactly one LAN device from documented Hosts:X_AVM-DE_GetSpecificHostEntryByIP, validated against the service description first.\nReports the devices fields plus Ethernet port, speed in Mbit/s, guest and VPN flags, WAN access, and firmware update state; absent optional fields are unknown. --ip takes one IPv4 address and is required; the command never reports more than one device.\nThe logged-in account needs the App or Phone right. No other returned field is kept or printed.\nexamples: router-axi devices detail --ip 192.0.2.20; router-axi devices detail --ip 192.0.2.20 --json\n"
 	}
@@ -886,7 +901,7 @@ func help(command, action string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + " [--help]\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details; wan reconnect drops the connection once with --confirm\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  event-log bounded router events (telephony excluded by default)\n  devices   connected and known LAN clients; devices detail adds one device's link and access state\n  leases    observed Hosts table lease metadata\n  dhcp      DHCP server configuration (never reservation inventory)\n  dsl       DSL link diagnostics\n  firmware  installed firmware, reported update availability, and auto-update state; firmware check requests one update check with --confirm\n  account   own rights and login posture\n  wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  wake      preview Wake-on-LAN to one MAC; send once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details; wan reconnect drops the connection once with --confirm\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  event-log bounded router events (telephony excluded by default)\n  devices   connected and known LAN clients; devices detail adds one device's link and access state\n  leases    observed Hosts table lease metadata\n  dhcp      DHCP server configuration (never reservation inventory)\n  dsl       DSL link diagnostics; dsl detail adds total error counters and the router's line-fault diagnosis\n  firmware  installed firmware, reported update availability, and auto-update state; firmware check requests one update check with --confirm\n  account   own rights and login posture\n  wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  wake      preview Wake-on-LAN to one MAC; send once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -1095,6 +1110,9 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 	case "account":
 		return writeAccount(w, value.(tr064.Account))
 	case "dsl":
+		if v, ok := value.(tr064.DSLDetail); ok {
+			return writeDSLDetail(w, v)
+		}
 		v := value.(tr064.DSL)
 		_, err := fmt.Fprintf(w, "dsl:\n  link_status: %s\n  modulation_type: %s\n  current_profile: %s\n  upstream_current_kbps: %d\n  downstream_current_kbps: %d\n  upstream_max_kbps: %d\n  downstream_max_kbps: %d\n  upstream_noise_margin_tenth_db: %d\n  downstream_noise_margin_tenth_db: %d\n  upstream_attenuation_tenth_db: %d\n  downstream_attenuation_tenth_db: %d\n  fec_errors: %d\n  crc_errors: %d\n  atur_vendor: %s\n  atur_country: %s\n  upstream_power_tenth_dbm: %s\n  downstream_power_tenth_dbm: %s\n", scalar(v.LinkStatus), scalar(v.ModulationType), scalar(v.CurrentProfile), v.UpstreamCurrentKbps, v.DownstreamCurrentKbps, v.UpstreamMaxKbps, v.DownstreamMaxKbps, v.UpstreamNoiseMarginTenthDB, v.DownstreamNoiseMarginTenthDB, v.UpstreamAttenuationTenthDB, v.DownstreamAttenuationTenthDB, v.FECErrors, v.CRCErrors, optionalText(v.ATURVendor), optionalText(v.ATURCountry), optionalInt(v.UpstreamPowerTenthDBm), optionalInt(v.DownstreamPowerTenthDBm))
 		return err

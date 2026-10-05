@@ -564,7 +564,7 @@ func dslFixtureClient(t *testing.T, description, scpd string, responses map[stri
 		header := strings.Trim(r.Header.Get("SOAPAction"), `"`)
 		serviceType, action, ok := strings.Cut(header, "#")
 		requests = append(requests, r.URL.Path+"#"+action)
-		allowed := map[string]bool{"X_AVM-DE_GetDSLInfo": true, "GetInfo": true}
+		allowed := map[string]bool{"X_AVM-DE_GetDSLInfo": true, "GetInfo": true, "GetStatisticsTotal": true, "X_AVM-DE_GetDSLDiagnoseInfo": true}
 		validTarget := r.URL.Path == "/dsl" || r.URL.Path == "/device" && action == "GetInfo"
 		if r.Method != http.MethodPost || !validTarget || !ok || !allowed[action] {
 			t.Errorf("forbidden DSL request: %s %s %q", r.Method, r.URL.Path, header)
