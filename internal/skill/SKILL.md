@@ -31,7 +31,7 @@ documentation; run the CLI for live router state.
   `--all` for the full list).
 - `dhcp` — read-only DHCP server configuration; never reservation inventory.
 - `firmware` — read-only installed firmware, reported update availability, and auto-update state; `firmware check` requests one update check with `--confirm`; never installs updates.
-- `dsl` — read-only DSL link diagnostics from documented WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo: link state, modulation, profile, current/max rates, noise margin, attenuation, and FEC/CRC error counters.
+- `dsl` — read-only DSL link diagnostics from documented WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo: link state, modulation, profile, current/max rates, noise margin, attenuation, and FEC/CRC error counters; `dsl detail` reports the total error counters and the router's line-fault diagnosis.
 - `account` — read-only own username and configured rights, anonymous login, default-password posture, and second-factor enabled state; never user enumeration or passwords.
 - `wifi` — Wi-Fi inspection; `wifi detail [--instance N]` reports one radio's safe documented properties; `wifi enable|disable` changes a radio.
 - `guest` — documented guest Wi-Fi inspection (public SSID, aggregate state).
@@ -123,7 +123,7 @@ commands:
   devices   connected and known LAN clients; devices detail adds one device's link and access state
   leases    observed Hosts table lease metadata
   dhcp      DHCP server configuration (never reservation inventory)
-  dsl       DSL link diagnostics
+  dsl       DSL link diagnostics; dsl detail adds total error counters and the router's line-fault diagnosis
   firmware  installed firmware, reported update availability, and auto-update state; firmware check requests one update check with --confirm
   account   own rights and login posture
   wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm

@@ -92,6 +92,8 @@ router-axi dhcp
 router-axi dhcp --json
 router-axi dsl
 router-axi dsl --json
+router-axi dsl detail
+router-axi dsl detail --json
 router-axi firmware
 router-axi firmware --json
 router-axi account
@@ -657,6 +659,58 @@ reports service advertisement only and does not fetch the SCPD or invoke the DSL
 action. Compatibility is fixture-backed for service versions 1 and 2, with and
 without the optional vendor, country, and power fields; it is not inferred from
 router models.
+
+`dsl detail` is a separate read of the same service. It reports the total error
+counters from `GetStatisticsTotal` and the router's own line-fault diagnosis from
+`X_AVM-DE_GetDSLDiagnoseInfo`
+([FRITZ! TR-064 WANDSLInterfaceConfig v9, §3.2 and §3.3](https://fritz.support/resources/TR-064_WAN_DSL_Interface_Config.pdf)).
+It applies the same service and SCPD checks as `dsl` and invokes only the actions
+that the SCPD advertises. It does not invoke `X_AVM-DE_GetDSLInfo`.
+
+```
+dsl_detail:
+  statistics:
+    receive_blocks: 1001
+    transmit_blocks: 1002
+    cell_delineation: 3
+    link_retrains: 4
+    init_errors: 5
+    init_timeouts: 6
+    loss_of_framing: 7
+    errored_seconds: 8
+    severely_errored_seconds: 9
+    fec_errors: 10
+    atuc_fec_errors: 11
+    hec_errors: 12
+    atuc_hec_errors: 13
+    crc_errors: 14
+    atuc_crc_errors: 15
+  diagnosis:
+    state: DONE_CABLE_NOK
+    cable_fault_distance_meters: 120
+    last_diagnose_time_seconds: 45
+    signal_loss_time_seconds: 900
+    active: true
+    sync: false
+```
+
+JSON fields follow the same order:
+
+```json
+{"statistics":{"receive_blocks":1001,"transmit_blocks":1002,"cell_delineation":3,"link_retrains":4,"init_errors":5,"init_timeouts":6,"loss_of_framing":7,"errored_seconds":8,"severely_errored_seconds":9,"fec_errors":10,"atuc_fec_errors":11,"hec_errors":12,"atuc_hec_errors":13,"crc_errors":14,"atuc_crc_errors":15},"diagnosis":{"state":"DONE_CABLE_NOK","cable_fault_distance_meters":120,"last_diagnose_time_seconds":45,"signal_loss_time_seconds":900,"active":true,"sync":false}}
+```
+
+A part whose action the router does not advertise is `unsupported` in compact
+output and `null` in JSON; the other part is still reported. The command exits `5`
+when neither action is advertised. All fields of an advertised part are required
+and validated before any output. Documented diagnosis states (`NONE`, `NO_CALIB`,
+`RUNNING`, `DONE`, `DONE_CABLE_NOK`, `DONE_CABLE_OK`) are preserved; other
+non-empty states become `unknown`. `cable_fault_distance_meters` is `unknown`
+(`null` in JSON) when the router reports `-1`, which means that no fault was
+located. The document spells the state argument `DSLDigagnoseState`; the command
+accepts that spelling and `DSLDiagnoseState`. Error handling and exit codes match
+`dsl`. Compatibility is fixture-backed for service versions 1 and 2, both
+spellings, and each single-action router; it is not inferred from router models.
 
 ### Account rights and login posture
 
