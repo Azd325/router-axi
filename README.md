@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The current release provides device information, WAN status, traffic statistics, bounded event-log text with group filtering, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, account rights and login posture, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, WAN reconnect, reboot, Wake-on-LAN, and configuration export.
+The current release provides device information, WAN status, traffic statistics, bounded event-log text with group filtering, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, account rights and login posture, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, WAN reconnect, reboot, Wake-on-LAN, firmware update check, and configuration export.
 
 ## Design constraints
 
@@ -110,6 +110,7 @@ router-axi wifi disable
 router-axi wifi disable --instance 1 --confirm
 router-axi reboot          # preview only; restart requires --confirm
 router-axi wan reconnect   # preview only; reconnect requires --confirm
+router-axi firmware check  # preview only; the update check requires --confirm
 router-axi backup --host https://fritz.box:49443 --output fritz.export
 router-axi forwards
 router-axi forwards --json
@@ -551,6 +552,51 @@ The command omits download/info URLs, password posture, warranty defaults, and
 setup-assistant state. It never calls `X_AVM-DE_CheckUpdate`, `X_AVM-DE_DoUpdate`,
 or `X_AVM-DE_SetConfig`: availability may reflect an earlier router check,
 and running this command neither refreshes that check nor installs an update.
+Use `firmware check` to request a new check.
+
+### Firmware update check
+
+`router-axi firmware check` previews a request for the router to check for a
+firmware update. It never installs, prepares, or configures an update:
+`X_AVM-DE_DoUpdate`, `X_AVM-DE_DoPrepareCGI`, `X_AVM-DE_DoManualUpdate`, and
+`X_AVM-DE_SetConfig` are never called.
+
+```sh
+router-axi firmware check
+router-axi firmware check --confirm --json
+```
+
+The preview identifies the router endpoint, intended effect, and exact confirmed
+command. With and without `--confirm`, the command first requires exactly one
+advertised UserInterface service whose service description lists
+`X_AVM-DE_CheckUpdate`, and exits `5` otherwise. With `--confirm`, it then sends
+the action once and reports `accepted: true` only for a valid acknowledgement.
+Acceptance means the router accepted the request; it does **not** mean an update
+exists. There are no retries or polls: run `router-axi firmware` afterwards to
+read the reported state. A lost or invalid response is an uncertain outcome with
+a nonzero exit code; do not automatically repeat.
+
+```text
+firmware_check:
+  endpoint: "http://router.test:49000"
+  preview: true
+  effect: the router will check for a firmware update; no update will be installed
+  execute: "router-axi firmware check --host http://router.test:49000 --confirm"
+```
+
+```json
+{"firmware_check":{"endpoint":"http://router.test:49000","accepted":true,"recovery":"acceptance does not mean an update exists; run router-axi firmware to read the reported state; do not automatically repeat firmware check"}}
+```
+
+The [FRITZ! TR-064 UserInterface document v25](https://fritz.support/resources/TR-064_User_Interface.pdf),
+section 2.2, specifies no arguments and gives no required-rights declaration for
+this action. Router authentication and fault responses remain authoritative. If credentials are
+configured, a `DeviceInfo:GetInfo` read supplies the Digest challenge before
+sending. Doctor's `firmware` capability is not proof of update-check support;
+`firmware check` checks its action before execution. Tests use synthetic servers
+only. No live firmware check test is provided, and existing live-test flags
+cannot request a check; future coverage needs a distinct opt-in and must stay
+skipped by default.
 
 ### DSL link diagnostics
 
@@ -1286,7 +1332,7 @@ parsing output text:
 
 | Code | Meaning |
 | ---- | ------- |
-| `0`  | Success, including an already-satisfied `wifi enable\|disable` or a reboot, `wan reconnect`, or `wake` preview. |
+| `0`  | Success, including an already-satisfied `wifi enable\|disable` or a reboot, `wan reconnect`, `wake`, or `firmware check` preview. |
 | `1`  | Internal failure, such as a local output or backup-file write error. |
 | `2`  | Usage or configuration error (invalid arguments, missing `--output`, missing passphrase, ambiguous instance). |
 | `3`  | Authentication failure; the router rejected the credentials from `ROUTER_AXI_USERNAME`/`ROUTER_AXI_PASSWORD`. |
@@ -1300,9 +1346,9 @@ record in the selected format; exit codes stay authoritative. If writing stdout
 fails, watch instead emits its sanitized `output_failed` diagnostic on stderr.
 
 The implementation discovers services through `/tr64desc.xml` and invokes only
-read actions, plus the confirmed `wifi enable|disable`, `wan reconnect`, `reboot`, and `wake MAC`
+read actions, plus the confirmed `wifi enable|disable`, `wan reconnect`, `reboot`, `wake MAC`, and `firmware check`
 mutations described above, which invoke only the documented `WLANConfiguration:SetEnable`,
-`WANIPConnection` or `WANPPPConnection:ForceTermination`, `DeviceConfig:Reboot`, and `Hosts:X_AVM-DE_WakeOnLANByMACAddress`
+`WANIPConnection` or `WANPPPConnection:ForceTermination`, `DeviceConfig:Reboot`, `Hosts:X_AVM-DE_WakeOnLANByMACAddress`, and `UserInterface:X_AVM-DE_CheckUpdate`
 respectively, and the documented
 `DeviceConfig:X_AVM-DE_GetConfigFile` export described above.
 Doctor uses only `DeviceInfo:GetInfo`; inspection commands use

@@ -1029,7 +1029,7 @@ func TestWiFiDetailUsageErrors(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"wifi", "detail", "--confirm"}, "--confirm is valid only with reboot, wake, wan reconnect, wifi enable, or wifi disable"},
+		{[]string{"wifi", "detail", "--confirm"}, "--confirm is valid only with firmware check, reboot, wake, wan reconnect, wifi enable, or wifi disable"},
 		{[]string{"wifi", "detail", "--instance", "0"}, "--instance requires a WLANConfiguration number of 1 or greater"},
 		{[]string{"wifi", "detail", "--bogus"}, "valid flags for wifi: --host, --json, --instance, --help"},
 		{[]string{"wifi", "detail", "enable"}, "wifi accepts one action: detail, enable, or disable"},
@@ -1656,7 +1656,7 @@ func TestWiFiMutationUsageErrors(t *testing.T) {
 	}{
 		{[]string{"wifi", "enable", "--instance", "0"}, "--instance requires a WLANConfiguration number of 1 or greater"},
 		{[]string{"wifi", "enable", "--confirm", "--all"}, "--all is valid only for calls, devices, leases, or forwards"},
-		{[]string{"status", "--confirm"}, "--confirm is valid only with reboot, wake, wan reconnect, wifi enable, or wifi disable"},
+		{[]string{"status", "--confirm"}, "--confirm is valid only with firmware check, reboot, wake, wan reconnect, wifi enable, or wifi disable"},
 		{[]string{"wifi", "enable", "disable"}, "wifi accepts one action: detail, enable, or disable"},
 		{[]string{"wifi", "restart"}, "exactly one command is required"},
 		{[]string{"wan", "enable"}, "exactly one command is required"},

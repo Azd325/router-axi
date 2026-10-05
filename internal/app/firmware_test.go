@@ -55,7 +55,7 @@ func TestFirmwareUnknownOutput(t *testing.T) {
 
 func TestFirmwareHelpAndFlags(t *testing.T) {
 	application := New(func(Config) (Reader, error) { t.Fatal("help or invalid input contacted router"); return nil, nil }, func(string) string { t.Fatal("help or invalid input read credentials"); return "" })
-	for _, args := range [][]string{{"firmware", "--help"}, {"firmware", "--confirm"}, {"firmware", "--all"}, {"firmware", "--unknown"}, {"firmware", "check"}, {"firmware", "update"}} {
+	for _, args := range [][]string{{"firmware", "--help"}, {"firmware", "--confirm"}, {"firmware", "--all"}, {"firmware", "--unknown"}, {"firmware", "update"}} {
 		var stdout, stderr bytes.Buffer
 		code := application.Run(t.Context(), args, &stdout, &stderr)
 		if args[1] == "--help" {
