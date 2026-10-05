@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:X_AVM-DE_GetSpecificHostEntryByIPResponse xmlns:u="urn:dslforum-org:service:Hosts:1">
+  <NewMACAddress>02:00:00:00:00:30</NewMACAddress>
+  <NewActive>0</NewActive>
+  <NewHostName></NewHostName>
+  <NewInterfaceType>802.11</NewInterfaceType>
+  <NewX_AVM-DE_Port>0</NewX_AVM-DE_Port>
+  <NewX_AVM-DE_Speed>0</NewX_AVM-DE_Speed>
+  <NewX_AVM-DE_UpdateAvailable>0</NewX_AVM-DE_UpdateAvailable>
+  <NewX_AVM-DE_UpdateSuccessful>unknown</NewX_AVM-DE_UpdateSuccessful>
+  <NewX_AVM-DE_InfoURL></NewX_AVM-DE_InfoURL>
+  <NewX_AVM-DE_Model></NewX_AVM-DE_Model>
+  <NewX_AVM-DE_URL></NewX_AVM-DE_URL>
+</u:X_AVM-DE_GetSpecificHostEntryByIPResponse></s:Body></s:Envelope>

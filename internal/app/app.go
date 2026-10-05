@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -47,6 +48,7 @@ type Reader interface {
 	WatchSnapshot(context.Context) (tr064.WatchSnapshot, error)
 	Calls(context.Context) ([]tr064.Call, error)
 	Devices(context.Context) ([]tr064.Device, error)
+	DeviceDetail(context.Context, netip.Addr) (tr064.DeviceDetail, error)
 	Leases(context.Context) ([]tr064.Lease, error)
 	DHCP(context.Context) (tr064.DHCP, error)
 	DSL(context.Context) (tr064.DSL, error)
@@ -82,6 +84,8 @@ type options struct {
 	json, help, all, confirm, force            bool
 	instance                                   uint64
 	instanceSet                                bool
+	ip                                         netip.Addr
+	ipSet                                      bool
 	interval                                   time.Duration
 	count                                      int
 	intervalSet, countSet                      bool
@@ -360,6 +364,10 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			}
 			value = guestResult{Guests: guests, Total: len(guests)}
 		case "devices":
+			if opts.action == "detail" {
+				value, err = reader.DeviceDetail(ctx, opts.ip)
+				break
+			}
 			var devices []tr064.Device
 			devices, err = reader.Devices(ctx)
 			if err == nil {
@@ -479,6 +487,17 @@ func parse(args []string) (options, error) {
 				return opts, errors.New("--instance requires a WLANConfiguration number of 1 or greater")
 			}
 			opts.instance, opts.instanceSet = instance, true
+		case "--ip":
+			opts.flags["--ip"] = true
+			i++
+			if opts.ipSet || i >= len(args) {
+				return opts, errors.New(deviceDetailTarget)
+			}
+			address, err := netip.ParseAddr(args[i])
+			if err != nil || !address.Is4() {
+				return opts, errors.New(deviceDetailTarget)
+			}
+			opts.ip, opts.ipSet = address, true
 		case "--host":
 			opts.flags["--host"] = true
 			i++
@@ -535,6 +554,13 @@ func parse(args []string) (options, error) {
 			if opts.command == "wifi" && opts.action != "" {
 				return opts, errors.New("wifi accepts one action: detail, enable, or disable")
 			}
+			if opts.command == "devices" && opts.action == "" && args[i] == "detail" {
+				opts.action = args[i]
+				continue
+			}
+			if opts.command == "devices" && opts.action != "" {
+				return opts, errors.New("devices accepts one action: detail; select the device with --ip ADDRESS")
+			}
 			if opts.command == "skill" {
 				if args[i] == "install" && opts.action == "" {
 					opts.action = args[i]
@@ -562,8 +588,14 @@ func parse(args []string) (options, error) {
 	if opts.versionFlag && len(args) != 1 {
 		return opts, errors.New("--version, -v, and -V must be used alone")
 	}
+	if deviceDetail(opts) && opts.all {
+		return opts, errors.New("--all is not valid with devices detail; it reports exactly one device")
+	}
 	if err := validateFlagContext(opts); err != nil {
 		return opts, err
+	}
+	if deviceDetail(opts) && !opts.ipSet && !opts.help {
+		return opts, errors.New("devices detail requires --ip ADDRESS")
 	}
 	skillAction := opts.command == "skill" && opts.action != ""
 	if opts.path != "" && !skillAction {
@@ -597,7 +629,7 @@ var commandHelp = map[string]string{
 	"wan":      "usage: router-axi wan [detail] [--host ADDRESS] [--json] [reconnect [--confirm]] [--help]\nRead-only internet connection state: status, external address, IP family, uptime, and last error. Use wan detail for bounded physical-link properties and optional router-reported rates, totals, and DNS. wan reconnect drops the internet connection once: preview without --confirm.\nexamples: router-axi wan; router-axi wan --json; router-axi wan detail; router-axi wan reconnect\n",
 	"traffic":  "usage: router-axi traffic [--host ADDRESS] [--json] [--help]\nRead-only total downloaded and uploaded byte counters with the observation time.\nexamples: router-axi traffic; router-axi traffic --json\n",
 	"calls":    "usage: router-axi calls [--all] [--host ADDRESS] [--json] [--help]\nRead-only call history. Defaults to the 100 most recent entries; --all lists everything. No required arguments.\nexamples: router-axi calls; router-axi calls --all; router-axi calls --all --json\n",
-	"devices":  "usage: router-axi devices [--all] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi devices; router-axi devices --all --json\n",
+	"devices":  "usage: router-axi devices [--all] [detail --ip ADDRESS] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments. devices detail reports one device selected by its IPv4 address.\nexamples: router-axi devices; router-axi devices --all --json; router-axi devices detail --ip 192.0.2.20\n",
 	"leases":   "usage: router-axi leases [--all] [--host ADDRESS] [--json] [--help]\nRead-only observed lease metadata from the Hosts table: name, addresses, address source, and remaining lease time. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi leases; router-axi leases --all --json\n",
 	"dhcp":     "usage: router-axi dhcp [--host ADDRESS] [--json] [--help]\nRead-only DHCP server configuration from documented LANHostConfigManagement actions advertised by the router. Reports server state and available range, subnet, router, DNS, and domain settings; never reservation inventory.\nexamples: router-axi dhcp; router-axi dhcp --json\n",
 	"firmware": "usage: router-axi firmware [--host ADDRESS] [--json] [--help]\nRead-only installed firmware, reported update availability, and auto-update configuration from UserInterface:GetInfo and X_AVM-DE_GetInfo. Does not refresh the update check or change configuration.\nexamples: router-axi firmware; router-axi firmware --json\n",
@@ -625,6 +657,10 @@ func wifiMutation(opts options) bool {
 
 func wifiTargeted(opts options) bool { return opts.command == "wifi" && opts.action != "" }
 
+func deviceDetail(opts options) bool { return opts.command == "devices" && opts.action == "detail" }
+
+const deviceDetailTarget = "--ip requires exactly one IPv4 address"
+
 func wanReconnect(opts options) bool { return opts.command == "wan" && opts.action == "reconnect" }
 
 func confirmable(opts options) bool {
@@ -638,9 +674,10 @@ var flagSpecs = map[string]flagSpec{
 	"--interval": {valid: func(opts options) bool { return opts.command == "watch" }, invalid: "--interval and --count are valid only with watch"},
 	"--count":    {valid: func(opts options) bool { return opts.command == "watch" }, invalid: "--interval and --count are valid only with watch"},
 	"--all": {valid: func(opts options) bool {
-		return opts.command == "calls" || opts.command == "devices" || opts.command == "leases" || opts.command == "forwards"
+		return opts.command == "calls" || opts.command == "devices" && opts.action == "" || opts.command == "leases" || opts.command == "forwards"
 	}, invalid: "--all is valid only for calls, devices, leases, or forwards"},
 	"--instance": {valid: wifiTargeted, invalid: "--instance is valid only with wifi detail, wifi enable, or wifi disable"},
+	"--ip":       {valid: deviceDetail, invalid: "--ip is valid only with devices detail"},
 	"--confirm":  {valid: confirmable, invalid: "--confirm is valid only with reboot, wan reconnect, wifi enable, or wifi disable"},
 	"--output":   {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--output is valid only with backup"},
 	"--force":    {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--force is valid only with backup"},
@@ -657,7 +694,7 @@ var commandFlags = map[string][]string{
 	"guest":    {"--host", "--json", "--help"},
 	"watch":    {"--host", "--json", "--interval", "--count", "--help"},
 	"calls":    {"--host", "--json", "--all", "--help"},
-	"devices":  {"--host", "--json", "--all", "--help"},
+	"devices":  {"--host", "--json", "--all", "--ip", "--help"},
 	"leases":   {"--host", "--json", "--all", "--help"},
 	"dhcp":     {"--host", "--json", "--help"},
 	"dsl":      {"--host", "--json", "--help"},
@@ -686,7 +723,7 @@ func validateFlagContext(opts options) error {
 	for _, flag := range flags {
 		allowed[flag] = true
 	}
-	for _, flag := range []string{"--interval", "--count", "--all", "--instance", "--confirm", "--output", "--force", "--path", "--agent", "--host", "--json", "--help"} {
+	for _, flag := range []string{"--interval", "--count", "--all", "--instance", "--ip", "--confirm", "--output", "--force", "--path", "--agent", "--host", "--json", "--help"} {
 		if !opts.flags[flag] {
 			continue
 		}
@@ -724,6 +761,9 @@ func help(command, action string) string {
 	}
 	if command == "wifi" && action == "detail" {
 		return "usage: router-axi wifi detail [--instance N] [--host ADDRESS] [--json] [--help]\nRead-only per-radio Wi-Fi detail from documented WLANConfiguration:GetInfo and GetChannelInfo, validated against the service description first.\nReports enable status, status, standard, max bitrate, channel, and band; absent optional fields are unknown. --instance N (1 or greater) is required when the router advertises more than one radio.\nBSSIDs, keys, and client details are never read or printed.\nexamples: router-axi wifi detail; router-axi wifi detail --instance 2; router-axi wifi detail --instance 1 --json\n"
+	}
+	if command == "devices" && action == "detail" {
+		return "usage: router-axi devices detail --ip ADDRESS [--host ADDRESS] [--json] [--help]\nRead-only detail for exactly one LAN device from documented Hosts:X_AVM-DE_GetSpecificHostEntryByIP, validated against the service description first.\nReports the devices fields plus Ethernet port, speed in Mbit/s, guest and VPN flags, WAN access, and firmware update state; absent optional fields are unknown. --ip takes one IPv4 address and is required; the command never reports more than one device.\nThe logged-in account needs the App or Phone right. No other returned field is kept or printed.\nexamples: router-axi devices detail --ip 192.0.2.20; router-axi devices detail --ip 192.0.2.20 --json\n"
 	}
 	if action != "" && command == "wifi" {
 		return "usage: router-axi wifi " + action + " [--instance N] --confirm [--host ADDRESS] [--json] [--help]\nEnables or disables one WLANConfiguration radio. Without --confirm: preview only, nothing changes.\nWith --confirm: idempotent change; the router must confirm the new state. --instance N is required when the router advertises more than one radio; bounds N 1 or greater.\nNo prompts or retries; SSIDs, BSSIDs, and keys are never read or printed.\nexamples: router-axi wifi " + action + "; router-axi wifi " + action + " --instance 1 --confirm; router-axi wifi " + action + " --instance 2 --confirm --json\n"
@@ -763,7 +803,7 @@ func help(command, action string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + " [--help]\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details; wan reconnect drops the connection once with --confirm\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  dhcp      DHCP server configuration (never reservation inventory)\n  dsl       DSL link diagnostics\n  firmware  installed firmware, reported update availability, and auto-update state\n  account   own rights and login posture\n  wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details; wan reconnect drops the connection once with --confirm\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients; devices detail adds one device's link and access state\n  leases    observed Hosts table lease metadata\n  dhcp      DHCP server configuration (never reservation inventory)\n  dsl       DSL link diagnostics\n  firmware  installed firmware, reported update availability, and auto-update state\n  account   own rights and login posture\n  wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -888,6 +928,9 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 			}
 		}
 	case "devices":
+		if v, ok := value.(tr064.DeviceDetail); ok {
+			return writeDeviceDetail(w, v)
+		}
 		result := value.(deviceResult)
 		if len(result.Devices) == 0 {
 			_, err := io.WriteString(w, "devices[0]: no devices found\n")
@@ -986,6 +1029,9 @@ func protocolError(err error) errorSpec {
 		}
 		if protocolErr.Operation == "backup" {
 			hint = "router-axi backup --help"
+		}
+		if protocolErr.Operation == "devices detail" {
+			hint = "router-axi devices"
 		}
 		return errorSpec{ExitUsage, errorDetail{protocolErr.Code, protocolErr.Message, hint}}
 	case "auth":

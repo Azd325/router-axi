@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<scpd xmlns="urn:dslforum-org:service-1-0"><actionList>
+  <action><name>GetHostNumberOfEntries</name></action>
+  <action><name>GetGenericHostEntry</name></action>
+  <action><name>X_AVM-DE_GetSpecificHostEntryByIP</name></action>
+  <action><name>X_AVM-DE_GetHostListPath</name></action>
+  <action><name>X_AVM-DE_SetFriendlyNameByIP</name></action>
+</actionList></scpd>

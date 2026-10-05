@@ -25,7 +25,8 @@ documentation; run the CLI for live router state.
   Ctrl-C exits 130).
 - `calls` — call history (100 entries default, `--all` for the full list).
 - `devices` — connected and known LAN clients (100 entries by default,
-  `--all` for the full list).
+  `--all` for the full list); `devices detail --ip ADDRESS` reports one
+  device's port, speed, guest and VPN flags, WAN access, and update state.
 - `leases` — observed Hosts-table lease metadata (100 entries by default,
   `--all` for the full list).
 - `dhcp` — read-only DHCP server configuration; never reservation inventory.
@@ -108,7 +109,7 @@ commands:
   traffic   byte totals
   watch     bounded WAN state and traffic polling (6 samples, 5s interval)
   calls     call history
-  devices   connected and known LAN clients
+  devices   connected and known LAN clients; devices detail adds one device's link and access state
   leases    observed Hosts table lease metadata
   dhcp      DHCP server configuration (never reservation inventory)
   dsl       DSL link diagnostics
