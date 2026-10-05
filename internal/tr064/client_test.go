@@ -1001,7 +1001,7 @@ func TestGuestWiFiUsesDocumentedAPTypeAndReportsEveryExplicitGuest(t *testing.T)
 				t.Fatalf("guests = %#v", guests)
 			}
 			for i, wantID := range test.wantIDs {
-				if !reflect.DeepEqual(guests[i], GuestNetwork{ServiceID: wantID, SSID: "synthetic-ap", Enabled: true, Channel: 36, Band: "5000", Standard: "ax", AssociatedClients: 2, SecurityMode: "11iandWPA3", Configuration: &GuestConfiguration{}}) {
+				if !reflect.DeepEqual(guests[i], GuestNetwork{ServiceID: wantID, SSID: "synthetic-ap", Enabled: true, Channel: 36, Band: "5000", Standard: "ax", AssociatedClients: 2, SecurityMode: "11iandWPA3"}) {
 					t.Fatalf("guest = %#v", guests[i])
 				}
 				encoded, err := json.Marshal(guests[i])

@@ -210,15 +210,15 @@ type Radio struct {
 }
 
 type GuestNetwork struct {
-	ServiceID         string              `json:"service_id"`
-	SSID              string              `json:"ssid"`
-	Enabled           bool                `json:"enabled"`
-	Channel           uint64              `json:"channel"`
-	Band              string              `json:"band"`
-	Standard          string              `json:"standard"`
-	AssociatedClients uint64              `json:"associated_clients"`
-	SecurityMode      string              `json:"security_mode"`
-	Configuration     *GuestConfiguration `json:"configuration"`
+	ServiceID         string             `json:"service_id"`
+	SSID              string             `json:"ssid"`
+	Enabled           bool               `json:"enabled"`
+	Channel           uint64             `json:"channel"`
+	Band              string             `json:"band"`
+	Standard          string             `json:"standard"`
+	AssociatedClients uint64             `json:"associated_clients"`
+	SecurityMode      string             `json:"security_mode"`
+	Configuration     GuestConfiguration `json:"configuration"`
 }
 
 // RadioDetail carries safe per-radio state and independently available configuration reads.
@@ -1621,7 +1621,7 @@ func (c *Client) GuestWiFi(ctx context.Context) ([]GuestNetwork, error) {
 		return nil, guestError(err)
 	}
 	guestServices := make([]service, 0, 1)
-	configurations := map[string]*GuestConfiguration{}
+	configurations := map[string]GuestConfiguration{}
 	for _, svc := range services {
 		info, err := c.actionOnService(ctx, svc, "X_AVM-DE_GetWLANExtInfo")
 		if err != nil {

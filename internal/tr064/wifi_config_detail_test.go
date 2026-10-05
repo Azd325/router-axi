@@ -146,7 +146,7 @@ func TestGuestConfigurationRawStringsFromClassification(t *testing.T) {
 	for _, fixture := range []string{wifiGuestConfigFixture, strings.ReplaceAll(wifiGuestConfigFixture, ">90<", ">router-raw-value<")} {
 		client, requests := wifiFixtureClient(t, wifiDescriptionFixture, map[string]wifiResponse{"/wifi2#X_AVM-DE_GetWLANExtInfo": {body: fixture}})
 		guests, err := client.GuestWiFi(t.Context())
-		if err != nil || len(guests) != 1 || guests[0].Configuration == nil {
+		if err != nil || len(guests) != 1 {
 			t.Fatalf("guests=%#v err=%v", guests, err)
 		}
 		wantTimeout := "90"
@@ -154,7 +154,7 @@ func TestGuestConfigurationRawStringsFromClassification(t *testing.T) {
 			wantTimeout = "router-raw-value"
 		}
 		active, remain, noForcedOff, isolation := "1", "42", "1", "1"
-		want := &GuestConfiguration{TimeoutActive: &active, Timeout: &wantTimeout, TimeRemain: &remain, NoForcedOff: &noForcedOff, UserIsolation: &isolation}
+		want := GuestConfiguration{TimeoutActive: &active, Timeout: &wantTimeout, TimeRemain: &remain, NoForcedOff: &noForcedOff, UserIsolation: &isolation}
 		if !reflect.DeepEqual(guests[0].Configuration, want) {
 			t.Fatalf("configuration=%#v", guests[0].Configuration)
 		}

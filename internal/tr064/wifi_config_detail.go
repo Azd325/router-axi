@@ -25,8 +25,8 @@ type GuestConfiguration struct {
 	UserIsolation *string `json:"user_isolation"`
 }
 
-func guestConfiguration(values soapValues) *GuestConfiguration {
-	return &GuestConfiguration{
+func guestConfiguration(values soapValues) GuestConfiguration {
+	return GuestConfiguration{
 		TimeoutActive: optionalWifiDetailString(values.GuestTimeoutActive),
 		Timeout:       optionalWifiDetailString(values.GuestTimeout),
 		TimeRemain:    optionalWifiDetailString(values.GuestTimeRemain),

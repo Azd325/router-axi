@@ -39,7 +39,7 @@ func TestGuestConfigurationOutputPreservesRawStringsAndFieldOrder(t *testing.T) 
 	active, timeout, remain, off, isolation := "1", "90", "42", "router,raw", "1"
 	guest := tr064.GuestNetwork{
 		ServiceID: "urn:WLANConfiguration-com:serviceId:WLANConfiguration2", SSID: "synthetic-guest",
-		Configuration: &tr064.GuestConfiguration{TimeoutActive: &active, Timeout: &timeout, TimeRemain: &remain, NoForcedOff: &off, UserIsolation: &isolation},
+		Configuration: tr064.GuestConfiguration{TimeoutActive: &active, Timeout: &timeout, TimeRemain: &remain, NoForcedOff: &off, UserIsolation: &isolation},
 	}
 	reader := guestReader{guests: []tr064.GuestNetwork{guest}}
 	application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })

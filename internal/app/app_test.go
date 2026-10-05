@@ -767,8 +767,8 @@ func TestGuestOutputContract(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"guest"}, "guests[1]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration2,synthetic-guest,true,36,5000,ax,1,11iandWPA3\nguest_configuration[1]{service_id,timeout_active,timeout,time_remain,no_forced_off,user_isolation}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration2,unsupported,unsupported,unsupported,unsupported,unsupported\n"},
-		{[]string{"guest", "--json"}, `{"guests":[{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","ssid":"synthetic-guest","enabled":true,"channel":36,"band":"5000","standard":"ax","associated_clients":1,"security_mode":"11iandWPA3","configuration":null}],"total":1}` + "\n"},
+		{[]string{"guest"}, "guests[1]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration2,synthetic-guest,true,36,5000,ax,1,11iandWPA3\nguest_configuration[1]{service_id,timeout_active,timeout,time_remain,no_forced_off,user_isolation}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration2,unknown,unknown,unknown,unknown,unknown\n"},
+		{[]string{"guest", "--json"}, `{"guests":[{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","ssid":"synthetic-guest","enabled":true,"channel":36,"band":"5000","standard":"ax","associated_clients":1,"security_mode":"11iandWPA3","configuration":{"timeout_active":null,"timeout":null,"time_remain":null,"no_forced_off":null,"user_isolation":null}}],"total":1}` + "\n"},
 	} {
 		code, stdout, stderr := runTest(t, test.args...)
 		if code != ExitOK || stdout != test.want || stderr != "" {

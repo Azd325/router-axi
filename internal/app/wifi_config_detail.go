@@ -30,12 +30,6 @@ func writeGuestConfiguration(w io.Writer, guests []tr064.GuestNetwork) error {
 	}
 	for _, guest := range guests {
 		c := guest.Configuration
-		if c == nil {
-			if _, err := fmt.Fprintf(w, "  %s,unsupported,unsupported,unsupported,unsupported,unsupported\n", toon(guest.ServiceID)); err != nil {
-				return err
-			}
-			continue
-		}
 		if _, err := fmt.Fprintf(w, "  %s,%s,%s,%s,%s,%s\n", toon(guest.ServiceID), optionalToon(c.TimeoutActive), optionalToon(c.Timeout), optionalToon(c.TimeRemain), optionalToon(c.NoForcedOff), optionalToon(c.UserIsolation)); err != nil {
 			return err
 		}
