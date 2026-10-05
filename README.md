@@ -1242,7 +1242,8 @@ from the device description alone, so it intentionally has no separate guest
 capability.
 
 SSID is the only network identity returned. `X_AVM-DE_GetWLANExtInfo` may return
-other fields, but the client retains only AP type. It never retrieves or outputs
+other fields, but the client retains only AP type and the five configuration
+fields listed above. It never retrieves or outputs
 passphrases, security keys, BSSID, client MAC addresses, associated-device records,
 or client device/IP details. Tests use synthetic fixtures; hardware guest
 inspection is not validated unless the bounded opt-in live test is run locally.

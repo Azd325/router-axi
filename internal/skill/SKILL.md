@@ -34,7 +34,7 @@ documentation; run the CLI for live router state.
 - `dsl` — read-only DSL link diagnostics from documented WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo: link state, modulation, profile, current/max rates, noise margin, attenuation, and FEC/CRC error counters; `dsl detail` reports the total error counters and the router's line-fault diagnosis.
 - `account` — read-only own username and configured rights, anonymous login, default-password posture, and second-factor enabled state; never user enumeration or passwords.
 - `wifi` — Wi-Fi inspection; `wifi detail [--instance N]` reports one radio's safe documented properties; `wifi enable|disable` changes a radio.
-- `guest` — documented guest Wi-Fi inspection (public SSID, aggregate state).
+- `guest` — documented guest Wi-Fi inspection (public SSID, aggregate state, timeout and isolation configuration).
 - `forwards` — port-forwarding rules (100 entries by default, `--all` for the
   full list).
 - `reboot` — preview router restart; execute once with `--confirm`.
