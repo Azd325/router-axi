@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, account rights and login posture, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, WAN reconnect, reboot, Wake-on-LAN, and configuration export.
+The current release provides device information, WAN status, traffic statistics, bounded event-log text with group filtering, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, account rights and login posture, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, WAN reconnect, reboot, Wake-on-LAN, and configuration export.
 
 ## Design constraints
 
@@ -79,6 +79,8 @@ router-axi traffic
 router-axi watch
 router-axi watch --interval 2s --count 10 --json
 router-axi calls
+router-axi event-log
+router-axi event-log --group sys,net --limit 1000 --json
 router-axi devices
 router-axi devices --json
 router-axi devices detail --ip 192.0.2.20
@@ -131,7 +133,7 @@ description once and, when `DeviceInfo` is advertised, invokes only
 `DeviceInfo:GetInfo` to verify authentication and obtain model and firmware.
 It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
-`wan`, `traffic`, `watch`, `calls`, `devices`, `leases`, `dhcp`, `dsl`, `firmware`, `account`, `wifi`, `forwards`, `reboot`, and
+`wan`, `traffic`, `watch`, `calls`, `event-log`, `devices`, `leases`, `dhcp`, `dsl`, `firmware`, `account`, `wifi`, `forwards`, `reboot`, and
 `backup`. `watch` is advertised only when the description includes Layer3Forwarding,
 WANCommonInterfaceConfig, and either WANIPConnection or WANPPPConnection; doctor does
 not invoke any of their actions. Doctor does not report a separate `guest` capability: WLANConfiguration
@@ -1199,6 +1201,55 @@ with remediation; there is no fallback to another instance.
 This table is not a firewall audit: IPv6 pinholes, exposed-host settings, or
 rules unavailable through these documented actions are outside its scope.
 
+`event-log` is an explicit read-only view of router log text. **The text can
+contain usernames and client addresses; explicitly requested telephony logs can
+also contain call data.** Compact output quotes free text and control characters;
+JSON escapes it. No log text is read by `doctor`, `status`, or `overview`.
+
+```sh
+router-axi event-log
+router-axi event-log --group sys,net --limit 1000 --json
+router-axi event-log --group fon
+```
+
+Default groups are `sys` (system), `net` (Internet), `wlan` (Wi-Fi), and `usb`.
+`--group` accepts a comma-separated selection of those groups plus `fon` (phone).
+Only a selection that names `fon` includes telephony; default output
+excludes it. Groups come from the documented XML `group` field, never guesses
+from message text. A log entry with a missing, duplicate, or unknown group fails
+closed with exit `6` because its telephony status cannot be established. An
+invalid `--group` value is a usage error (exit `2`).
+
+The default limit is **100 lines**, with `--limit N` bounded to **1–1000**.
+Multiline messages count toward the line limit. Router order is preserved.
+Both formats report `total` and `omitted` lines. Truncated output provides `more`
+in JSON or `next` in compact output: repeat with the same host and group
+selection and `--limit 1000`; at that hard maximum, narrow `--group`. There is
+no unbounded `--all` mode. Empty logs report zero lines. The download body is capped at
+8 MiB; a body reaching that cap fails with `event_log_too_large` and asks for a
+single group instead of displaying an incomplete result.
+
+[AVM DeviceInfo documentation](https://fritz.support/resources/TR-064_Device_Info.pdf)
+(version 11) defines `GetDeviceLog` with no inputs and `NewDeviceLog` output,
+and `X_AVM-DE_GetDeviceLogPath` with no inputs and `NewDeviceLogPath` output.
+Only the latter documents per-entry groups and the download `filter` query.
+The command checks its SCPD action before calling it, then downloads the XML,
+using a single-group filter when selected and `all` otherwise. The plain-text
+`GetDeviceLog` action is never used as a fallback because it cannot safely
+exclude telephony. The document specifies no required rights for these two
+actions; authentication and access denial remain structured errors (exit `3`),
+and absent service/action or invalid-action faults exit `5`.
+
+`event-log` uses the same transport as the other read commands: the HTTP
+default works, and an HTTPS origin keeps normal certificate verification
+(`tls_untrusted`, exit `4`), which is never bypassed. Over HTTP the log text
+travels unencrypted on the local network. Discovery, SCPD, SOAP, and download
+refuse redirects. The download must stay on the router origin (same scheme,
+host, and port). The returned download address and its query tokens never appear in results or errors.
+`doctor` reports only DeviceInfo advertisement for `event_log`, without reading
+its log action or download. All event-log fixtures are synthetic; live router
+logs are never stored in fixtures and no live event-log test is added.
+
 `overview` reads router identity, active WAN state, and traffic totals in that fixed
 order. It is atomic: if any read fails, the command emits the failed operation as
 a structured error on stdout with its normal non-zero
@@ -1270,7 +1321,8 @@ the SCPD-advertised documented `LANHostConfigManagement:GetInfo` DHCP
 configuration read (never reservation inventory), the SCPD-advertised documented
 `WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo` DSL link read, the SCPD-advertised
 `UserInterface:GetInfo` and `X_AVM-DE_GetInfo` firmware status reads, the four documented
-account reads listed above, and `WLANConfiguration:GetInfo`,
+account reads listed above, the SCPD-advertised `DeviceInfo:X_AVM-DE_GetDeviceLogPath`
+event-log read and its grouped XML download, and `WLANConfiguration:GetInfo`,
 `GetChannelInfo`, `GetTotalAssociations`, and
 `GetBeaconType`. Guest inspection additionally uses the documented AVM
 `WLANConfiguration:X_AVM-DE_GetWLANExtInfo` action only to read

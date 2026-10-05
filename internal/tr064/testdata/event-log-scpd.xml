@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<scpd><actionList>
+  <action><name>GetInfo</name></action>
+  <action><name>GetDeviceLog</name></action>
+  <action><name>X_AVM-DE_GetDeviceLogPath</name></action>
+</actionList></scpd>

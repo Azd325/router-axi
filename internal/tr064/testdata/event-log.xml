@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<DeviceLog>
+  <!-- Entirely synthetic events; no captured device data. -->
+  <Event><id>1</id><group>sys</group><date>01.01.26</date><time>10:00:00</time><msg>Synthetic user sample signed in from client.example.test.</msg></Event>
+  <Event><id>2</id><group>fon</group><date>01.01.26</date><time>09:59:00</time><msg>Synthetic phone event.</msg></Event>
+  <Event><id>3</id><group>net</group><date>01.01.26</date><time>09:58:00</time><msg>Synthetic connection ready.</msg></Event>
+  <Event><id>4</id><group>wlan</group><date>01.01.26</date><time>09:57:00</time><msg>Synthetic radio ready.</msg></Event>
+  <Event><id>5</id><group>usb</group><date>01.01.26</date><time>09:56:00</time><msg>Synthetic USB ready.</msg></Event>
+</DeviceLog>

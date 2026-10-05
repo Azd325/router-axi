@@ -53,6 +53,7 @@ type Reader interface {
 	DHCP(context.Context) (tr064.DHCP, error)
 	DSL(context.Context) (tr064.DSL, error)
 	Firmware(context.Context) (tr064.Firmware, error)
+	EventLog(context.Context, string, int) (tr064.EventLog, error)
 	Account(context.Context) (tr064.Account, error)
 	WiFi(context.Context) ([]tr064.Radio, error)
 	WiFiDetail(context.Context, uint64) (tr064.RadioDetail, error)
@@ -93,6 +94,8 @@ type options struct {
 	intervalSet, countSet                      bool
 	flags                                      map[string]bool
 	versionFlag                                bool
+	group                                      string
+	limit                                      int
 }
 
 type callResult struct {
@@ -405,6 +408,8 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			value, err = reader.DHCP(ctx)
 		case "dsl":
 			value, err = reader.DSL(ctx)
+		case "event-log":
+			value, err = reader.EventLog(ctx, opts.group, opts.limit)
 		case "firmware":
 			value, err = reader.Firmware(ctx)
 		case "account":
@@ -450,9 +455,30 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 }
 
 func parse(args []string) (options, error) {
-	opts := options{interval: defaultWatchInterval, count: defaultWatchCount, flags: map[string]bool{}}
+	opts := options{limit: tr064.DefaultEventLogLimit, interval: defaultWatchInterval, count: defaultWatchCount, flags: map[string]bool{}}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--group":
+			if opts.flags["--group"] || i+1 >= len(args) || args[i+1] == "" {
+				return opts, errors.New("--group requires one group selection")
+			}
+			opts.flags["--group"] = true
+			i++
+			if _, err := tr064.EventLogGroups(args[i]); err != nil {
+				return opts, errors.New("--group requires distinct sys, net, fon, wlan, usb groups separated by commas")
+			}
+			opts.group = args[i]
+		case "--limit":
+			if opts.flags["--limit"] || i+1 >= len(args) {
+				return opts, errors.New("--limit requires one integer from 1 to 1000")
+			}
+			opts.flags["--limit"] = true
+			i++
+			limit, err := strconv.Atoi(args[i])
+			if err != nil || limit < 1 || limit > tr064.MaxEventLogLimit {
+				return opts, errors.New("--limit must be an integer from 1 to 1000")
+			}
+			opts.limit = limit
 		case "--interval":
 			opts.flags["--interval"] = true
 			i++
@@ -646,12 +672,14 @@ func parse(args []string) (options, error) {
 }
 
 func validCommand(command string) bool {
-	return command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "dhcp" || command == "dsl" || command == "firmware" || command == "account" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "wake" || command == "backup" || command == "skill" || command == "setup" || command == "session" || command == "version"
+	return command == "event-log" || command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "dhcp" || command == "dsl" || command == "firmware" || command == "account" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "wake" || command == "backup" || command == "skill" || command == "setup" || command == "session" || command == "version"
 }
 
 // commandHelp holds dedicated per-command help text: usage line, purpose,
 // flag defaults and bounds, and concrete examples.
 var commandHelp = map[string]string{
+	"event-log": "usage: router-axi event-log [--host ADDRESS] [--group GROUPS] [--limit N] [--json] [--help]\nBounded read-only router event text from DeviceInfo:X_AVM-DE_GetDeviceLogPath. Default groups: sys,net,wlan,usb (excludes telephony); --group accepts comma-separated sys,net,fon,wlan,usb; fon includes telephony. Default 100 lines, hard maximum 1000; download maximum 8 MiB. No redirects; HTTPS certificates are always verified. Text may contain usernames, client addresses, and explicitly requested call data.\nexamples: router-axi event-log; router-axi event-log --group sys,net --limit 1000 --json\n",
+
 	"wake":     "usage: router-axi wake MAC [--confirm] [--host ADDRESS] [--json] [--help]\nMAC is exactly one nonzero unicast address of six colon-separated hexadecimal octets. Without --confirm: preview only. With --confirm: send Hosts:X_AVM-DE_WakeOnLANByMACAddress once.\nReports router acceptance, not that the device woke. No device lookup, retries, or polling; a lost response is uncertain.\nexamples: router-axi wake 02:00:00:00:00:01; router-axi wake 02:00:00:00:00:01 --confirm\n",
 	"doctor":   "usage: router-axi doctor [--host ADDRESS] [--json] [--help]\nOne bounded read-only diagnosis: reachability, TR-064 availability, authentication, model and firmware, and candidate capabilities for every command.\nUnsupported optional capabilities are a successful diagnosis and include remediation; no command's actions are invoked beyond DeviceInfo:GetInfo.\nexamples: router-axi doctor; router-axi doctor --host 192.0.2.1 --json\n",
 	"status":   "usage: router-axi status [--host ADDRESS] [--json] [--help]\nRead-only router identity and firmware; the default command when no command is given.\nexamples: router-axi status; router-axi status --json\n",
@@ -698,6 +726,8 @@ func confirmable(opts options) bool {
 }
 
 var flagSpecs = map[string]flagSpec{
+	"--group":    {valid: func(opts options) bool { return opts.command == "event-log" }, invalid: "--group is valid only with event-log"},
+	"--limit":    {valid: func(opts options) bool { return opts.command == "event-log" }, invalid: "--limit is valid only with event-log"},
 	"--host":     {valid: alwaysValid},
 	"--json":     {valid: alwaysValid},
 	"--help":     {valid: alwaysValid},
@@ -716,6 +746,8 @@ var flagSpecs = map[string]flagSpec{
 }
 
 var commandFlags = map[string][]string{
+	"event-log": {"--host", "--group", "--limit", "--json", "--help"},
+
 	"doctor":   {"--host", "--json", "--help"},
 	"status":   {"--host", "--json", "--help"},
 	"overview": {"--host", "--json", "--help"},
@@ -754,7 +786,7 @@ func validateFlagContext(opts options) error {
 	for _, flag := range flags {
 		allowed[flag] = true
 	}
-	for _, flag := range []string{"--interval", "--count", "--all", "--instance", "--ip", "--confirm", "--output", "--force", "--path", "--agent", "--host", "--json", "--help"} {
+	for _, flag := range []string{"--group", "--limit", "--interval", "--count", "--all", "--instance", "--ip", "--confirm", "--output", "--force", "--path", "--agent", "--host", "--json", "--help"} {
 		if !opts.flags[flag] {
 			continue
 		}
@@ -834,7 +866,7 @@ func help(command, action string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + " [--help]\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details; wan reconnect drops the connection once with --confirm\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients; devices detail adds one device's link and access state\n  leases    observed Hosts table lease metadata\n  dhcp      DHCP server configuration (never reservation inventory)\n  dsl       DSL link diagnostics\n  firmware  installed firmware, reported update availability, and auto-update state\n  account   own rights and login posture\n  wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  wake      preview Wake-on-LAN to one MAC; send once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details; wan reconnect drops the connection once with --confirm\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  event-log bounded router events (telephony excluded by default)\n  devices   connected and known LAN clients; devices detail adds one device's link and access state\n  leases    observed Hosts table lease metadata\n  dhcp      DHCP server configuration (never reservation inventory)\n  dsl       DSL link diagnostics\n  firmware  installed firmware, reported update availability, and auto-update state\n  account   own rights and login posture\n  wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  wake      preview Wake-on-LAN to one MAC; send once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -881,7 +913,7 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 			name  string
 			check tr064.DoctorCheck
 		}{
-			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"watch", v.Capabilities.Watch}, {"calls", v.Capabilities.Calls}, {"devices", v.Capabilities.Devices}, {"leases", v.Capabilities.Leases}, {"dhcp", v.Capabilities.DHCP}, {"dsl", v.Capabilities.DSL}, {"firmware", v.Capabilities.Firmware}, {"account", v.Capabilities.Account}, {"wifi", v.Capabilities.WiFi}, {"forwards", v.Capabilities.Forwards}, {"reboot", v.Capabilities.Reboot}, {"backup", v.Capabilities.Backup},
+			{"status", v.Capabilities.Status}, {"overview", v.Capabilities.Overview}, {"wan", v.Capabilities.WAN}, {"traffic", v.Capabilities.Traffic}, {"watch", v.Capabilities.Watch}, {"calls", v.Capabilities.Calls}, {"devices", v.Capabilities.Devices}, {"leases", v.Capabilities.Leases}, {"dhcp", v.Capabilities.DHCP}, {"dsl", v.Capabilities.DSL}, {"firmware", v.Capabilities.Firmware}, {"account", v.Capabilities.Account}, {"wifi", v.Capabilities.WiFi}, {"forwards", v.Capabilities.Forwards}, {"reboot", v.Capabilities.Reboot}, {"backup", v.Capabilities.Backup}, {"event_log", v.Capabilities.EventLog},
 		} {
 			if _, err := fmt.Fprintf(w, "  %s: %s\n", capability.name, check(capability.check)); err != nil {
 				return err
@@ -1034,6 +1066,8 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 		v := value.(tr064.DHCP)
 		_, err := fmt.Fprintf(w, "dhcp:\n  server_configurable: %s\n  server_enabled: %s\n  relay_enabled: %s\n  address_range_start: %s\n  address_range_end: %s\n  subnet_mask: %s\n  routers: %s\n  dns_servers: %s\n  domain_name: %s\n", optionalBool(v.ServerConfigurable), optionalBool(v.ServerEnabled), optionalBool(v.RelayEnabled), optionalText(v.AddressRangeStart), optionalText(v.AddressRangeEnd), optionalText(v.SubnetMask), scalar(strings.Join(v.Routers, ",")), scalar(strings.Join(v.DNSServers, ",")), optionalToon(v.DomainName))
 		return err
+	case "event-log":
+		return writeEventLog(w, value.(tr064.EventLog))
 	case "firmware":
 		v := value.(tr064.Firmware)
 		_, err := fmt.Fprintf(w, "firmware:\n  current_version: %s\n  update_available: %s\n  offered_version: %s\n  update_state: %s\n  build_type: %s\n  auto_update_mode: %s\n  update_time: %s\n  last_version: %s\n  update_successful: %s\n", optionalToon(v.CurrentVersion), optionalBool(v.UpdateAvailable), optionalToon(v.OfferedVersion), optionalToon(v.UpdateState), optionalToon(v.BuildType), optionalToon(v.AutoUpdateMode), optionalToon(v.UpdateTime), optionalToon(v.LastVersion), optionalToon(v.UpdateSuccessful))
