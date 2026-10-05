@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The current release provides device information, WAN status, traffic statistics, bounded event-log text with group filtering, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, account rights and login posture, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, WAN reconnect, reboot, Wake-on-LAN, firmware update check, and configuration export.
+The current release provides device information, WAN status, traffic statistics, bounded event-log text with group filtering, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, account rights and login posture, Wi-Fi configuration detail, documented guest Wi-Fi with timeout and isolation detail, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, WAN reconnect, reboot, Wake-on-LAN, firmware update check, and configuration export.
 
 ## Design constraints
 
@@ -1136,9 +1136,30 @@ Only safe fields are read from the two documented responses: enable status
 band (`NewX_AVM-DE_FrequencyBand`). Optional fields the router omits are
 `unknown` in compact output and JSON `null`; channel and band follow the same
 whitelist rules as the `wifi` list, and unrecognized optional values never
-fail the command. The BSSID that `GetInfo` also returns is discarded and never
-emitted; `GetSecurityKeys`, `X_AVM-DE_GetWLANHybridMode`, and associated-device
-actions are never called.
+fail the command.
+
+Two optional configuration parts follow those fields in this order:
+
+- `night_control` from `X_AVM-DE_GetNightControl`: `schedule`
+  (`NewNightControl`, raw XML string) and `no_forced_off`
+  (`NewNightTimeControlNoForcedOff`, boolean).
+- `wps` from `X_AVM-DE_GetWPSInfo`: `mode` (`NewX_AVM-DE_WPSMode`: `pbc`,
+  `stop`, `other`) and `status` (`NewX_AVM-DE_WPSStatus`: `off`, `inactive`,
+  `active`, `success`, `err_common`, `err_timeout`, `err_reconfig`,
+  `err_internal`, `err_abort`). Unrecognized enum values are `unknown`.
+
+An optional action is called only when the SCPD advertises it. An unadvertised
+action or any router fault on it makes only that part `unavailable` in compact
+output or `null` in JSON; the command still prints every other field.
+Authentication, network, and malformed-value failures remain structured errors.
+
+These names and types follow
+[FRITZ! WLANConfiguration v49, action and state tables](https://fritz.support/resources/TR-064_WLAN_Configuration.pdf).
+The document requires no rights for night control and the App right for WPS.
+Night control XML is preserved rather than interpreted as an undocumented
+schedule schema. The BSSID returned by `GetInfo` is discarded;
+`GetSecurityKeys`, `X_AVM-DE_GetWLANHybridMode`, and associated-device actions
+are never called.
 
 Compact output is:
 
@@ -1151,12 +1172,14 @@ wifi_detail:
   max_bit_rate: Auto
   channel: 36
   band: 5000
+  night_control: unavailable
+  wps: unavailable
 ```
 
 JSON uses the same deterministic field order:
 
 ```json
-{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","enabled":true,"status":"Up","standard":"ax","max_bit_rate":"Auto","channel":36,"band":"5000"}
+{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","enabled":true,"status":"Up","standard":"ax","max_bit_rate":"Auto","channel":36,"band":"5000","night_control":null,"wps":null}
 ```
 
 Errors are the standard structured errors: `ambiguous_instance` and
@@ -1175,7 +1198,7 @@ and calls the documented AVM action `X_AVM-DE_GetWLANExtInfo` on each one. An
 instance is a guest network only when `NewX_AVM-DE_APType` is exactly `guest`;
 `normal` is not selected. Service-instance numbers and SSIDs never determine the
 role. The contract is documented in
-[FRITZ! WLANConfiguration v48, pp. 12 and 16](https://fritz.support/resources/TR-064_WLAN_Configuration.pdf),
+[FRITZ! WLANConfiguration v49, action and state tables](https://fritz.support/resources/TR-064_WLAN_Configuration.pdf),
 which defines `X_AVM-DE_APType` values `normal` and `guest`.
 
 Classification of all advertised WLAN instances completes before guest details are
@@ -1183,7 +1206,16 @@ read. Each explicit guest is then read with the same documented actions as `wifi
 `GetInfo`, `GetChannelInfo`, `GetTotalAssociations`, and `GetBeaconType`. Compact
 output is
 `guests[N]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}`;
-JSON uses the same ordered fields under `guests` followed by `total`. The count in
+JSON preserves those ordered fields, appends `configuration` to each guest,
+and returns `guests` followed by `total`. Compact output appends a
+`guest_configuration[N]{service_id,timeout_active,timeout,time_remain,no_forced_off,user_isolation}`
+table. Configuration reuses the classification response without another request:
+`NewX_AVM-DE_TimeoutActive`, `NewX_AVM-DE_Timeout`, `NewX_AVM-DE_TimeRemain`,
+`NewX_AVM-DE_NoForcedOff`, and `NewX_AVM-DE_UserIsolation` map in that order to
+the five configuration fields. The document defines all five as strings without
+units or enumerated values, so router values are preserved without unit suffixes;
+missing fields are `unknown` or JSON `null`. The extension action requires the
+App right. The count in
 the compact header and JSON `total` makes zero, one, and multiple explicit. AVM's
 current mapping documents zero or one logical guest service, whose position may be
 service 2, 3, or 4; the CLI does not assume that limit and reports every instance
@@ -1210,7 +1242,8 @@ from the device description alone, so it intentionally has no separate guest
 capability.
 
 SSID is the only network identity returned. `X_AVM-DE_GetWLANExtInfo` may return
-other fields, but the client retains only AP type. It never retrieves or outputs
+other fields, but the client retains only AP type and the five configuration
+fields listed above. It never retrieves or outputs
 passphrases, security keys, BSSID, client MAC addresses, associated-device records,
 or client device/IP details. Tests use synthetic fixtures; hardware guest
 inspection is not validated unless the bounded opt-in live test is run locally.
@@ -1429,9 +1462,10 @@ documented `WANDSLInterfaceConfig:GetStatisticsTotal` and
 account reads listed above, the SCPD-advertised `DeviceInfo:X_AVM-DE_GetDeviceLogPath`
 event-log read and its grouped XML download, and `WLANConfiguration:GetInfo`,
 `GetChannelInfo`, `GetTotalAssociations`, and
-`GetBeaconType`. Guest inspection additionally uses the documented AVM
-`WLANConfiguration:X_AVM-DE_GetWLANExtInfo` action only to read
-`NewX_AVM-DE_APType`, then the same four status actions for explicitly classified
+`GetBeaconType`. Wi-Fi detail additionally uses the SCPD-advertised
+`X_AVM-DE_GetNightControl` and `X_AVM-DE_GetWPSInfo` configuration reads. Guest inspection additionally uses the documented AVM
+`WLANConfiguration:X_AVM-DE_GetWLANExtInfo` action to read
+`NewX_AVM-DE_APType` and documented timeout/isolation configuration, then the same four status actions for explicitly classified
 guest instances. Commands that need an active WAN (`wan`, `overview`, `watch`,
 and `forwards`) use `Layer3Forwarding:GetDefaultConnectionService`; `forwards`
 then uses the active `WANIPConnection`/`WANPPPConnection`:

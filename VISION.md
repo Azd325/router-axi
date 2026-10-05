@@ -32,7 +32,7 @@ Explicit event-log inspection is bounded and filters only documented groups;
 telephony entries require explicit group selection. Its router-provided free text
 can include usernames, client addresses, and explicitly requested call data.
 Guest Wi-Fi inspection uses only a documented access-point role, exposes the public
-broadcast SSID and aggregate radio state, and never retrieves keys, BSSIDs, or client details.
+broadcast SSID, aggregate radio state, and documented timeout and isolation configuration, and never retrieves keys, BSSIDs, or client details.
 A state-changing command shows its intended effect before it executes.
 Disruptive changes require an explicit confirmation flag and never rely on a prompt.
 Mutations are idempotent where the underlying router capability permits it.

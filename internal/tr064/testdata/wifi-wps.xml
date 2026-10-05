@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:X_AVM-DE_GetWPSInfoResponse xmlns:u="urn:dslforum-org:service:WLANConfiguration:1"><NewX_AVM-DE_WPSMode>pbc</NewX_AVM-DE_WPSMode><NewX_AVM-DE_WPSStatus>inactive</NewX_AVM-DE_WPSStatus><NewX_AVM-DE_WPSAPPIN>synthetic-sensitive-pin</NewX_AVM-DE_WPSAPPIN></u:X_AVM-DE_GetWPSInfoResponse></s:Body></s:Envelope>

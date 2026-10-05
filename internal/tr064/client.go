@@ -210,29 +210,29 @@ type Radio struct {
 }
 
 type GuestNetwork struct {
-	ServiceID         string `json:"service_id"`
-	SSID              string `json:"ssid"`
-	Enabled           bool   `json:"enabled"`
-	Channel           uint64 `json:"channel"`
-	Band              string `json:"band"`
-	Standard          string `json:"standard"`
-	AssociatedClients uint64 `json:"associated_clients"`
-	SecurityMode      string `json:"security_mode"`
+	ServiceID         string             `json:"service_id"`
+	SSID              string             `json:"ssid"`
+	Enabled           bool               `json:"enabled"`
+	Channel           uint64             `json:"channel"`
+	Band              string             `json:"band"`
+	Standard          string             `json:"standard"`
+	AssociatedClients uint64             `json:"associated_clients"`
+	SecurityMode      string             `json:"security_mode"`
+	Configuration     GuestConfiguration `json:"configuration"`
 }
 
-// RadioDetail is the bounded per-radio Wi-Fi detail view. It is read only
-// through the documented WLANConfiguration GetInfo and GetChannelInfo actions
-// and carries only safe fields: BSSIDs, keys, and client details are never
-// read or emitted. Optional router fields that are absent stay nil and are
-// reported as unknown or JSON null.
+// RadioDetail carries safe per-radio state and independently available configuration reads.
+// Absent optional fields are unknown; unavailable configuration parts are nil.
 type RadioDetail struct {
-	ServiceID  string  `json:"service_id"`
-	Enabled    bool    `json:"enabled"`
-	Status     *string `json:"status"`
-	Standard   string  `json:"standard"`
-	MaxBitRate *string `json:"max_bit_rate"`
-	Channel    *uint64 `json:"channel"`
-	Band       string  `json:"band"`
+	ServiceID    string            `json:"service_id"`
+	Enabled      bool              `json:"enabled"`
+	Status       *string           `json:"status"`
+	Standard     string            `json:"standard"`
+	MaxBitRate   *string           `json:"max_bit_rate"`
+	Channel      *uint64           `json:"channel"`
+	Band         string            `json:"band"`
+	NightControl *WiFiNightControl `json:"night_control"`
+	WPS          *WiFiWPS          `json:"wps"`
 }
 
 type Forward struct {
@@ -295,6 +295,9 @@ type soapValues struct {
 	Enable, SSID, Standard                                                        string
 	WLANStatus, MaxBitRate                                                        string
 	Channel, FrequencyBand, TotalAssociations, BeaconType, APType                 string
+	NightControl, NightTimeControlNoForcedOff, WPSMode, WPSStatus                 string
+	GuestTimeoutActive, GuestTimeout, GuestTimeRemain                             string
+	GuestNoForcedOff, GuestUserIsolation                                          string
 	PortMappingCount, ExternalPort, PortMappingProtocol                           string
 	InternalPort, InternalClient, Enabled, PortMappingDescription                 string
 	RemoteHost, LeaseDuration                                                     *string
@@ -440,6 +443,24 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.TotalAssociations
 		case "NewBeaconType":
 			target = &v.BeaconType
+		case "NewNightControl":
+			target = &v.NightControl
+		case "NewNightTimeControlNoForcedOff":
+			target = &v.NightTimeControlNoForcedOff
+		case "NewX_AVM-DE_WPSMode":
+			target = &v.WPSMode
+		case "NewX_AVM-DE_WPSStatus":
+			target = &v.WPSStatus
+		case "NewX_AVM-DE_TimeoutActive":
+			target = &v.GuestTimeoutActive
+		case "NewX_AVM-DE_Timeout":
+			target = &v.GuestTimeout
+		case "NewX_AVM-DE_TimeRemain":
+			target = &v.GuestTimeRemain
+		case "NewX_AVM-DE_NoForcedOff":
+			target = &v.GuestNoForcedOff
+		case "NewX_AVM-DE_UserIsolation":
+			target = &v.GuestUserIsolation
 		case "NewX_AVM-DE_APType":
 			target = &v.APType
 		case "NewPortMappingNumberOfEntries":
@@ -1600,6 +1621,7 @@ func (c *Client) GuestWiFi(ctx context.Context) ([]GuestNetwork, error) {
 		return nil, guestError(err)
 	}
 	guestServices := make([]service, 0, 1)
+	configurations := map[string]GuestConfiguration{}
 	for _, svc := range services {
 		info, err := c.actionOnService(ctx, svc, "X_AVM-DE_GetWLANExtInfo")
 		if err != nil {
@@ -1609,6 +1631,7 @@ func (c *Client) GuestWiFi(ctx context.Context) ([]GuestNetwork, error) {
 		case "normal":
 		case "guest":
 			guestServices = append(guestServices, svc)
+			configurations[svc.ID] = guestConfiguration(info)
 		default:
 			return nil, &Error{Kind: "protocol", Operation: "guest", Message: "router returned an invalid Wi-Fi access-point type"}
 		}
@@ -1623,6 +1646,7 @@ func (c *Client) GuestWiFi(ctx context.Context) ([]GuestNetwork, error) {
 			ServiceID: radio.ServiceID, SSID: radio.SSID, Enabled: radio.Enabled,
 			Channel: radio.Channel, Band: radio.Band, Standard: radio.Standard,
 			AssociatedClients: radio.AssociatedDevices, SecurityMode: radio.SecurityMode,
+			Configuration: configurations[svc.ID],
 		})
 	}
 	return guests, nil
@@ -1813,11 +1837,7 @@ func selectWLANService(services []service, instance uint64, operation string) (s
 
 const wifiDetailRemediation = "enable the WLANConfiguration TR-064 service with GetInfo and GetChannelInfo, or use supported firmware"
 
-// WiFiDetail reports the bounded per-radio detail view for one identified
-// WLANConfiguration instance. Like wan detail it validates that the target
-// service's SCPD advertises the required documented actions (GetInfo and
-// GetChannelInfo) before any of them is invoked. Only safe fields are read:
-// BSSIDs, keys, and client details are never requested or emitted.
+// WiFiDetail requires advertised GetInfo and GetChannelInfo before reading one identified radio.
 func (c *Client) WiFiDetail(ctx context.Context, instance uint64) (RadioDetail, error) {
 	services, err := c.wlanServices(ctx)
 	if err != nil {
@@ -1827,7 +1847,8 @@ func (c *Client) WiFiDetail(ctx context.Context, instance uint64) (RadioDetail, 
 	if err != nil {
 		return RadioDetail{}, err
 	}
-	if err := c.validateWifiDetailActions(ctx, target); err != nil {
+	actions, err := c.wlanReadActions(ctx, target)
+	if err != nil {
 		return RadioDetail{}, err
 	}
 	info, err := c.actionOnService(ctx, target, "GetInfo")
@@ -1856,26 +1877,27 @@ func (c *Client) WiFiDetail(ctx context.Context, instance uint64) (RadioDetail, 
 	if err != nil {
 		return RadioDetail{}, err
 	}
-	return RadioDetail{
+	result := RadioDetail{
 		ServiceID: target.ID, Enabled: enabled, Status: optionalWifiDetailString(info.WLANStatus),
 		Standard: standard, MaxBitRate: optionalWifiDetailString(info.MaxBitRate),
 		Channel: number, Band: band,
-	}, nil
+	}
+	if err := c.readWiFiConfiguration(ctx, target, actions, &result); err != nil {
+		return RadioDetail{}, err
+	}
+	return result, nil
 }
 
-// validateWifiDetailActions mirrors the wan detail preflight: the target
-// service's control and SCPD URLs must stay on the router origin without user
-// information, query, or fragment, and the fetched SCPD must advertise
-// GetInfo and GetChannelInfo before either action is invoked.
-func (c *Client) validateWifiDetailActions(ctx context.Context, svc service) error {
+// wlanReadActions uses the same URL and action-name checks as other detail reads.
+func (c *Client) wlanReadActions(ctx context.Context, svc service) (map[string]bool, error) {
 	control, controlErr := c.base.Parse(svc.ControlURL)
 	scpdURL, scpdErr := c.base.Parse(svc.SCPDURL)
 	if controlErr != nil || svc.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.ForceQuery || control.Fragment != "" || scpdErr != nil || svc.SCPDURL == "" || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.ForceQuery || scpdURL.Fragment != "" {
-		return &Error{Kind: "protocol", Operation: "wifi detail", Message: "router advertised an invalid WLAN service URL"}
+		return nil, &Error{Kind: "protocol", Operation: "wifi detail", Message: "router advertised an invalid WLAN service URL"}
 	}
 	body, err := c.get(ctx, scpdURL)
 	if err != nil {
-		return wifiDetailError(err)
+		return nil, wifiDetailError(err)
 	}
 	var scpd struct {
 		XMLName xml.Name `xml:"scpd"`
@@ -1884,16 +1906,16 @@ func (c *Client) validateWifiDetailActions(ctx context.Context, svc service) err
 		} `xml:"actionList>action"`
 	}
 	if err := xml.Unmarshal(body, &scpd); err != nil || scpd.XMLName.Local != "scpd" {
-		return &Error{Kind: "protocol", Operation: "wifi detail", Message: "router returned an invalid WLAN service description"}
+		return nil, &Error{Kind: "protocol", Operation: "wifi detail", Message: "router returned an invalid WLAN service description"}
 	}
 	actions := map[string]bool{}
 	for _, action := range scpd.Actions {
 		actions[strings.TrimSpace(action.Name)] = true
 	}
 	if !actions["GetInfo"] || !actions["GetChannelInfo"] {
-		return &Error{Kind: "unsupported", Operation: "wifi detail", Message: "router does not advertise WLANConfiguration:GetInfo or WLANConfiguration:GetChannelInfo; " + wifiDetailRemediation}
+		return nil, &Error{Kind: "unsupported", Operation: "wifi detail", Message: "router does not advertise WLANConfiguration:GetInfo or WLANConfiguration:GetChannelInfo; " + wifiDetailRemediation}
 	}
-	return nil
+	return actions, nil
 }
 
 func optionalWifiDetailString(value string) *string {

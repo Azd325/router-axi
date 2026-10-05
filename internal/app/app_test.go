@@ -767,8 +767,8 @@ func TestGuestOutputContract(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"guest"}, "guests[1]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration2,synthetic-guest,true,36,5000,ax,1,11iandWPA3\n"},
-		{[]string{"guest", "--json"}, `{"guests":[{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","ssid":"synthetic-guest","enabled":true,"channel":36,"band":"5000","standard":"ax","associated_clients":1,"security_mode":"11iandWPA3"}],"total":1}` + "\n"},
+		{[]string{"guest"}, "guests[1]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration2,synthetic-guest,true,36,5000,ax,1,11iandWPA3\nguest_configuration[1]{service_id,timeout_active,timeout,time_remain,no_forced_off,user_isolation}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration2,unknown,unknown,unknown,unknown,unknown\n"},
+		{[]string{"guest", "--json"}, `{"guests":[{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","ssid":"synthetic-guest","enabled":true,"channel":36,"band":"5000","standard":"ax","associated_clients":1,"security_mode":"11iandWPA3","configuration":{"timeout_active":null,"timeout":null,"time_remain":null,"no_forced_off":null,"user_isolation":null}}],"total":1}` + "\n"},
 	} {
 		code, stdout, stderr := runTest(t, test.args...)
 		if code != ExitOK || stdout != test.want || stderr != "" {
@@ -824,7 +824,7 @@ func TestGuestFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "guest", "--help")
-	if code != ExitOK || stdout != "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID and aggregate radio state only; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n" || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID, aggregate radio state, and raw timeout/isolation configuration; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -1004,8 +1004,8 @@ func TestWiFiDetailPassesInstanceAndPrintsCompactAndJSON(t *testing.T) {
 				jsonOutput bool
 				wanted     string
 			}{
-				{jsonOutput: false, wanted: test.compact},
-				{jsonOutput: true, wanted: test.json},
+				{jsonOutput: false, wanted: test.compact + "  night_control: unavailable\n  wps: unavailable\n"},
+				{jsonOutput: true, wanted: strings.TrimSuffix(test.json, "}\n") + `,"night_control":null,"wps":null}` + "\n"},
 			} {
 				var stdout, stderr bytes.Buffer
 				args := append([]string{}, test.args...)
