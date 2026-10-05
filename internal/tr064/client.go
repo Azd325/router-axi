@@ -541,7 +541,7 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 		case "NewATUCCRCErrors":
 			target = &v.ATUCCRCErrors
 		// The vendor document (WANDSLInterfaceConfig v9, §3.3) spells this argument "Digagnose".
-		case "NewX_AVM-DE_DSLDigagnoseState", "NewX_AVM-DE_DSLDiagnoseState":
+		case "NewX_AVM-DE_DSLDigagnoseState":
 			target = &v.DSLDiagnoseState
 		case "NewX_AVM-DE_CableNokDistance":
 			target = &v.CableNokDistance

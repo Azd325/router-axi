@@ -43,7 +43,7 @@ type DSLDiagnosis struct {
 const (
 	dslStatisticsAction  = "GetStatisticsTotal"
 	dslDiagnosisAction   = "X_AVM-DE_GetDSLDiagnoseInfo"
-	dslDetailRemediation = "use firmware that advertises WANDSLInterfaceConfig:" + dslStatisticsAction + " or " + dslDiagnosisAction
+	dslDetailRemediation = "use firmware that supports WANDSLInterfaceConfig:" + dslStatisticsAction + " or " + dslDiagnosisAction
 )
 
 func (c *Client) DSLDetail(ctx context.Context) (DSLDetail, error) {
@@ -61,27 +61,36 @@ func (c *Client) DSLDetail(ctx context.Context) (DSLDetail, error) {
 	if err != nil {
 		return DSLDetail{}, err
 	}
-	if !actions[dslStatisticsAction] && !actions[dslDiagnosisAction] {
-		return DSLDetail{}, &Error{Kind: "unsupported", Operation: "dsl detail", Message: "router advertises neither WANDSLInterfaceConfig:" + dslStatisticsAction + " nor " + dslDiagnosisAction + "; " + dslDetailRemediation}
+	read := func(action string) (soapValues, bool, error) {
+		if !actions[action] {
+			return soapValues{}, false, nil
+		}
+		values, err := client.actionOnService(ctx, target, action)
+		if err == nil {
+			return values, true, nil
+		}
+		if failure := dslDetailError(err); failure.Kind != "unsupported" {
+			return soapValues{}, false, failure
+		}
+		return soapValues{}, false, nil
 	}
 	var result DSLDetail
-	if actions[dslStatisticsAction] {
-		values, err := client.actionOnService(ctx, target, dslStatisticsAction)
-		if err != nil {
-			return DSLDetail{}, dslDetailError(err)
-		}
+	if values, supported, err := read(dslStatisticsAction); err != nil {
+		return DSLDetail{}, err
+	} else if supported {
 		if result.Statistics, err = parseDSLStatistics(values); err != nil {
 			return DSLDetail{}, err
 		}
 	}
-	if actions[dslDiagnosisAction] {
-		values, err := client.actionOnService(ctx, target, dslDiagnosisAction)
-		if err != nil {
-			return DSLDetail{}, dslDetailError(err)
-		}
+	if values, supported, err := read(dslDiagnosisAction); err != nil {
+		return DSLDetail{}, err
+	} else if supported {
 		if result.Diagnosis, err = parseDSLDiagnosis(values); err != nil {
 			return DSLDetail{}, err
 		}
+	}
+	if result.Statistics == nil && result.Diagnosis == nil {
+		return DSLDetail{}, &Error{Kind: "unsupported", Operation: "dsl detail", Message: "router supports neither WANDSLInterfaceConfig:" + dslStatisticsAction + " nor " + dslDiagnosisAction + "; " + dslDetailRemediation}
 	}
 	return result, nil
 }

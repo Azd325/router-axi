@@ -19,9 +19,6 @@ var dslStatisticsFixture string
 //go:embed testdata/dsl-diagnose-info.xml
 var dslDiagnoseInfoFixture string
 
-//go:embed testdata/dsl-diagnose-info-cable-nok.xml
-var dslDiagnoseInfoCableNokFixture string
-
 var wantDSLStatistics = DSLStatistics{ReceiveBlocks: 1001, TransmitBlocks: 1002, CellDelineation: 3, LinkRetrains: 4, InitErrors: 5, InitTimeouts: 6, LossOfFraming: 7, ErroredSeconds: 8, SeverelyErroredSeconds: 9, FECErrors: 10, ATUCFECErrors: 11, HECErrors: 12, ATUCHECErrors: 13, CRCErrors: 14, ATUCCRCErrors: 15}
 
 func dslDetailResponses() map[string]dslResponse {
@@ -47,7 +44,7 @@ func TestDSLDetailReportsDocumentedFields(t *testing.T) {
 
 func TestDSLDetailReportsLocatedCableFault(t *testing.T) {
 	responses := dslDetailResponses()
-	responses[dslDiagnosisAction] = dslResponse{body: dslDiagnoseInfoCableNokFixture}
+	responses[dslDiagnosisAction] = dslResponse{body: strings.NewReplacer("NONE", "DONE_CABLE_NOK", "Distance>-1<", "Distance>120<", "DiagnoseTime>0<", "DiagnoseTime>45<", "LossTime>0<", "LossTime>900<", "Sync>1<", "Sync>0<").Replace(dslDiagnoseInfoFixture)}
 	client, _ := dslFixtureClient(t, dslDescriptionFixture, dslDetailSCPDFixture, responses)
 	result, err := client.DSLDetail(t.Context())
 	distance := uint64(120)
@@ -81,6 +78,37 @@ func TestDSLDetailReadsOnlyAdvertisedActions(t *testing.T) {
 		var protocolErr *Error
 		if !reflect.DeepEqual(result, DSLDetail{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != "unsupported" || protocolErr.Operation != "dsl detail" || !reflect.DeepEqual(*requests, []string{"GET /tr64desc.xml", "GET /dsl.xml"}) {
 			t.Fatalf("result=%#v error=%#v requests=%v", result, err, *requests)
+		}
+	})
+}
+
+func TestDSLDetailReportsInvalidActionAsUnsupportedPart(t *testing.T) {
+	invalidAction := dslResponse{body: `<Fault><errorCode>401</errorCode><errorDescription>private-fault</errorDescription></Fault>`, status: http.StatusInternalServerError}
+	allRequests := []string{"GET /tr64desc.xml", "GET /dsl.xml", "/dsl#GetStatisticsTotal", "/dsl#X_AVM-DE_GetDSLDiagnoseInfo"}
+	t.Run("diagnosis", func(t *testing.T) {
+		responses := dslDetailResponses()
+		responses[dslDiagnosisAction] = invalidAction
+		client, requests := dslFixtureClient(t, dslDescriptionFixture, dslDetailSCPDFixture, responses)
+		result, err := client.DSLDetail(t.Context())
+		if err != nil || !reflect.DeepEqual(result, DSLDetail{Statistics: &wantDSLStatistics}) || !reflect.DeepEqual(*requests, allRequests) {
+			t.Fatalf("result=%#v error=%v requests=%v", result, err, *requests)
+		}
+	})
+	t.Run("statistics", func(t *testing.T) {
+		responses := dslDetailResponses()
+		responses[dslStatisticsAction] = invalidAction
+		client, requests := dslFixtureClient(t, dslDescriptionFixture, dslDetailSCPDFixture, responses)
+		result, err := client.DSLDetail(t.Context())
+		if err != nil || result.Statistics != nil || !reflect.DeepEqual(result.Diagnosis, &DSLDiagnosis{State: "NONE", Active: true, Sync: true}) || !reflect.DeepEqual(*requests, allRequests) {
+			t.Fatalf("result=%#v error=%v requests=%v", result, err, *requests)
+		}
+	})
+	t.Run("both", func(t *testing.T) {
+		client, _ := dslFixtureClient(t, dslDescriptionFixture, dslDetailSCPDFixture, map[string]dslResponse{dslStatisticsAction: invalidAction, dslDiagnosisAction: invalidAction})
+		result, err := client.DSLDetail(t.Context())
+		var protocolErr *Error
+		if !reflect.DeepEqual(result, DSLDetail{}) || !errors.As(err, &protocolErr) || protocolErr.Kind != "unsupported" || protocolErr.Operation != "dsl detail" || strings.Contains(fmt.Sprintf("%#v", err), "private") {
+			t.Fatalf("result=%#v error=%#v", result, err)
 		}
 	})
 }
@@ -155,7 +183,6 @@ func TestDSLDetailFailuresAreSanitized(t *testing.T) {
 		name, action, body, kind string
 		status                   int
 	}{
-		{name: "invalid action", action: dslDiagnosisAction, body: `<Fault><errorCode>401</errorCode><errorDescription>private-fault</errorDescription></Fault>`, kind: "unsupported", status: http.StatusInternalServerError},
 		{name: "internal error", action: dslDiagnosisAction, body: `<Fault><errorCode>820</errorCode><errorDescription>private-fault</errorDescription></Fault>`, kind: "router", status: http.StatusInternalServerError},
 		{name: "invalid XML", action: dslStatisticsAction, body: `<private-value`, kind: "protocol", status: http.StatusOK},
 		{name: "unauthorized", action: dslStatisticsAction, kind: "auth", status: http.StatusUnauthorized},

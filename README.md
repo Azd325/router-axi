@@ -700,17 +700,20 @@ JSON fields follow the same order:
 {"statistics":{"receive_blocks":1001,"transmit_blocks":1002,"cell_delineation":3,"link_retrains":4,"init_errors":5,"init_timeouts":6,"loss_of_framing":7,"errored_seconds":8,"severely_errored_seconds":9,"fec_errors":10,"atuc_fec_errors":11,"hec_errors":12,"atuc_hec_errors":13,"crc_errors":14,"atuc_crc_errors":15},"diagnosis":{"state":"DONE_CABLE_NOK","cable_fault_distance_meters":120,"last_diagnose_time_seconds":45,"signal_loss_time_seconds":900,"active":true,"sync":false}}
 ```
 
-A part whose action the router does not advertise is `unsupported` in compact
-output and `null` in JSON; the other part is still reported. The command exits `5`
-when neither action is advertised. All fields of an advertised part are required
+A part whose action the router does not advertise, or rejects with the documented
+invalid-action fault `401`, is `unsupported` in compact output and `null` in JSON;
+the other part is still reported. The command exits `5` when neither part is
+available. All fields of an advertised part are required
 and validated before any output. Documented diagnosis states (`NONE`, `NO_CALIB`,
 `RUNNING`, `DONE`, `DONE_CABLE_NOK`, `DONE_CABLE_OK`) are preserved; other
 non-empty states become `unknown`. `cable_fault_distance_meters` is `unknown`
-(`null` in JSON) when the router reports `-1`, which means that no fault was
-located. The document spells the state argument `DSLDigagnoseState`; the command
-accepts that spelling and `DSLDiagnoseState`. Error handling and exit codes match
-`dsl`. Compatibility is fixture-backed for service versions 1 and 2, both
-spellings, and each single-action router; it is not inferred from router models.
+(`null` in JSON) when the router reports `-1`. The document reports `-1` in every
+state except `DONE_CABLE_NOK` with a detected location; for `DONE_CABLE_NOK` it
+means that the distance could not be detected or is too inaccurate. The document
+states meters for the distance and seconds for both times (§3.3, Table 5). Error
+handling and exit codes otherwise match `dsl`. Compatibility is fixture-backed for
+service versions 1 and 2 and each single-action router; it is not inferred from
+router models.
 
 ### Account rights and login posture
 
