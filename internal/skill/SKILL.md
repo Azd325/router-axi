@@ -1,6 +1,6 @@
 ---
 name: router-axi
-description: Inspect and operate a supported home router through the router-axi CLI (FRITZ!Box TR-064). Use when an agent needs to review router status, WAN, traffic, calls, devices, leases, DHCP server configuration, DSL link diagnostics, account rights and login posture, Wi-Fi, guest Wi-Fi, or port forwards, or to make confirmed wifi, reboot, or backup changes from a terminal.
+description: Inspect and operate a supported home router through the router-axi CLI (FRITZ!Box TR-064). Use when an agent needs to review router status, WAN, traffic, calls, devices, leases, DHCP server configuration, DSL link diagnostics, account rights and login posture, Wi-Fi, guest Wi-Fi, or port forwards, or to make confirmed wifi, WAN reconnect, reboot, or backup changes from a terminal.
 ---
 
 # router-axi
@@ -18,7 +18,7 @@ documentation; run the CLI for live router state.
 - `router-axi` — status is the default view (router identity and firmware).
 - `doctor` — bounded connectivity and capability diagnosis.
 - `overview` — identity, WAN state, and traffic totals in one atomic read.
-- `wan` — compact internet connection state; `wan detail` explicitly reads bounded physical-link properties and optional router-reported rates, totals, and DNS.
+- `wan` — compact internet connection state; `wan detail` explicitly reads bounded physical-link properties and optional router-reported rates, totals, and DNS; `wan reconnect` previews dropping the internet connection and executes once with `--confirm`.
 - `traffic` — byte totals with an `observed_at` timestamp.
 - `watch` — bounded read-only WAN/traffic polling; defaults `--interval 5s
   --count 6` (bounds 1s–1m and 1–3600, no unbounded mode, JSONL with `--json`,
@@ -55,6 +55,12 @@ documentation; run the CLI for live router state.
   exactly one documented `DeviceConfig:Reboot` and reports acknowledgement,
   not recovery. **Reboot is not idempotent** — never repeat it after an error
   or lost response; check recovery manually with `doctor`.
+- `wan reconnect` without `--confirm` is a preview plan; `wan reconnect
+  --confirm` sends exactly one documented `ForceTermination` to the active
+  WAN connection service and reports acknowledgement, not recovery. The
+  internet connection drops and a new external address may be assigned.
+  **WAN reconnect is not idempotent** — never repeat it after an error or
+  lost response; check the connection manually with `wan`.
 - `backup --output PATH` writes the export with an atomic owner-only file,
   never overwrites without `--force`, and requires an HTTPS router origin
   (for example `--host https://fritz.box:49443`) with a locally trusted
@@ -98,7 +104,7 @@ commands:
   doctor    bounded connectivity and capability diagnosis
   status    router identity and firmware (default)
   overview  identity, WAN state, and traffic totals
-  wan       internet connection state; wan detail adds bounded link details
+  wan       internet connection state; wan detail adds bounded link details; wan reconnect drops the connection once with --confirm
   traffic   byte totals
   watch     bounded WAN state and traffic polling (6 samples, 5s interval)
   calls     call history

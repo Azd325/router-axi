@@ -58,6 +58,7 @@ type Reader interface {
 	WiFiMutation(context.Context, uint64, bool, bool) (tr064.WiFiMutation, error)
 	Forwards(context.Context) ([]tr064.Forward, error)
 	Reboot(context.Context, bool) (tr064.RebootResult, error)
+	WANReconnect(context.Context, bool) (tr064.WANReconnectResult, error)
 	ConfigExport(context.Context, string) ([]byte, error)
 }
 type Factory func(Config) (Reader, error)
@@ -153,14 +154,14 @@ const rebootRecovery = "wait for the router to recover, then run router-axi doct
 
 const backupNext = "keep the export passphrase safe; the backup can only be restored with it"
 
-type rebootPreviewState struct {
+type sendOncePreviewState struct {
 	Endpoint string `json:"endpoint"`
 	Preview  bool   `json:"preview"`
 	Effect   string `json:"effect"`
 	Execute  string `json:"execute"`
 }
 
-type rebootAcceptedState struct {
+type sendOnceAcceptedState struct {
 	Endpoint string `json:"endpoint"`
 	Accepted bool   `json:"accepted"`
 	Recovery string `json:"recovery"`
@@ -280,6 +281,13 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			return renderProtocolError(stderr, opts.json, err)
 		}
 		return writeReboot(stdout, result, opts.json)
+	}
+	if wanReconnect(opts) {
+		result, err := reader.WANReconnect(ctx, opts.confirm)
+		if err != nil {
+			return renderProtocolError(stderr, opts.json, err)
+		}
+		return writeWANReconnect(stdout, result, opts.json)
 	}
 	if opts.command == "backup" {
 		passphrase := a.getenv("ROUTER_AXI_BACKUP_PASSWORD")
@@ -513,12 +521,12 @@ func parse(args []string) (options, error) {
 				opts.command = args[i]
 				continue
 			}
-			if opts.command == "wan" && opts.action == "" && args[i] == "detail" {
+			if opts.command == "wan" && opts.action == "" && (args[i] == "detail" || args[i] == "reconnect") {
 				opts.action = args[i]
 				continue
 			}
 			if opts.command == "wan" && opts.action != "" {
-				return opts, errors.New("wan accepts one action: detail")
+				return opts, errors.New("wan accepts one action: detail or reconnect")
 			}
 			if opts.command == "wifi" && opts.action == "" && (args[i] == "enable" || args[i] == "disable" || args[i] == "detail") {
 				opts.action = args[i]
@@ -586,7 +594,7 @@ var commandHelp = map[string]string{
 	"doctor":   "usage: router-axi doctor [--host ADDRESS] [--json] [--help]\nOne bounded read-only diagnosis: reachability, TR-064 availability, authentication, model and firmware, and candidate capabilities for every command.\nUnsupported optional capabilities are a successful diagnosis and include remediation; no command's actions are invoked beyond DeviceInfo:GetInfo.\nexamples: router-axi doctor; router-axi doctor --host 192.0.2.1 --json\n",
 	"status":   "usage: router-axi status [--host ADDRESS] [--json] [--help]\nRead-only router identity and firmware; the default command when no command is given.\nexamples: router-axi status; router-axi status --json\n",
 	"overview": "usage: router-axi overview [--host ADDRESS] [--json] [--help]\nRead-only combined view: router identity, WAN state, and traffic totals in one read.\nexamples: router-axi overview; router-axi overview --json\n",
-	"wan":      "usage: router-axi wan [detail] [--host ADDRESS] [--json] [--help]\nRead-only internet connection state: status, external address, IP family, uptime, and last error. Use wan detail for bounded physical-link properties and optional router-reported rates, totals, and DNS.\nexamples: router-axi wan; router-axi wan --json; router-axi wan detail\n",
+	"wan":      "usage: router-axi wan [detail] [--host ADDRESS] [--json] [reconnect [--confirm]] [--help]\nRead-only internet connection state: status, external address, IP family, uptime, and last error. Use wan detail for bounded physical-link properties and optional router-reported rates, totals, and DNS. wan reconnect drops the internet connection once: preview without --confirm.\nexamples: router-axi wan; router-axi wan --json; router-axi wan detail; router-axi wan reconnect\n",
 	"traffic":  "usage: router-axi traffic [--host ADDRESS] [--json] [--help]\nRead-only total downloaded and uploaded byte counters with the observation time.\nexamples: router-axi traffic; router-axi traffic --json\n",
 	"calls":    "usage: router-axi calls [--all] [--host ADDRESS] [--json] [--help]\nRead-only call history. Defaults to the 100 most recent entries; --all lists everything. No required arguments.\nexamples: router-axi calls; router-axi calls --all; router-axi calls --all --json\n",
 	"devices":  "usage: router-axi devices [--all] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi devices; router-axi devices --all --json\n",
@@ -617,7 +625,11 @@ func wifiMutation(opts options) bool {
 
 func wifiTargeted(opts options) bool { return opts.command == "wifi" && opts.action != "" }
 
-func rebootOrWiFiMutation(opts options) bool { return opts.command == "reboot" || wifiMutation(opts) }
+func wanReconnect(opts options) bool { return opts.command == "wan" && opts.action == "reconnect" }
+
+func confirmable(opts options) bool {
+	return opts.command == "reboot" || wanReconnect(opts) || wifiMutation(opts)
+}
 
 var flagSpecs = map[string]flagSpec{
 	"--host":     {valid: alwaysValid},
@@ -629,7 +641,7 @@ var flagSpecs = map[string]flagSpec{
 		return opts.command == "calls" || opts.command == "devices" || opts.command == "leases" || opts.command == "forwards"
 	}, invalid: "--all is valid only for calls, devices, leases, or forwards"},
 	"--instance": {valid: wifiTargeted, invalid: "--instance is valid only with wifi detail, wifi enable, or wifi disable"},
-	"--confirm":  {valid: rebootOrWiFiMutation, invalid: "--confirm is valid only with reboot, wifi enable, or wifi disable"},
+	"--confirm":  {valid: confirmable, invalid: "--confirm is valid only with reboot, wan reconnect, wifi enable, or wifi disable"},
 	"--output":   {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--output is valid only with backup"},
 	"--force":    {valid: func(opts options) bool { return opts.command == "backup" }, invalid: "--force is valid only with backup"},
 	"--path":     {valid: func(opts options) bool { return opts.command == "skill" && opts.action == "install" }, invalid: "--path is valid only with skill install"},
@@ -640,7 +652,7 @@ var commandFlags = map[string][]string{
 	"doctor":   {"--host", "--json", "--help"},
 	"status":   {"--host", "--json", "--help"},
 	"overview": {"--host", "--json", "--help"},
-	"wan":      {"--host", "--json", "--help"},
+	"wan":      {"--host", "--json", "--confirm", "--help"},
 	"traffic":  {"--host", "--json", "--help"},
 	"guest":    {"--host", "--json", "--help"},
 	"watch":    {"--host", "--json", "--interval", "--count", "--help"},
@@ -707,6 +719,9 @@ func help(command, action string) string {
 	if command == "wan" && action == "detail" {
 		return "usage: router-axi wan detail [--host ADDRESS] [--json] [--help]\nRead-only bounded WAN physical-link detail from documented WANCommonInterfaceConfig actions.\nGetCommonLinkProperties is required. Advertised GetAddonInfos adds router-reported byte rates, totals, and DNS servers; these rates are not watch's observed-delta rates.\nexamples: router-axi wan detail; router-axi wan detail --json\n"
 	}
+	if command == "wan" && action == "reconnect" {
+		return "usage: router-axi wan reconnect [--confirm] [--host ADDRESS] [--json] [--help]\nWithout --confirm: preview only. With --confirm: send one documented ForceTermination to the active WAN connection service; the internet connection drops and a new external address may be assigned.\nNo prompts, retries, or recovery polling; wan reconnect is not idempotent.\nexamples: router-axi wan reconnect; router-axi wan reconnect --confirm\n"
+	}
 	if command == "wifi" && action == "detail" {
 		return "usage: router-axi wifi detail [--instance N] [--host ADDRESS] [--json] [--help]\nRead-only per-radio Wi-Fi detail from documented WLANConfiguration:GetInfo and GetChannelInfo, validated against the service description first.\nReports enable status, status, standard, max bitrate, channel, and band; absent optional fields are unknown. --instance N (1 or greater) is required when the router advertises more than one radio.\nBSSIDs, keys, and client details are never read or printed.\nexamples: router-axi wifi detail; router-axi wifi detail --instance 2; router-axi wifi detail --instance 1 --json\n"
 	}
@@ -748,7 +763,7 @@ func help(command, action string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + " [--help]\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  dhcp      DHCP server configuration (never reservation inventory)\n  dsl       DSL link diagnostics\n  firmware  installed firmware, reported update availability, and auto-update state\n  account   own rights and login posture\n  wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details; wan reconnect drops the connection once with --confirm\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  devices   connected and known LAN clients\n  leases    observed Hosts table lease metadata\n  dhcp      DHCP server configuration (never reservation inventory)\n  dsl       DSL link diagnostics\n  firmware  installed firmware, reported update availability, and auto-update state\n  account   own rights and login posture\n  wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -760,7 +775,7 @@ func writeJSON(w io.Writer, value any) int {
 	return ExitOK
 }
 
-const cliDescription = "router-axi inspects and operates an AVM FRITZ!Box router over TR-064 with read-only reports and confirmed Wi-Fi, reboot, and backup actions"
+const cliDescription = "router-axi inspects and operates an AVM FRITZ!Box router over TR-064 with read-only reports and confirmed Wi-Fi, WAN reconnect, reboot, and backup actions"
 
 func (a *App) selfIdentification() string {
 	bin := "unknown"
@@ -966,6 +981,9 @@ func protocolError(err error) errorSpec {
 		if protocolErr.Operation == "reboot" {
 			hint = "router-axi reboot --help"
 		}
+		if protocolErr.Operation == "wan reconnect" {
+			hint = "router-axi wan reconnect --help"
+		}
 		if protocolErr.Operation == "backup" {
 			hint = "router-axi backup --help"
 		}
@@ -1155,23 +1173,25 @@ func writeBackupFile(path string, data []byte, force bool) error {
 }
 
 func writeReboot(w io.Writer, result tr064.RebootResult, jsonOutput bool) int {
+	return writeSendOnce(w, sendOnceReport{"reboot", "reboot", rebootEffect, rebootRecovery}, result.Endpoint, result.Preview, result.Accepted, jsonOutput)
+}
+
+type sendOnceReport struct{ key, command, effect, recovery string }
+
+func writeSendOnce(w io.Writer, report sendOnceReport, endpoint string, preview, accepted, jsonOutput bool) int {
 	var err error
-	if result.Preview {
-		execute := "router-axi reboot --host " + shellWord(result.Endpoint) + " --confirm"
+	if preview {
+		execute := "router-axi " + report.command + " --host " + shellWord(endpoint) + " --confirm"
 		if jsonOutput {
 			execute += " --json"
-			return writeJSON(w, struct {
-				Reboot rebootPreviewState `json:"reboot"`
-			}{rebootPreviewState{result.Endpoint, true, rebootEffect, execute}})
+			return writeJSON(w, map[string]sendOncePreviewState{report.key: {endpoint, true, report.effect, execute}})
 		}
-		_, err = fmt.Fprintf(w, "reboot:\n  endpoint: %s\n  preview: true\n  effect: %s\n  execute: %s\n", strconv.Quote(result.Endpoint), rebootEffect, strconv.Quote(execute))
+		_, err = fmt.Fprintf(w, "%s:\n  endpoint: %s\n  preview: true\n  effect: %s\n  execute: %s\n", report.key, strconv.Quote(endpoint), report.effect, strconv.Quote(execute))
 	} else {
 		if jsonOutput {
-			return writeJSON(w, struct {
-				Reboot rebootAcceptedState `json:"reboot"`
-			}{rebootAcceptedState{result.Endpoint, result.Accepted, rebootRecovery}})
+			return writeJSON(w, map[string]sendOnceAcceptedState{report.key: {endpoint, accepted, report.recovery}})
 		}
-		_, err = fmt.Fprintf(w, "reboot:\n  endpoint: %s\n  accepted: %t\n  recovery: %s\n", strconv.Quote(result.Endpoint), result.Accepted, rebootRecovery)
+		_, err = fmt.Fprintf(w, "%s:\n  endpoint: %s\n  accepted: %t\n  recovery: %s\n", report.key, strconv.Quote(endpoint), accepted, report.recovery)
 	}
 	if err != nil {
 		return ExitInternal

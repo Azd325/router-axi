@@ -31,8 +31,8 @@ pull request, then run this checklist from a clean checkout:
 - [ ] Keep live-router tests local-only. Run them only with the credential-safe
       command in [README.md](README.md#opt-in-live-router-tests), confirm `CI`
       is empty, and do not retain or publish their output. Record which coverage
-      actually ran. Do not run reboot hardware tests: reboot is not idempotent
-      and has no automatic recovery verification. Live Wi-Fi mutation coverage
+      actually ran. Do not run reboot or WAN reconnect hardware tests: neither
+      is idempotent and neither has automatic recovery verification. Live Wi-Fi mutation coverage
       is separately opt-in and must restore the original state. Live backup
       coverage is separately opt-in, never writes an export file, and requires
       `ROUTER_AXI_BACKUP_PASSWORD`.
