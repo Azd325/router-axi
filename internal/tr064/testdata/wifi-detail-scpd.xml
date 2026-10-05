@@ -7,9 +7,7 @@
     <action><name>GetTotalAssociations</name></action>
     <action><name>GetBeaconType</name></action>
     <action><name>X_AVM-DE_GetWLANExtInfo</name></action>
-    <action><name>GetBeaconAdvertisement</name></action>
     <action><name>X_AVM-DE_GetNightControl</name></action>
     <action><name>X_AVM-DE_GetWPSInfo</name></action>
-    <action><name>X_AVM-DE_GetIPTVOptimized</name></action>
   </actionList>
 </scpd>

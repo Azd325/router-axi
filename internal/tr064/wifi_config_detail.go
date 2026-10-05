@@ -2,17 +2,9 @@ package tr064
 
 import (
 	"context"
+	"errors"
 	"strings"
 )
-
-type WiFiChannelConfiguration struct {
-	PossibleChannels   *string `json:"possible_channels"`
-	AutoChannelEnabled *bool   `json:"auto_channel_enabled"`
-}
-
-type WiFiBeaconAdvertisement struct {
-	Enabled *bool `json:"enabled"`
-}
 
 type WiFiNightControl struct {
 	Schedule    *string `json:"schedule"`
@@ -22,10 +14,6 @@ type WiFiNightControl struct {
 type WiFiWPS struct {
 	Mode   *string `json:"mode"`
 	Status *string `json:"status"`
-}
-
-type WiFiIPTVOptimization struct {
-	Enabled *bool `json:"enabled"`
 }
 
 // AVM documents these guest configuration values as strings without units.
@@ -84,48 +72,30 @@ func (c *Client) readWiFiDetailPart(ctx context.Context, svc service, actions ma
 	if err == nil {
 		return values, true, nil
 	}
-	failure := wifiDetailError(err)
-	if failure.Kind == "unsupported" {
+	var failure *Error
+	if errors.As(err, &failure) && failure.Kind == "router" {
 		return soapValues{}, false, nil
 	}
-	return soapValues{}, false, failure
+	return soapValues{}, false, wifiDetailError(err)
 }
 
 func (c *Client) readWiFiConfiguration(ctx context.Context, svc service, actions map[string]bool, result *RadioDetail) error {
-	if v, supported, err := c.readWiFiDetailPart(ctx, svc, actions, "GetBeaconAdvertisement"); err != nil {
+	if v, available, err := c.readWiFiDetailPart(ctx, svc, actions, "X_AVM-DE_GetNightControl"); err != nil {
 		return err
-	} else if supported {
-		enabled, err := optionalWiFiBool(v.BeaconAdvertisementEnabled, "beacon advertisement flag")
-		if err != nil {
-			return err
-		}
-		result.BeaconAdvertisement = &WiFiBeaconAdvertisement{Enabled: enabled}
-	}
-	if v, supported, err := c.readWiFiDetailPart(ctx, svc, actions, "X_AVM-DE_GetNightControl"); err != nil {
-		return err
-	} else if supported {
+	} else if available {
 		noForcedOff, err := optionalWiFiBool(v.NightTimeControlNoForcedOff, "night control flag")
 		if err != nil {
 			return err
 		}
 		result.NightControl = &WiFiNightControl{Schedule: optionalWifiDetailString(v.NightControl), NoForcedOff: noForcedOff}
 	}
-	if v, supported, err := c.readWiFiDetailPart(ctx, svc, actions, "X_AVM-DE_GetWPSInfo"); err != nil {
+	if v, available, err := c.readWiFiDetailPart(ctx, svc, actions, "X_AVM-DE_GetWPSInfo"); err != nil {
 		return err
-	} else if supported {
+	} else if available {
 		result.WPS = &WiFiWPS{
 			Mode:   optionalWiFiEnum(v.WPSMode, "pbc", "stop", "other"),
 			Status: optionalWiFiEnum(v.WPSStatus, "off", "inactive", "active", "success", "err_common", "err_timeout", "err_reconfig", "err_internal", "err_abort"),
 		}
-	}
-	if v, supported, err := c.readWiFiDetailPart(ctx, svc, actions, "X_AVM-DE_GetIPTVOptimized"); err != nil {
-		return err
-	} else if supported {
-		enabled, err := optionalWiFiBool(v.IPTVOptimize, "IPTV optimization flag")
-		if err != nil {
-			return err
-		}
-		result.IPTVOptimization = &WiFiIPTVOptimization{Enabled: enabled}
 	}
 	return nil
 }

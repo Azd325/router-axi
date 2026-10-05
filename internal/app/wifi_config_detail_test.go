@@ -9,30 +9,27 @@ import (
 )
 
 func TestWiFiConfigurationCompactOutput(t *testing.T) {
-	yes, no := true, false
-	channels, schedule, mode, status := "36,40", "<night>synthetic</night>", "pbc", "inactive"
+	no := false
+	schedule, mode, status := "<night>synthetic</night>", "pbc", "inactive"
 	value := tr064.RadioDetail{
-		ChannelConfiguration: &tr064.WiFiChannelConfiguration{PossibleChannels: &channels, AutoChannelEnabled: &yes},
-		BeaconAdvertisement:  &tr064.WiFiBeaconAdvertisement{Enabled: &yes},
-		NightControl:         &tr064.WiFiNightControl{Schedule: &schedule, NoForcedOff: &no},
-		WPS:                  &tr064.WiFiWPS{Mode: &mode, Status: &status},
-		IPTVOptimization:     &tr064.WiFiIPTVOptimization{Enabled: &no},
+		NightControl: &tr064.WiFiNightControl{Schedule: &schedule, NoForcedOff: &no},
+		WPS:          &tr064.WiFiWPS{Mode: &mode, Status: &status},
 	}
 	var output bytes.Buffer
 	if err := writeWiFiConfiguration(&output, value); err != nil {
 		t.Fatal(err)
 	}
-	want := "  channel_configuration:\n    possible_channels: 36,40\n    auto_channel_enabled: true\n  beacon_advertisement:\n    enabled: true\n  night_control:\n    schedule: <night>synthetic</night>\n    no_forced_off: false\n  wps:\n    mode: pbc\n    status: inactive\n  iptv_optimization:\n    enabled: false\n"
+	want := "  night_control:\n    schedule: <night>synthetic</night>\n    no_forced_off: false\n  wps:\n    mode: pbc\n    status: inactive\n"
 	if output.String() != want {
 		t.Fatalf("output = %q", output.String())
 	}
 	output.Reset()
 	value.NightControl = &tr064.WiFiNightControl{}
-	value.ChannelConfiguration, value.BeaconAdvertisement, value.WPS, value.IPTVOptimization = nil, nil, nil, nil
+	value.WPS = nil
 	if err := writeWiFiConfiguration(&output, value); err != nil {
 		t.Fatal(err)
 	}
-	want = "  channel_configuration: unsupported\n  beacon_advertisement: unsupported\n  night_control:\n    schedule: unknown\n    no_forced_off: unknown\n  wps: unsupported\n  iptv_optimization: unsupported\n"
+	want = "  night_control:\n    schedule: unknown\n    no_forced_off: unknown\n  wps: unavailable\n"
 	if output.String() != want {
 		t.Fatalf("partial output = %q", output.String())
 	}

@@ -8,39 +8,18 @@ import (
 )
 
 func writeWiFiConfiguration(w io.Writer, v tr064.RadioDetail) error {
-	if c := v.ChannelConfiguration; c == nil {
-		if _, err := io.WriteString(w, "  channel_configuration: unsupported\n"); err != nil {
-			return err
-		}
-	} else if _, err := fmt.Fprintf(w, "  channel_configuration:\n    possible_channels: %s\n    auto_channel_enabled: %s\n", optionalText(c.PossibleChannels), optionalBool(c.AutoChannelEnabled)); err != nil {
-		return err
-	}
-	if b := v.BeaconAdvertisement; b == nil {
-		if _, err := io.WriteString(w, "  beacon_advertisement: unsupported\n"); err != nil {
-			return err
-		}
-	} else if _, err := fmt.Fprintf(w, "  beacon_advertisement:\n    enabled: %s\n", optionalBool(b.Enabled)); err != nil {
-		return err
-	}
 	if n := v.NightControl; n == nil {
-		if _, err := io.WriteString(w, "  night_control: unsupported\n"); err != nil {
+		if _, err := io.WriteString(w, "  night_control: unavailable\n"); err != nil {
 			return err
 		}
 	} else if _, err := fmt.Fprintf(w, "  night_control:\n    schedule: %s\n    no_forced_off: %s\n", optionalToon(n.Schedule), optionalBool(n.NoForcedOff)); err != nil {
 		return err
 	}
 	if p := v.WPS; p == nil {
-		if _, err := io.WriteString(w, "  wps: unsupported\n"); err != nil {
-			return err
-		}
-	} else if _, err := fmt.Fprintf(w, "  wps:\n    mode: %s\n    status: %s\n", optionalText(p.Mode), optionalText(p.Status)); err != nil {
-		return err
-	}
-	if i := v.IPTVOptimization; i == nil {
-		_, err := io.WriteString(w, "  iptv_optimization: unsupported\n")
+		_, err := io.WriteString(w, "  wps: unavailable\n")
 		return err
 	} else {
-		_, err := fmt.Fprintf(w, "  iptv_optimization:\n    enabled: %s\n", optionalBool(i.Enabled))
+		_, err := fmt.Fprintf(w, "  wps:\n    mode: %s\n    status: %s\n", optionalText(p.Mode), optionalText(p.Status))
 		return err
 	}
 }

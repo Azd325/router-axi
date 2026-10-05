@@ -1004,8 +1004,8 @@ func TestWiFiDetailPassesInstanceAndPrintsCompactAndJSON(t *testing.T) {
 				jsonOutput bool
 				wanted     string
 			}{
-				{jsonOutput: false, wanted: test.compact + "  channel_configuration: unsupported\n  beacon_advertisement: unsupported\n  night_control: unsupported\n  wps: unsupported\n  iptv_optimization: unsupported\n"},
-				{jsonOutput: true, wanted: strings.TrimSuffix(test.json, "}\n") + `,"channel_configuration":null,"beacon_advertisement":null,"night_control":null,"wps":null,"iptv_optimization":null}` + "\n"},
+				{jsonOutput: false, wanted: test.compact + "  night_control: unavailable\n  wps: unavailable\n"},
+				{jsonOutput: true, wanted: strings.TrimSuffix(test.json, "}\n") + `,"night_control":null,"wps":null}` + "\n"},
 			} {
 				var stdout, stderr bytes.Buffer
 				args := append([]string{}, test.args...)

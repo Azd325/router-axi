@@ -1,2 +1,0 @@
-<?xml version="1.0"?>
-<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:GetBeaconAdvertisementResponse xmlns:u="urn:dslforum-org:service:WLANConfiguration:1"><NewBeaconAdvertisementEnabled>1</NewBeaconAdvertisementEnabled></u:GetBeaconAdvertisementResponse></s:Body></s:Envelope>

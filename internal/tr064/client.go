@@ -221,21 +221,18 @@ type GuestNetwork struct {
 	Configuration     *GuestConfiguration `json:"configuration"`
 }
 
-// RadioDetail carries safe per-radio state and independently supported configuration reads.
-// Absent optional fields are unknown; unsupported configuration parts are nil.
+// RadioDetail carries safe per-radio state and independently available configuration reads.
+// Absent optional fields are unknown; unavailable configuration parts are nil.
 type RadioDetail struct {
-	ServiceID            string                    `json:"service_id"`
-	Enabled              bool                      `json:"enabled"`
-	Status               *string                   `json:"status"`
-	Standard             string                    `json:"standard"`
-	MaxBitRate           *string                   `json:"max_bit_rate"`
-	Channel              *uint64                   `json:"channel"`
-	Band                 string                    `json:"band"`
-	ChannelConfiguration *WiFiChannelConfiguration `json:"channel_configuration"`
-	BeaconAdvertisement  *WiFiBeaconAdvertisement  `json:"beacon_advertisement"`
-	NightControl         *WiFiNightControl         `json:"night_control"`
-	WPS                  *WiFiWPS                  `json:"wps"`
-	IPTVOptimization     *WiFiIPTVOptimization     `json:"iptv_optimization"`
+	ServiceID    string            `json:"service_id"`
+	Enabled      bool              `json:"enabled"`
+	Status       *string           `json:"status"`
+	Standard     string            `json:"standard"`
+	MaxBitRate   *string           `json:"max_bit_rate"`
+	Channel      *uint64           `json:"channel"`
+	Band         string            `json:"band"`
+	NightControl *WiFiNightControl `json:"night_control"`
+	WPS          *WiFiWPS          `json:"wps"`
 }
 
 type Forward struct {
@@ -298,8 +295,7 @@ type soapValues struct {
 	Enable, SSID, Standard                                                        string
 	WLANStatus, MaxBitRate                                                        string
 	Channel, FrequencyBand, TotalAssociations, BeaconType, APType                 string
-	PossibleChannels, AutoChannelEnabled, BeaconAdvertisementEnabled              string
-	NightControl, NightTimeControlNoForcedOff, WPSMode, WPSStatus, IPTVOptimize   string
+	NightControl, NightTimeControlNoForcedOff, WPSMode, WPSStatus                 string
 	GuestTimeoutActive, GuestTimeout, GuestTimeRemain                             string
 	GuestNoForcedOff, GuestUserIsolation                                          string
 	PortMappingCount, ExternalPort, PortMappingProtocol                           string
@@ -447,12 +443,6 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.TotalAssociations
 		case "NewBeaconType":
 			target = &v.BeaconType
-		case "NewPossibleChannels":
-			target = &v.PossibleChannels
-		case "NewX_AVM-DEAuto_ChannelEnabled":
-			target = &v.AutoChannelEnabled
-		case "NewBeaconAdvertisementEnabled":
-			target = &v.BeaconAdvertisementEnabled
 		case "NewNightControl":
 			target = &v.NightControl
 		case "NewNightTimeControlNoForcedOff":
@@ -461,8 +451,6 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.WPSMode
 		case "NewX_AVM-DE_WPSStatus":
 			target = &v.WPSStatus
-		case "NewX_AVM-DE_IPTVoptimize":
-			target = &v.IPTVOptimize
 		case "NewX_AVM-DE_TimeoutActive":
 			target = &v.GuestTimeoutActive
 		case "NewX_AVM-DE_Timeout":
@@ -1635,13 +1623,6 @@ func (c *Client) GuestWiFi(ctx context.Context) ([]GuestNetwork, error) {
 	guestServices := make([]service, 0, 1)
 	configurations := map[string]*GuestConfiguration{}
 	for _, svc := range services {
-		actions, err := c.wlanReadActions(ctx, svc, "guest", guestError)
-		if err != nil {
-			return nil, err
-		}
-		if !actions["X_AVM-DE_GetWLANExtInfo"] {
-			return nil, guestError(&Error{Kind: "unsupported"})
-		}
 		info, err := c.actionOnService(ctx, svc, "X_AVM-DE_GetWLANExtInfo")
 		if err != nil {
 			return nil, guestError(err)
@@ -1854,9 +1835,9 @@ func selectWLANService(services []service, instance uint64, operation string) (s
 	return service{}, &Error{Kind: "usage", Code: "unknown_instance", Operation: operation, Message: "router does not advertise WLANConfiguration" + strconv.FormatUint(instance, 10)}
 }
 
-const wifiDetailRemediation = "enable the WLANConfiguration TR-064 service with GetInfo, or use supported firmware"
+const wifiDetailRemediation = "enable the WLANConfiguration TR-064 service with GetInfo and GetChannelInfo, or use supported firmware"
 
-// WiFiDetail checks advertised actions before reading one identified radio.
+// WiFiDetail requires advertised GetInfo and GetChannelInfo before reading one identified radio.
 func (c *Client) WiFiDetail(ctx context.Context, instance uint64) (RadioDetail, error) {
 	services, err := c.wlanServices(ctx)
 	if err != nil {
@@ -1866,12 +1847,9 @@ func (c *Client) WiFiDetail(ctx context.Context, instance uint64) (RadioDetail, 
 	if err != nil {
 		return RadioDetail{}, err
 	}
-	actions, err := c.wlanReadActions(ctx, target, "wifi detail", wifiDetailError)
+	actions, err := c.wlanReadActions(ctx, target)
 	if err != nil {
 		return RadioDetail{}, err
-	}
-	if !actions["GetInfo"] {
-		return RadioDetail{}, wifiDetailError(&Error{Kind: "unsupported"})
 	}
 	info, err := c.actionOnService(ctx, target, "GetInfo")
 	if err != nil {
@@ -1886,7 +1864,7 @@ func (c *Client) WiFiDetail(ctx context.Context, instance uint64) (RadioDetail, 
 	case "b", "g", "n", "ac", "ax", "be":
 		standard = info.Standard
 	}
-	channel, channelSupported, err := c.readWiFiDetailPart(ctx, target, actions, "GetChannelInfo")
+	channel, err := c.actionOnService(ctx, target, "GetChannelInfo")
 	if err != nil {
 		return RadioDetail{}, wifiDetailError(err)
 	}
@@ -1904,13 +1882,6 @@ func (c *Client) WiFiDetail(ctx context.Context, instance uint64) (RadioDetail, 
 		Standard: standard, MaxBitRate: optionalWifiDetailString(info.MaxBitRate),
 		Channel: number, Band: band,
 	}
-	if channelSupported {
-		auto, err := optionalWiFiBool(channel.AutoChannelEnabled, "auto channel flag")
-		if err != nil {
-			return RadioDetail{}, err
-		}
-		result.ChannelConfiguration = &WiFiChannelConfiguration{PossibleChannels: optionalWifiDetailString(channel.PossibleChannels), AutoChannelEnabled: auto}
-	}
 	if err := c.readWiFiConfiguration(ctx, target, actions, &result); err != nil {
 		return RadioDetail{}, err
 	}
@@ -1918,15 +1889,15 @@ func (c *Client) WiFiDetail(ctx context.Context, instance uint64) (RadioDetail, 
 }
 
 // wlanReadActions uses the same URL and action-name checks as other detail reads.
-func (c *Client) wlanReadActions(ctx context.Context, svc service, operation string, actionError func(error) *Error) (map[string]bool, error) {
+func (c *Client) wlanReadActions(ctx context.Context, svc service) (map[string]bool, error) {
 	control, controlErr := c.base.Parse(svc.ControlURL)
 	scpdURL, scpdErr := c.base.Parse(svc.SCPDURL)
 	if controlErr != nil || svc.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.ForceQuery || control.Fragment != "" || scpdErr != nil || svc.SCPDURL == "" || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.ForceQuery || scpdURL.Fragment != "" {
-		return nil, &Error{Kind: "protocol", Operation: operation, Message: "router advertised an invalid WLAN service URL"}
+		return nil, &Error{Kind: "protocol", Operation: "wifi detail", Message: "router advertised an invalid WLAN service URL"}
 	}
 	body, err := c.get(ctx, scpdURL)
 	if err != nil {
-		return nil, actionError(err)
+		return nil, wifiDetailError(err)
 	}
 	var scpd struct {
 		XMLName xml.Name `xml:"scpd"`
@@ -1935,11 +1906,14 @@ func (c *Client) wlanReadActions(ctx context.Context, svc service, operation str
 		} `xml:"actionList>action"`
 	}
 	if err := xml.Unmarshal(body, &scpd); err != nil || scpd.XMLName.Local != "scpd" {
-		return nil, &Error{Kind: "protocol", Operation: operation, Message: "router returned an invalid WLAN service description"}
+		return nil, &Error{Kind: "protocol", Operation: "wifi detail", Message: "router returned an invalid WLAN service description"}
 	}
 	actions := map[string]bool{}
 	for _, action := range scpd.Actions {
 		actions[strings.TrimSpace(action.Name)] = true
+	}
+	if !actions["GetInfo"] || !actions["GetChannelInfo"] {
+		return nil, &Error{Kind: "unsupported", Operation: "wifi detail", Message: "router does not advertise WLANConfiguration:GetInfo or WLANConfiguration:GetChannelInfo; " + wifiDetailRemediation}
 	}
 	return actions, nil
 }
