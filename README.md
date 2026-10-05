@@ -795,9 +795,10 @@ router-axi wake 02:00:00:00:00:01 --confirm --json
 ```
 
 The preview identifies the router endpoint, target MAC, intended effect, and
-exact confirmed command. With `--confirm`, the command checks the advertised
-Hosts service description for the documented
-`X_AVM-DE_WakeOnLANByMACAddress(NewMACAddress)` signature, sends it once, and
+exact confirmed command. With and without `--confirm`, the command first
+requires exactly one advertised Hosts service whose service description lists
+the documented `X_AVM-DE_WakeOnLANByMACAddress(NewMACAddress)` signature, and
+exits `5` otherwise. With `--confirm`, it then sends the action once and
 reports `accepted: true` only for a valid acknowledgement. Acceptance means the
 router accepted the request; it does **not** mean the device woke. There are no
 retries or polls. A lost or invalid response is an uncertain outcome with a
