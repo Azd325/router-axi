@@ -49,6 +49,11 @@ and never retries or polls after initiation. A lost response is an uncertain
 outcome, not success or permission to repeat. The operator waits for recovery,
 reconnects if necessary, and checks the router manually; no recovery deadline
 or rollback is promised.
+WAN reconnect follows the same contract: its preview identifies the selected
+endpoint, the dropped internet connection and possible new external address,
+and the exact confirmed command; a confirmed reconnect sends the documented
+ForceTermination action once to the active WAN connection service and is
+explicitly not idempotent.
 Commands report a machine-readable result or structured error on stdout and a non-zero exit code on failure. Doctor keeps completed compact checks followed by the error; its JSON partial failure is one `{"doctor":<doctor>,"error":<structured error>}` object.
 Exit codes follow 0 success (including confirmed no-ops), 1 internal, and
 2 usage, extended by 3 authentication, 4 network, 5 unsupported capability,

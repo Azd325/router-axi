@@ -1,0 +1,4 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+  <s:Body><u:GetDefaultConnectionServiceResponse xmlns:u="urn:dslforum-org:service:Layer3Forwarding:1"><NewDefaultConnectionService>1.WANIPConnection.1</NewDefaultConnectionService></u:GetDefaultConnectionServiceResponse></s:Body>
+</s:Envelope>

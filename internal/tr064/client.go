@@ -1743,39 +1743,54 @@ func (c *Client) Reboot(ctx context.Context, confirm bool) (RebootResult, error)
 			return RebootResult{}, rebootPreflightError(err)
 		}
 	}
-	control := client.base.ResolveReference(&url.URL{Path: target.ControlURL})
-	envelope := `<?xml version="1.0"?><s:Envelope xmlns:s="` + soapNamespace + `" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:Reboot xmlns:u="` + target.Type + `"></u:Reboot></s:Body></s:Envelope>`
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, control.String(), strings.NewReader(envelope))
-	if err != nil {
+	body, status, sent, err := client.postOnce(ctx, target, "Reboot", challenge)
+	switch {
+	case err != nil && !sent:
 		return RebootResult{}, rebootPreflightError(err)
+	case err != nil:
+		return RebootResult{}, rebootUncertain("network", status)
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return RebootResult{}, &Error{Kind: "auth", Operation: "reboot", StatusCode: status, Message: "router rejected reboot authentication; do not automatically repeat"}
 	}
-	req.GetBody = nil
-	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
-	req.Header.Set("SOAPAction", `"`+target.Type+`#Reboot"`)
-	if challenge != "" {
-		auth, err := digestAuthorization(challenge, http.MethodPost, control.RequestURI(), client.username, client.password, 2)
-		if err != nil {
-			return RebootResult{}, rebootPreflightError(&Error{Kind: "auth"})
-		}
-		req.Header.Set("Authorization", auth)
-	}
-	resp, err := client.http.Do(req)
-	if err != nil {
-		return RebootResult{}, rebootUncertain("network", 0)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return RebootResult{}, &Error{Kind: "auth", Operation: "reboot", StatusCode: resp.StatusCode, Message: "router rejected reboot authentication; do not automatically repeat"}
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
-	if err != nil || len(body) > 8<<20 {
-		return RebootResult{}, rebootUncertain("network", resp.StatusCode)
-	}
-	if err := validateRebootResponse(body, resp.StatusCode); err != nil {
+	if err := validateRebootResponse(body, status); err != nil {
 		return RebootResult{}, err
 	}
 	result.Accepted = true
 	return result, nil
+}
+
+// postOnce sends one argument-free SOAP action outside the retrying request
+// path. sent is false when the request never left this process.
+func (c *Client) postOnce(ctx context.Context, target service, action, challenge string) (body []byte, status int, sent bool, err error) {
+	control := c.base.ResolveReference(&url.URL{Path: target.ControlURL})
+	envelope := `<?xml version="1.0"?><s:Envelope xmlns:s="` + soapNamespace + `" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` + action + ` xmlns:u="` + target.Type + `"></u:` + action + `></s:Body></s:Envelope>`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, control.String(), strings.NewReader(envelope))
+	if err != nil {
+		return nil, 0, false, err
+	}
+	req.GetBody = nil
+	req.Header.Set("Content-Type", `text/xml; charset="utf-8"`)
+	req.Header.Set("SOAPAction", `"`+target.Type+`#`+action+`"`)
+	if challenge != "" {
+		auth, err := digestAuthorization(challenge, http.MethodPost, control.RequestURI(), c.username, c.password, 2)
+		if err != nil {
+			return nil, 0, false, &Error{Kind: "auth"}
+		}
+		req.Header.Set("Authorization", auth)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, 0, true, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, resp.StatusCode, true, nil
+	}
+	body, err = io.ReadAll(io.LimitReader(resp.Body, (8<<20)+1))
+	if err != nil || len(body) > 8<<20 {
+		return nil, resp.StatusCode, true, errors.New("unreadable response")
+	}
+	return body, resp.StatusCode, true, nil
 }
 
 func (c *Client) rebootCapability() DoctorCheck {
@@ -1818,7 +1833,11 @@ func (c *Client) uniqueService(prefix, operation, remediation string) (service, 
 }
 
 func rebootPreflightError(err error) *Error {
-	result := &Error{Kind: "protocol", Operation: "reboot", Message: "reboot preflight failed; no reboot was sent"}
+	return preflightError("reboot", "reboot preflight failed; no reboot was sent", err)
+}
+
+func preflightError(operation, message string, err error) *Error {
+	result := &Error{Kind: "protocol", Operation: operation, Message: message}
 	var protocolErr *Error
 	if errors.As(err, &protocolErr) {
 		result.Kind, result.StatusCode = protocolErr.Kind, protocolErr.StatusCode
@@ -1834,46 +1853,63 @@ func rebootUncertain(kind string, status int) *Error {
 }
 
 func validateRebootResponse(body []byte, status int) error {
+	fault, faultCode, valid := emptyActionResponse(body, xml.Name{Space: deviceConfigPrefix + "1", Local: "RebootResponse"})
+	switch {
+	case !valid:
+		return rebootUncertain("protocol", status)
+	case fault && faultCode == "401":
+		return &Error{Kind: "unsupported", Operation: "reboot", StatusCode: status, Message: "router does not support DeviceConfig:Reboot; " + rebootRemediation}
+	case fault:
+		return &Error{Kind: "router", Operation: "reboot", StatusCode: status, Message: "router rejected reboot; do not automatically repeat"}
+	case status < 200 || status >= 300:
+		return rebootUncertain("protocol", status)
+	}
+	return nil
+}
+
+// emptyActionResponse classifies the reply to an action without output
+// arguments. valid is false unless the body is one SOAP envelope whose body
+// holds either the empty response element or a fault.
+func emptyActionResponse(body []byte, response xml.Name) (fault bool, faultCode string, valid bool) {
 	decoder := xml.NewDecoder(bytes.NewReader(body))
 	var stack []xml.Name
 	var envelopeSeen, bodySeen, responseSeen, faultSeen bool
-	invalid := func() error { return rebootUncertain("protocol", status) }
 	for {
 		token, err := decoder.Token()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			return invalid()
+			return false, "", false
 		}
 		switch token := token.(type) {
 		case xml.StartElement:
 			switch len(stack) {
 			case 0:
 				if envelopeSeen || token.Name != (xml.Name{Space: soapNamespace, Local: "Envelope"}) {
-					return invalid()
+					return false, "", false
 				}
 				envelopeSeen = true
 			case 1:
 				if token.Name != (xml.Name{Space: soapNamespace, Local: "Body"}) || bodySeen {
-					return invalid()
+					return false, "", false
 				}
 				bodySeen = true
 			case 2:
 				if responseSeen || faultSeen {
-					return invalid()
+					return false, "", false
 				}
 				switch token.Name {
-				case xml.Name{Space: deviceConfigPrefix + "1", Local: "RebootResponse"}:
+				case response:
 					responseSeen = true
 				case xml.Name{Space: soapNamespace, Local: "Fault"}:
 					faultSeen = true
 				default:
-					return invalid()
+					return false, "", false
 				}
 			default:
 				if !faultSeen {
-					return invalid()
+					return false, "", false
 				}
 			}
 			stack = append(stack, token.Name)
@@ -1881,27 +1917,21 @@ func validateRebootResponse(body []byte, status int) error {
 			stack = stack[:len(stack)-1]
 		case xml.CharData:
 			if !faultSeen && strings.TrimSpace(string(token)) != "" {
-				return invalid()
+				return false, "", false
 			}
 		}
 	}
 	if !envelopeSeen || !bodySeen || len(stack) != 0 {
-		return invalid()
+		return false, "", false
 	}
 	if faultSeen {
 		var values soapValues
 		if err := xml.Unmarshal(body, &values); err != nil {
-			return invalid()
+			return false, "", false
 		}
-		if values.FaultCode == "401" {
-			return &Error{Kind: "unsupported", Operation: "reboot", StatusCode: status, Message: "router does not support DeviceConfig:Reboot; " + rebootRemediation}
-		}
-		return &Error{Kind: "router", Operation: "reboot", StatusCode: status, Message: "router rejected reboot; do not automatically repeat"}
+		return true, values.FaultCode, true
 	}
-	if !responseSeen || status < 200 || status >= 300 {
-		return invalid()
-	}
-	return nil
+	return false, "", responseSeen
 }
 
 const (

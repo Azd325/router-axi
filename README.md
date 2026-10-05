@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, account rights and login posture, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, reboot, and configuration export.
+The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, account rights and login posture, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, WAN reconnect, reboot, and configuration export.
 
 ## Design constraints
 
@@ -103,6 +103,7 @@ router-axi wifi enable
 router-axi wifi disable
 router-axi wifi disable --instance 1 --confirm
 router-axi reboot          # preview only; restart requires --confirm
+router-axi wan reconnect   # preview only; reconnect requires --confirm
 router-axi backup --host https://fritz.box:49443 --output fritz.export
 router-axi forwards
 router-axi forwards --json
@@ -666,6 +667,67 @@ its authentication read. Tests use synthetic servers only. No live reboot test
 is provided or run; existing live-test flags cannot reboot a router. Reboot
 acceptance and recovery are **not hardware-validated**.
 
+### WAN reconnect
+
+`wan reconnect` uses only the documented `ForceTermination` action of the
+active WAN connection service, with **no input or output arguments**:
+[FRITZ! WAN IP Connection v7, §1.7](https://fritz.support/resources/TR-064_WAN_IP_Connection.pdf)
+for `urn:dslforum-org:service:WANIPConnection:1` and
+[FRITZ! WAN PPP Connection v16, §1.11](https://fritz.support/resources/TR-064_WAN_PPP_Connection.pdf)
+for `urn:dslforum-org:service:WANPPPConnection:1`. Neither document requires
+`RequestConnection` to restore the connection, and the command never sends it.
+Both documents name `Layer3Forwarding:GetDefaultConnectionService` as the way
+to determine which of the two services is active.
+
+Without `--confirm`, the command only reads and exits `0` as a **plan**: it
+selects the target, then prints the selected normalized endpoint, the effect
+(the internet connection will drop and a new external address may be
+assigned), and the exact execute command. The execute command pins `--host`;
+JSON previews also preserve `--json`. No interactive prompt occurs.
+
+Target selection is the same with and without `--confirm` and fails closed
+before any mutation. The router must advertise exactly one
+`Layer3Forwarding:1` service whose service description lists
+`GetDefaultConnectionService`; that read must name exactly one advertised
+`WANIPConnection:1` or `WANPPPConnection:1` service (identifier matching as in
+[`forwards`](#port-forward-inspection)); and that service's description must
+list `ForceTermination`. Control and service-description URLs must stay on the
+router origin without user information, query, or fragment, and redirects are
+refused.
+
+With `--confirm`, the client sends **exactly one ForceTermination SOAP
+request**. When credentials are configured, the Digest challenge comes from
+the `GetDefaultConnectionService` read; a router that does not supply a
+reusable challenge may reject the single request, which fails closed rather
+than retrying. Authentication challenges, redirects, and network failures
+never cause the request to be repeated. Missing or ambiguous services and
+invalid-action faults exit `5`, rejected authentication exits `3`, transport
+failures exit `4`, and malformed responses or other router faults exit `6`.
+Only a valid SOAP `ForceTerminationResponse` of the selected service yields
+`accepted: true` and exit `0`. Accepted means the router acknowledged the
+request, **not** that the connection dropped or returned. No polling or
+additional requests occur after the ForceTermination POST.
+
+```json
+{"wan_reconnect":{"endpoint":"http://router.test:49000","preview":true,"effect":"the internet connection will drop and a new external address may be assigned","execute":"router-axi wan reconnect --host http://router.test:49000 --confirm --json"}}
+{"wan_reconnect":{"endpoint":"http://router.test:49000","accepted":true,"recovery":"wait for the connection to return, then run router-axi wan; do not automatically repeat wan reconnect"}}
+```
+
+**WAN reconnect is not idempotent.** Each confirmed invocation can drop the
+connection again. A lost or malformed response can mean the termination was
+initiated without an acknowledgement; the error reports that uncertainty, not
+success. Do not automatically repeat the command after an error, timeout, or
+local output failure. Wait, then run `router-axi wan` manually. There is no
+promised recovery time, automatic recovery check, or rollback.
+
+Only normal preview/result output exposes the selected endpoint. Errors
+discard router addresses, identifiers, credentials, fault text and SOAP
+bodies, and the command never prints the external address. `doctor` does not
+report a separate `wan reconnect` capability. Tests use synthetic servers
+only. No live WAN reconnect test is provided or run; existing live-test flags
+cannot reconnect a router. Acceptance and recovery are **not
+hardware-validated**.
+
 ### Configuration backup
 
 `backup` uses only the documented
@@ -1033,7 +1095,7 @@ parsing output text:
 
 | Code | Meaning |
 | ---- | ------- |
-| `0`  | Success, including an already-satisfied `wifi enable\|disable` or a reboot preview. |
+| `0`  | Success, including an already-satisfied `wifi enable\|disable` or a reboot or `wan reconnect` preview. |
 | `1`  | Internal failure, such as a local output or backup-file write error. |
 | `2`  | Usage or configuration error (invalid arguments, missing `--output`, missing passphrase, ambiguous instance). |
 | `3`  | Authentication failure; the router rejected the credentials from `ROUTER_AXI_USERNAME`/`ROUTER_AXI_PASSWORD`. |
@@ -1047,9 +1109,10 @@ record in the selected format; exit codes stay authoritative. If writing stdout
 fails, watch instead emits its sanitized `output_failed` diagnostic on stderr.
 
 The implementation discovers services through `/tr64desc.xml` and invokes only
-read actions, plus the confirmed `wifi enable|disable` and `reboot` mutations
-described above, which invoke only the documented `WLANConfiguration:SetEnable`
-and `DeviceConfig:Reboot` respectively, and the documented
+read actions, plus the confirmed `wifi enable|disable`, `wan reconnect`, and `reboot`
+mutations described above, which invoke only the documented `WLANConfiguration:SetEnable`,
+`WANIPConnection` or `WANPPPConnection:ForceTermination`, and `DeviceConfig:Reboot`
+respectively, and the documented
 `DeviceConfig:X_AVM-DE_GetConfigFile` export described above.
 Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 `DeviceInfo:GetInfo`, `WANIPConnection` or
@@ -1129,7 +1192,8 @@ and all CI environments cannot enable the live test.
 
 Live mutation coverage is additionally opt-in and skipped by default: it requires the
 complete live gate above plus `ROUTER_AXI_LIVE_MUTATION_TEST=1`. This enables only
-Wi-Fi coverage, never reboot. There is no live reboot test. It targets the only
+Wi-Fi coverage, never reboot or WAN reconnect. There is no live reboot or WAN
+reconnect test. It targets the only
 WLANConfiguration instance, or the instance named in `ROUTER_AXI_WIFI_INSTANCE`; with
 several instances and no explicit instance it is skipped. The test reads the current
 enable state, toggles the radio with `SetEnable`, restores the original state, and
