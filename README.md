@@ -79,8 +79,8 @@ router-axi traffic
 router-axi watch
 router-axi watch --interval 2s --count 10 --json
 router-axi calls
-router-axi event-log --host https://fritz.box:49443
-router-axi event-log --host https://fritz.box:49443 --group sys,net --limit 1000 --json
+router-axi event-log
+router-axi event-log --group sys,net --limit 1000 --json
 router-axi devices
 router-axi devices --json
 router-axi devices detail --ip 192.0.2.20
@@ -1207,9 +1207,9 @@ also contain call data.** Compact output quotes free text and control characters
 JSON escapes it. No log text is read by `doctor`, `status`, or `overview`.
 
 ```sh
-router-axi event-log --host https://fritz.box:49443
-router-axi event-log --host https://fritz.box:49443 --group sys,net --limit 1000 --json
-router-axi event-log --host https://fritz.box:49443 --group fon
+router-axi event-log
+router-axi event-log --group sys,net --limit 1000 --json
+router-axi event-log --group fon
 ```
 
 Default groups are `sys` (system), `net` (Internet), `wlan` (Wi-Fi), and `usb`.
@@ -1221,11 +1221,10 @@ from message text. Missing, duplicate, or unknown groups fail closed with exit
 
 The default limit is **100 lines**, with `--limit N` bounded to **1–1000**.
 Multiline messages count toward the line limit. Router order is preserved.
-Both formats report `total`, `omitted`, and `omitted_bytes` (UTF-8 message bytes,
-excluding line separators). Truncated output provides `more` in JSON or `next`
-in compact output: repeat with the same host and group selection and
-`--limit 1000`; at that hard maximum, narrow `--group`. There is no unbounded
-`--all` mode. Empty logs report zero lines. The download body is capped at
+Both formats report `total` and `omitted` lines. Truncated output provides `more`
+in JSON or `next` in compact output: repeat with the same host and group
+selection and `--limit 1000`; at that hard maximum, narrow `--group`. There is
+no unbounded `--all` mode. Empty logs report zero lines. The download body is capped at
 8 MiB; a body reaching that cap fails with `event_log_too_large` and asks for a
 single group instead of displaying an incomplete result.
 
@@ -1240,11 +1239,12 @@ exclude telephony. The document specifies no required rights for these two
 actions; authentication and access denial remain structured errors (exit `3`),
 and absent service/action or invalid-action faults exit `5`.
 
-Use an HTTPS router origin with a certificate trusted by the system (the
-ordinary HTTP default exits `2` with `event_log_requires_https`). Discovery,
-SCPD, SOAP, and download refuse redirects. The download must use HTTPS on the
-same router hostname; certificate verification is never bypassed. The returned
-download address and its query tokens never appear in results or errors.
+`event-log` uses the same transport as the other read commands: the HTTP
+default works, and an HTTPS origin keeps normal certificate verification
+(`tls_untrusted`, exit `4`), which is never bypassed. Over HTTP the log text
+travels unencrypted on the local network. Discovery, SCPD, SOAP, and download
+refuse redirects. The download must stay on the router origin (same scheme,
+host, and port). The returned download address and its query tokens never appear in results or errors.
 `doctor` reports only DeviceInfo advertisement for `event_log`, without reading
 its log action or download. All event-log fixtures are synthetic; live router
 logs are never stored in fixtures and no live event-log test is added.

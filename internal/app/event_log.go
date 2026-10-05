@@ -10,7 +10,7 @@ import (
 )
 
 func writeEventLog(w io.Writer, result tr064.EventLog) error {
-	if _, err := fmt.Fprintf(w, "event_log:\n  groups: %s\n  total: %d\n  omitted: %d\n  omitted_bytes: %d\nlines[%d]{group,date,time,text}:\n", strings.Join(result.Groups, ","), result.Total, result.Omitted, result.OmittedBytes, len(result.Lines)); err != nil {
+	if _, err := fmt.Fprintf(w, "event_log:\n  groups: %s\n  total: %d\n  omitted: %d\nlines[%d]{group,date,time,text}:\n", strings.Join(result.Groups, ","), result.Total, result.Omitted, len(result.Lines)); err != nil {
 		return err
 	}
 	for _, line := range result.Lines {

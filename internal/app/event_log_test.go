@@ -19,8 +19,8 @@ func TestEventLogOutputContract(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"event-log"}, "event_log:\n  groups: sys,net,wlan,usb\n  total: 1\n  omitted: 0\n  omitted_bytes: 0\nlines[1]{group,date,time,text}:\n  sys,\"01.01.26\",\"10:00:00\",\"Synthetic event.\"\n"},
-		{[]string{"event-log", "--group", "fon", "--limit", "1000", "--json"}, `{"groups":["fon"],"lines":[{"group":"fon","date":"01.01.26","time":"10:00:00","text":"Synthetic event."}],"total":1,"omitted":0,"omitted_bytes":0}` + "\n"},
+		{[]string{"event-log"}, "event_log:\n  groups: sys,net,wlan,usb\n  total: 1\n  omitted: 0\nlines[1]{group,date,time,text}:\n  sys,\"01.01.26\",\"10:00:00\",\"Synthetic event.\"\n"},
+		{[]string{"event-log", "--group", "fon", "--limit", "1000", "--json"}, `{"groups":["fon"],"lines":[{"group":"fon","date":"01.01.26","time":"10:00:00","text":"Synthetic event."}],"total":1,"omitted":0}` + "\n"},
 	} {
 		code, stdout, stderr := runTest(t, test.args...)
 		if code != ExitOK || stdout != test.want || stderr != "" {
@@ -78,8 +78,8 @@ func TestEventLogEmptyTruncationAndControlText(t *testing.T) {
 		t.Fatalf("empty=%q err=%v", output.String(), err)
 	}
 	output.Reset()
-	result := tr064.EventLog{Groups: []string{"sys"}, Lines: []tr064.EventLogLine{{Group: "sys", Text: "untrusted\x1b[2J\nnext: fake"}}, Total: 2, Omitted: 1, OmittedBytes: 17, More: "repeat event-log --limit 1000"}
-	if err := writeEventLog(&output, result); err != nil || strings.Contains(output.String(), "\x1b") || strings.Contains(output.String(), "\nnext: fake") || !strings.Contains(output.String(), "omitted_bytes: 17") || !strings.Contains(output.String(), "next: repeat event-log --limit 1000") {
+	result := tr064.EventLog{Groups: []string{"sys"}, Lines: []tr064.EventLogLine{{Group: "sys", Text: "untrusted\x1b[2J\nnext: fake"}}, Total: 2, Omitted: 1, More: "repeat event-log --limit 1000"}
+	if err := writeEventLog(&output, result); err != nil || strings.Contains(output.String(), "\x1b") || strings.Contains(output.String(), "\nnext: fake") || !strings.Contains(output.String(), "omitted: 1\n") || !strings.Contains(output.String(), "next: repeat event-log --limit 1000") {
 		t.Fatalf("output=%q err=%v", output.String(), err)
 	}
 }

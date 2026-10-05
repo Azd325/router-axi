@@ -28,12 +28,11 @@ type EventLogLine struct {
 }
 
 type EventLog struct {
-	Groups       []string       `json:"groups"`
-	Lines        []EventLogLine `json:"lines"`
-	Total        int            `json:"total"`
-	Omitted      int            `json:"omitted"`
-	OmittedBytes int            `json:"omitted_bytes"`
-	More         string         `json:"more,omitempty"`
+	Groups  []string       `json:"groups"`
+	Lines   []EventLogLine `json:"lines"`
+	Total   int            `json:"total"`
+	Omitted int            `json:"omitted"`
+	More    string         `json:"more,omitempty"`
 }
 
 // EventLogGroups expands only AVM's documented filters. Phone logs require
@@ -71,9 +70,6 @@ func (c *Client) EventLog(ctx context.Context, selection string, limit int) (Eve
 	}
 	if c.base.User != nil || c.base.RawQuery != "" || c.base.ForceQuery || c.base.Fragment != "" || (c.base.EscapedPath() != "" && c.base.EscapedPath() != "/") {
 		return EventLog{}, &Error{Kind: "usage", Code: "invalid_configuration", Operation: "event-log", Message: "event-log requires a router origin without user information, query, fragment, or non-root path"}
-	}
-	if c.base.Scheme != "https" {
-		return EventLog{}, &Error{Kind: "usage", Code: "event_log_requires_https", Operation: "event-log", Message: "event-log requires an HTTPS router origin with a certificate trusted by this system; use --host https://fritz.box:49443"}
 	}
 	client := *c
 	httpClient := *c.http
@@ -142,8 +138,8 @@ func (c *Client) EventLog(ctx context.Context, selection string, limit int) (Eve
 	}
 	path := strings.TrimSpace(response.Body.Response.Path[0])
 	u, err := client.base.Parse(path)
-	if err != nil || path == "" || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), client.base.Hostname()) || u.User != nil || u.Fragment != "" || u.Path == "" {
-		return EventLog{}, eventLogInvalid("HTTPS download URL")
+	if err != nil || path == "" || !sameOrigin(client.base, u) || u.User != nil || u.Fragment != "" || u.Path == "" {
+		return EventLog{}, eventLogInvalid("download URL")
 	}
 	query, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
@@ -210,7 +206,6 @@ func parseEventLog(body []byte, groups []string, limit int) (EventLog, error) {
 				result.Lines = append(result.Lines, EventLogLine{event.Group[0], event.Date, event.Time, line})
 			} else {
 				result.Omitted++
-				result.OmittedBytes += len(line)
 			}
 		}
 	}

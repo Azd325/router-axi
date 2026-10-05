@@ -33,8 +33,13 @@ type eventLogResponse struct {
 
 func eventLogFixtureClient(t *testing.T, overrides map[string]eventLogResponse) (*Client, *[]string) {
 	t.Helper()
+	return eventLogFixtureClientOn(t, httptest.NewServer, overrides)
+}
+
+func eventLogFixtureClientOn(t *testing.T, start func(http.Handler) *httptest.Server, overrides map[string]eventLogResponse) (*Client, *[]string) {
+	t.Helper()
 	requests := []string{}
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := start(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := r.Method + " " + r.URL.Path
 		requests = append(requests, key)
 		var body string
@@ -112,7 +117,7 @@ func TestEventLogGroupsAndLimits(t *testing.T) {
 				t.Fatalf("sensitive download or phone output")
 			}
 		}
-		if result.Omitted > 0 && (result.OmittedBytes == 0 || !strings.Contains(result.More, "--limit 1000")) {
+		if result.Omitted > 0 && (!strings.Contains(result.More, "--limit 1000")) {
 			t.Fatalf("missing truncation metadata: %+v", result)
 		}
 		if !reflect.DeepEqual(*requests, []string{"GET /tr64desc.xml", "GET /device-info.xml", "POST /device-info", "GET /event-log.lua"}) {
@@ -155,15 +160,7 @@ func TestEventLogInvalidInputBeforeNetwork(t *testing.T) {
 			t.Fatalf("err=%v requests=%q", err, *requests)
 		}
 	}
-	client, err := New("http://router.example.test", "", "", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = client.EventLog(t.Context(), "", 100)
 	var failure *Error
-	if !errors.As(err, &failure) || failure.Code != "event_log_requires_https" {
-		t.Fatalf("err=%v", err)
-	}
 	for _, address := range []string{"https://router.example.test?token=synthetic", "https://router.example.test/private", "https://router.example.test#fragment", "https://sample@router.example.test"} {
 		client, err := New(address, "", "", nil)
 		if err != nil {
@@ -201,14 +198,35 @@ func TestEventLogSOAPFaults(t *testing.T) {
 }
 
 func TestEventLogDownloadValidation(t *testing.T) {
-	for _, path := range []string{"http://router.example.test/event-log.lua", "https://other.example.test/event-log.lua", "https://user@router.example.test/event-log.lua", "/event-log.lua#synthetic-secret", "/event-log.lua?bad=%zz", ""} {
-		body := strings.ReplaceAll(eventLogPathFixture, "/event-log.lua?token=synthetic-token", path)
-		client, requests := eventLogFixtureClient(t, map[string]eventLogResponse{"POST /device-info": {body: body}})
-		_, err := client.EventLog(t.Context(), "", 100)
-		var failure *Error
-		if !errors.As(err, &failure) || failure.Kind != "protocol" || strings.Contains(err.Error(), "synthetic-secret") || len(*requests) != 3 {
-			t.Fatalf("err=%v requests=%q", err, *requests)
+	for _, start := range []func(http.Handler) *httptest.Server{httptest.NewServer, httptest.NewTLSServer} {
+		for _, path := range []string{"http://router.example.test/event-log.lua", "https://other.example.test/event-log.lua", "https://user@router.example.test/event-log.lua", "/event-log.lua#synthetic-secret", "/event-log.lua?bad=%zz", "", "other-scheme", "other-port"} {
+			overrides := map[string]eventLogResponse{}
+			client, requests := eventLogFixtureClientOn(t, start, overrides)
+			switch path {
+			case "other-scheme":
+				other := *client.base
+				other.Scheme = map[string]string{"http": "https", "https": "http"}[other.Scheme]
+				path = other.String() + "/event-log.lua"
+			case "other-port":
+				other := *client.base
+				other.Host = other.Hostname() + ":1"
+				path = other.String() + "/event-log.lua"
+			}
+			overrides["POST /device-info"] = eventLogResponse{body: strings.ReplaceAll(eventLogPathFixture, "/event-log.lua?token=synthetic-token", path)}
+			_, err := client.EventLog(t.Context(), "", 100)
+			var failure *Error
+			if !errors.As(err, &failure) || failure.Kind != "protocol" || strings.Contains(err.Error(), "synthetic-secret") || len(*requests) != 3 {
+				t.Fatalf("err=%v requests=%q", err, *requests)
+			}
 		}
+	}
+}
+
+func TestEventLogOverHTTPS(t *testing.T) {
+	client, requests := eventLogFixtureClientOn(t, httptest.NewTLSServer, nil)
+	result, err := client.EventLog(t.Context(), "", 100)
+	if err != nil || result.Total != 4 || len(*requests) != 4 {
+		t.Fatalf("result=%+v err=%v requests=%q", result, err, *requests)
 	}
 }
 
@@ -237,7 +255,7 @@ func TestEventLogFailuresStopAndSanitize(t *testing.T) {
 }
 
 func TestEventLogUntrustedCertificate(t *testing.T) {
-	client, requests := eventLogFixtureClient(t, nil)
+	client, requests := eventLogFixtureClientOn(t, httptest.NewTLSServer, nil)
 	client.http = &http.Client{}
 	_, err := client.EventLog(t.Context(), "", 100)
 	var failure *Error
@@ -248,21 +266,21 @@ func TestEventLogUntrustedCertificate(t *testing.T) {
 
 func TestEventLogXMLVariants(t *testing.T) {
 	for _, test := range []struct {
-		name, body                   string
-		total, omitted, omittedBytes int
-		fails                        bool
+		name, body     string
+		total, omitted int
+		fails          bool
 	}{
-		{"empty", `<DeviceLog/>`, 0, 0, 0, false},
-		{"multiline", "<DeviceLog><Event><group>sys</group><msg>one\r\ntwo\nthree</msg></Event></DeviceLog>", 3, 2, 8, false},
-		{"escaped", `<DeviceLog><Event><group>sys</group><msg>text &amp; &lt;data&gt;</msg></Event></DeviceLog>`, 1, 0, 0, false},
-		{"CDATA", `<DeviceLog><Event><group>sys</group><msg><![CDATA[text <sample>]]></msg></Event></DeviceLog>`, 1, 0, 0, false},
-		{"missing group", `<DeviceLog><Event><msg>synthetic-secret</msg></Event></DeviceLog>`, 0, 0, 0, true},
-		{"unknown group", `<DeviceLog><Event><group>future</group><msg>synthetic-secret</msg></Event></DeviceLog>`, 0, 0, 0, true},
-		{"duplicate group", `<DeviceLog><Event><group>sys</group><group>fon</group><msg>synthetic-secret</msg></Event></DeviceLog>`, 0, 0, 0, true},
-		{"missing message", `<DeviceLog><Event><group>sys</group></Event></DeviceLog>`, 0, 0, 0, true},
-		{"wrong root", `<wrong/>`, 0, 0, 0, true},
-		{"malformed", `<DeviceLog>`, 0, 0, 0, true},
-		{"trailing root", `<DeviceLog/><DeviceLog/>`, 0, 0, 0, true},
+		{"empty", `<DeviceLog/>`, 0, 0, false},
+		{"multiline", "<DeviceLog><Event><group>sys</group><msg>one\r\ntwo\nthree</msg></Event></DeviceLog>", 3, 2, false},
+		{"escaped", `<DeviceLog><Event><group>sys</group><msg>text &amp; &lt;data&gt;</msg></Event></DeviceLog>`, 1, 0, false},
+		{"CDATA", `<DeviceLog><Event><group>sys</group><msg><![CDATA[text <sample>]]></msg></Event></DeviceLog>`, 1, 0, false},
+		{"missing group", `<DeviceLog><Event><msg>synthetic-secret</msg></Event></DeviceLog>`, 0, 0, true},
+		{"unknown group", `<DeviceLog><Event><group>future</group><msg>synthetic-secret</msg></Event></DeviceLog>`, 0, 0, true},
+		{"duplicate group", `<DeviceLog><Event><group>sys</group><group>fon</group><msg>synthetic-secret</msg></Event></DeviceLog>`, 0, 0, true},
+		{"missing message", `<DeviceLog><Event><group>sys</group></Event></DeviceLog>`, 0, 0, true},
+		{"wrong root", `<wrong/>`, 0, 0, true},
+		{"malformed", `<DeviceLog>`, 0, 0, true},
+		{"trailing root", `<DeviceLog/><DeviceLog/>`, 0, 0, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			result, err := parseEventLog([]byte(test.body), []string{"sys"}, 1)
@@ -272,7 +290,7 @@ func TestEventLogXMLVariants(t *testing.T) {
 				}
 				return
 			}
-			if err != nil || result.Total != test.total || result.Omitted != test.omitted || result.OmittedBytes != test.omittedBytes {
+			if err != nil || result.Total != test.total || result.Omitted != test.omitted {
 				t.Fatalf("result=%+v err=%v", result, err)
 			}
 		})
