@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<scpd xmlns="urn:dslforum-org:service-1-0"><actionList><action><name>GetCommonLinkProperties</name></action><action><name>X_AVM-DE_GetAddonInfos</name></action><action><name>X_AVM-DE_GetOnlineMonitor</name></action><action><name>X_AVM-DE_GetActiveProvider</name></action><action><name>GetTotalBytesReceived</name></action><action><name>GetTotalBytesSent</name></action><action><name>GetTotalPacketsReceived</name></action><action><name>GetTotalPacketsSent</name></action><action><name>X_AVM-DE_SetWANAccessType</name></action></actionList></scpd>

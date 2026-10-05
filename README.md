@@ -239,30 +239,84 @@ exactly one advertised WANCommonInterfaceConfig service and confirms
 
 The command resolves the active WANIPConnection or WANPPPConnection through documented
 `Layer3Forwarding:GetDefaultConnectionService`, then checks that active service's SCPD for
-AVM's documented `GetAddonInfos`. When advertised there, it reads router-reported current
-byte rates, byte totals, and up to two DNS server addresses. If the action is not advertised,
-those numeric JSON fields are `null`, compact output says `unknown`, and `dns_servers` is
-empty; the CLI never probes the absent action. The rate
-fields are named `router_reported_download_bytes_per_second` and
-`router_reported_upload_bytes_per_second` to distinguish them from `watch`'s rates, which
-are calculated from observed counter deltas. Router-reported rates are not independently
-measured by the CLI.
+`X_GetDNSServers`. The returned comma-separated DNS list accepts IPv4 and IPv6 addresses.
+It never looks up or invokes the undocumented connection-service `GetAddonInfos` action.
 
-JSON fields are deterministic:
+Each optional WANCommonInterfaceConfig action is checked in the common service's SCPD:
+
+- `X_AVM-DE_GetAddonInfos` supplies sync and tariff download/upload rates in **bits/s**.
+  Only some providers send a tariff rate, so a tariff rate of `0` is reported as
+  `null`/`unknown`. A sync rate of `0` is preserved and means no sync or not reported.
+- `X_AVM-DE_GetActiveProvider` supplies the provider name.
+- `GetTotalBytesReceived`, `GetTotalBytesSent`, `GetTotalPacketsReceived`, and
+  `GetTotalPacketsSent` supply byte and packet counters. The documented counters cover all
+  interfaces over their connection intervals and reset when an interface reconnects. They
+  depend on IGD being enabled on the router and may return zero when it is disabled;
+  the CLI uses only the TR-064 actions and never falls back to a UPnP IGD endpoint.
+- `X_AVM-DE_GetOnlineMonitor(NewSyncGroupIndex)` supplies maximum byte rates and current
+  byte-rate series per sync group, including upstream real-time, high, default, and low
+  priority classes. Group 0 supplies the count; subsequent groups are read once in index
+  order. Reads are bounded to 16 groups and 256 values per series. An excessive or changing
+  group count fails atomically. A zero count produces an empty `sync_groups` array.
+  An empty or absent series produces an empty array. A malformed non-empty series,
+  including one with a trailing comma, fails the command.
+
+An absent optional action is never probed: its numeric/provider JSON fields are `null`,
+compact output says `unknown`, and an unavailable monitor is `"sync_groups":null`.
+An absent DNS action produces `"dns_servers":[]`, preserving the existing contract.
+An advertised action that fails or returns malformed data fails the entire command with a
+structured error; unavailable capability is never confused with a failed read. The only
+exception is the authorization refusal of the two rights-restricted reads described below.
+
+The [WANCommonInterfaceConfig document](https://fritz.support/resources/TR-064_WAN_Common_Interface_Config.pdf)
+(version 22, dated 2026-02-25) documents the prefixed `X_AVM-DE_GetAddonInfos` on the common
+service. It returns link rates, **not** the byte rates, byte totals, or DNS assumed by the old
+connection-service lookup. DNS comes from the documented
+[WANIPConnection](https://fritz.support/resources/TR-064_WAN_IP_Connection.pdf) or
+[WANPPPConnection](https://fritz.support/resources/TR-064_WAN_PPP_Connection.pdf) action instead.
+The common document explicitly requires App or Phone rights for add-on rates and provider;
+link properties allow App, Phone, NAS, or Homeauto rights. It specifies no required-rights
+list for monitor or counter actions; the IP/PPP documents likewise specify none for DNS.
+An account with only NAS or Homeauto rights still gets the link properties: when the router
+refuses `X_AVM-DE_GetAddonInfos` or `X_AVM-DE_GetActiveProvider` with SOAP fault `606`
+(action not authorized), the fields that read fills are `null`/`unknown`. Every other error
+on these two reads, and an authorization error on any other read, remains an error.
+
+The existing nine JSON fields retain their order. New fields follow them in this order:
+`total_download_packets`, `total_upload_packets`, `sync_download_bits_per_second`,
+`sync_upload_bits_per_second`, `tariff_download_bits_per_second`,
+`tariff_upload_bits_per_second`, `provider`, `sync_groups`.
+For example, with all optional actions absent:
 
 ```json
-{"access_type":"Cable","physical_link_status":"Up","max_download_bits_per_second":1100000000,"max_upload_bits_per_second":55000000,"router_reported_download_bytes_per_second":2500000,"router_reported_upload_bytes_per_second":125000,"total_download_bytes":12345678901,"total_upload_bytes":987654321,"dns_servers":["192.0.2.53","192.0.2.54"]}
+{"access_type":"X_AVM-DE_Cable","physical_link_status":"Up","max_download_bits_per_second":1100000000,"max_upload_bits_per_second":55000000,"router_reported_download_bytes_per_second":null,"router_reported_upload_bytes_per_second":null,"total_download_bytes":null,"total_upload_bytes":null,"dns_servers":[],"total_download_packets":null,"total_upload_packets":null,"sync_download_bits_per_second":null,"sync_upload_bits_per_second":null,"tariff_download_bits_per_second":null,"tariff_upload_bits_per_second":null,"provider":null,"sync_groups":null}
 ```
 
-Documented access types and physical-link states are preserved; unrecognized non-empty
-states become `unknown`. All numeric values are strict unsigned integers and DNS values must be IP addresses;
-missing required link properties or malformed advertised add-on data fail atomically as
+Monitor fields ending in `bytes_per_second` use **bytes/s**, despite the action's `_bps`
+argument names. Each current-rate field is an array in the router's original order; a single
+numeric value becomes a one-element array. No sample ordering, elapsed interval, or cross-group
+sum is inferred. The document describes `ds_current_bps` as downstream multicast and
+`mc_current_bps` as combined home, guest, and multicast downstream traffic; the output
+preserves the `ds_current_bytes_per_second` and `mc_current_bytes_per_second` names to avoid
+silently swapping them. The existing `router_reported_download_bytes_per_second` and
+`router_reported_upload_bytes_per_second` fields keep their position for output stability and
+are always `null`/`unknown`; `sync_groups` carries the router-reported byte rates.
+These router-reported rates are not independently measured and differ from `watch`'s observed
+counter-delta rates.
+
+Access types `DSL`, `Ethernet`, `X_AVM-DE_Fiber`, `X_AVM-DE_UMTS`, `X_AVM-DE_Cable`,
+`X_AVM-DE_LTE`, and `unknown` are preserved. Legacy `POTS`, `Cable`, and `Other` remain
+accepted for compatibility. Unrecognized non-empty access types and physical-link states
+become `unknown`. Numeric values are strict unsigned integers, DNS values must be IP
+addresses, and provider names are bounded to 128 bytes without control characters.
+Missing required link properties or malformed advertised optional data fail atomically as
 protocol errors. Missing or duplicate required services, or action-incomplete required
-SCPDs, are explicit unsupported capabilities; the optional add-on action may be absent.
-SCPD and control URLs must remain on the router origin. No WAN account data,
-credentials, generic SOAP surface, browser endpoint, mutation, or model-name inference is
-used. Compatibility is fixture-backed for service versions 1 and 2 and for routers with and
-without `GetAddonInfos`.
+SCPDs, are explicit unsupported capabilities. SCPD and control URLs must remain on the router
+origin. Provider and DNS are allowed output; WAN MAC addresses and PPP usernames are never
+included. No credentials, generic SOAP surface, browser endpoint, mutation, or model-name
+inference is used. Compatibility is backed by synthetic fixtures for IP/PPP connections,
+common-service versions 1 and 2, legacy and documented access types, and optional actions
+present or absent; neither original mismatch was verified on a device.
 
 ### Bounded WAN and traffic watch
 
@@ -1169,8 +1223,10 @@ Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 `DeviceInfo:GetInfo`, `WANIPConnection` or
 `WANPPPConnection:GetStatusInfo` and `GetExternalIPAddress`,
 `WANCommonInterfaceConfig:GetTotalBytesReceived`, `GetTotalBytesSent`, and the explicit
-`wan detail` actions `GetCommonLinkProperties` on WANCommonInterfaceConfig plus
-SCPD-advertised `GetAddonInfos` on the active WANIPConnection/WANPPPConnection service, AVM's
+`wan detail` actions `GetCommonLinkProperties`, `X_AVM-DE_GetAddonInfos`,
+`X_AVM-DE_GetOnlineMonitor`, `X_AVM-DE_GetActiveProvider`, `GetTotalPacketsSent`, and
+`GetTotalPacketsReceived` on WANCommonInterfaceConfig plus SCPD-advertised
+`X_GetDNSServers` on the active WANIPConnection/WANPPPConnection service, AVM's
 documented `X_AVM-DE_OnTel:GetCallList`, and the standard
 `Hosts:GetHostNumberOfEntries` plus zero-based `GetGenericHostEntry(NewIndex)`,
 the SCPD-advertised documented `Hosts:X_AVM-DE_GetSpecificHostEntryByIP` read of

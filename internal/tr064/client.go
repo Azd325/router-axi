@@ -65,15 +65,36 @@ type Traffic struct {
 }
 
 type WANDetail struct {
-	AccessType                           string   `json:"access_type"`
-	PhysicalLinkStatus                   string   `json:"physical_link_status"`
-	MaxDownloadBitsPerSecond             uint64   `json:"max_download_bits_per_second"`
-	MaxUploadBitsPerSecond               uint64   `json:"max_upload_bits_per_second"`
-	RouterReportedDownloadBytesPerSecond *uint64  `json:"router_reported_download_bytes_per_second"`
-	RouterReportedUploadBytesPerSecond   *uint64  `json:"router_reported_upload_bytes_per_second"`
-	TotalDownloadBytes                   *uint64  `json:"total_download_bytes"`
-	TotalUploadBytes                     *uint64  `json:"total_upload_bytes"`
-	DNSServers                           []string `json:"dns_servers"`
+	AccessType                           string         `json:"access_type"`
+	PhysicalLinkStatus                   string         `json:"physical_link_status"`
+	MaxDownloadBitsPerSecond             uint64         `json:"max_download_bits_per_second"`
+	MaxUploadBitsPerSecond               uint64         `json:"max_upload_bits_per_second"`
+	RouterReportedDownloadBytesPerSecond *uint64        `json:"router_reported_download_bytes_per_second"`
+	RouterReportedUploadBytesPerSecond   *uint64        `json:"router_reported_upload_bytes_per_second"`
+	TotalDownloadBytes                   *uint64        `json:"total_download_bytes"`
+	TotalUploadBytes                     *uint64        `json:"total_upload_bytes"`
+	DNSServers                           []string       `json:"dns_servers"`
+	TotalDownloadPackets                 *uint64        `json:"total_download_packets"`
+	TotalUploadPackets                   *uint64        `json:"total_upload_packets"`
+	SyncDownloadBitsPerSecond            *uint64        `json:"sync_download_bits_per_second"`
+	SyncUploadBitsPerSecond              *uint64        `json:"sync_upload_bits_per_second"`
+	TariffDownloadBitsPerSecond          *uint64        `json:"tariff_download_bits_per_second"`
+	TariffUploadBitsPerSecond            *uint64        `json:"tariff_upload_bits_per_second"`
+	Provider                             *string        `json:"provider"`
+	SyncGroups                           []WANSyncGroup `json:"sync_groups"`
+}
+
+type WANSyncGroup struct {
+	Index                        uint64   `json:"index"`
+	MaxDownloadBytesPerSecond    uint64   `json:"max_download_bytes_per_second"`
+	MaxUploadBytesPerSecond      uint64   `json:"max_upload_bytes_per_second"`
+	DSCurrentBytesPerSecond      []uint64 `json:"ds_current_bytes_per_second"`
+	MCCurrentBytesPerSecond      []uint64 `json:"mc_current_bytes_per_second"`
+	UploadBytesPerSecond         []uint64 `json:"upload_bytes_per_second"`
+	RealtimeUploadBytesPerSecond []uint64 `json:"realtime_upload_bytes_per_second"`
+	HighUploadBytesPerSecond     []uint64 `json:"high_upload_bytes_per_second"`
+	DefaultUploadBytesPerSecond  []uint64 `json:"default_upload_bytes_per_second"`
+	LowUploadBytesPerSecond      []uint64 `json:"low_upload_bytes_per_second"`
 }
 
 type DHCP struct {
@@ -258,31 +279,34 @@ func (d *description) UnmarshalXML(decoder *xml.Decoder, start xml.StartElement)
 }
 
 type soapValues struct {
-	Status, LastError, ExternalIP                                               string
-	Manufacturer, Model, Serial, Software, Hardware                             string
-	Uptime, DownloadRate, UploadRate, TotalDownload, TotalUpload                string
-	WANAccessType, PhysicalLinkStatus, DownstreamMaxBitRate, UpstreamMaxBitRate string
-	DNSServer1, DNSServer2                                                      string
-	CallListURL, HostNumberOfEntries, DefaultConnectionService                  string
-	MACAddress, IPAddress, InterfaceType, Active, HostName, AddressSource       string
-	LeaseTimeRemaining                                                          *string
-	FaultCode, FaultDescription                                                 string
-	Enable, SSID, Standard                                                      string
-	WLANStatus, MaxBitRate                                                      string
-	Channel, FrequencyBand, TotalAssociations, BeaconType, APType               string
-	PortMappingCount, ExternalPort, PortMappingProtocol                         string
-	InternalPort, InternalClient, Enabled, PortMappingDescription               string
-	RemoteHost, LeaseDuration                                                   *string
-	DHCPServerConfigurable, DHCPServerEnable, DHCPRelay                         string
-	MinAddress, MaxAddress, SubnetMask, DNSServers, DomainName, IPRouters       string
-	LinkStatus, ModulationType, CurrentProfile                                  string
-	UpstreamCurrRate, DownstreamCurrRate, UpstreamMaxRate, DownstreamMaxRate    string
-	UpstreamNoiseMargin, DownstreamNoiseMargin                                  string
-	UpstreamAttenuation, DownstreamAttenuation, FECErrors, CRCErrors            string
-	ATURVendor, ATURCountry, UpstreamPower, DownstreamPower                     string
-	CurrentUsername, CurrentUserRights                                          *string
-	AnonymousLoginEnabled, DefaultPasswordActive                                string
-	HostPort, HostSpeed, HostGuest, HostVPN, HostWANAccess, HostUpdateAvailable string
+	Status, LastError, ExternalIP                                                 string
+	Manufacturer, Model, Serial, Software, Hardware                               string
+	Uptime, TotalDownload, TotalUpload                                            string
+	WANAccessType, PhysicalLinkStatus, DownstreamMaxBitRate, UpstreamMaxBitRate   string
+	TotalPacketsSent, TotalPacketsReceived                                        string
+	SyncDownstream, SyncUpstream, TariffDownstream, TariffUpstream                string
+	Provider, TotalNumberSyncGroups, MonitorMaxDownstream, MonitorMaxUpstream     string
+	DSCurrent, MCCurrent, USCurrent, PrioRealtime, PrioHigh, PrioDefault, PrioLow string
+	CallListURL, HostNumberOfEntries, DefaultConnectionService                    string
+	MACAddress, IPAddress, InterfaceType, Active, HostName, AddressSource         string
+	LeaseTimeRemaining                                                            *string
+	FaultCode, FaultDescription                                                   string
+	Enable, SSID, Standard                                                        string
+	WLANStatus, MaxBitRate                                                        string
+	Channel, FrequencyBand, TotalAssociations, BeaconType, APType                 string
+	PortMappingCount, ExternalPort, PortMappingProtocol                           string
+	InternalPort, InternalClient, Enabled, PortMappingDescription                 string
+	RemoteHost, LeaseDuration                                                     *string
+	DHCPServerConfigurable, DHCPServerEnable, DHCPRelay                           string
+	MinAddress, MaxAddress, SubnetMask, DNSServers, DomainName, IPRouters         string
+	LinkStatus, ModulationType, CurrentProfile                                    string
+	UpstreamCurrRate, DownstreamCurrRate, UpstreamMaxRate, DownstreamMaxRate      string
+	UpstreamNoiseMargin, DownstreamNoiseMargin                                    string
+	UpstreamAttenuation, DownstreamAttenuation, FECErrors, CRCErrors              string
+	ATURVendor, ATURCountry, UpstreamPower, DownstreamPower                       string
+	CurrentUsername, CurrentUserRights                                            *string
+	AnonymousLoginEnabled, DefaultPasswordActive                                  string
+	HostPort, HostSpeed, HostGuest, HostVPN, HostWANAccess, HostUpdateAvailable   string
 
 	UpgradeAvailable, OfferedVersion, UpdateState, BuildType string
 	AutoUpdateMode, UpdateTime, LastFWVersion                string
@@ -325,10 +349,6 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.Hardware
 		case "NewUpTime", "NewUptime":
 			target = &v.Uptime
-		case "NewByteReceiveRate":
-			target = &v.DownloadRate
-		case "NewByteSendRate":
-			target = &v.UploadRate
 		case "NewTotalBytesReceived":
 			target = &v.TotalDownload
 		case "NewTotalBytesSent":
@@ -341,10 +361,40 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.DownstreamMaxBitRate
 		case "NewLayer1UpstreamMaxBitRate":
 			target = &v.UpstreamMaxBitRate
-		case "NewDNSServer1":
-			target = &v.DNSServer1
-		case "NewDNSServer2":
-			target = &v.DNSServer2
+		case "NewTotalPacketsSent":
+			target = &v.TotalPacketsSent
+		case "NewTotalPacketsReceived":
+			target = &v.TotalPacketsReceived
+		case "NewX_AVM-DE_SyncDownstream":
+			target = &v.SyncDownstream
+		case "NewX_AVM-DE_SyncUpstream":
+			target = &v.SyncUpstream
+		case "NewX_AVM-DE_TariffDataRateDownstream":
+			target = &v.TariffDownstream
+		case "NewX_AVM-DE_TariffDataRateUpstream":
+			target = &v.TariffUpstream
+		case "NewX_AVM-DE_Provider":
+			target = &v.Provider
+		case "NewTotalNumberSyncGroups":
+			target = &v.TotalNumberSyncGroups
+		case "Newmax_ds":
+			target = &v.MonitorMaxDownstream
+		case "Newmax_us":
+			target = &v.MonitorMaxUpstream
+		case "Newds_current_bps":
+			target = &v.DSCurrent
+		case "Newmc_current_bps":
+			target = &v.MCCurrent
+		case "Newus_current_bps":
+			target = &v.USCurrent
+		case "Newprio_realtime_bps":
+			target = &v.PrioRealtime
+		case "Newprio_high_bps":
+			target = &v.PrioHigh
+		case "Newprio_default_bps":
+			target = &v.PrioDefault
+		case "Newprio_low_bps":
+			target = &v.PrioLow
 		case "NewCallListURL":
 			target = &v.CallListURL
 		case "NewDefaultConnectionService":
@@ -673,7 +723,7 @@ func (c *Client) WANDetail(ctx context.Context) (WANDetail, error) {
 	if err := c.discover(ctx); err != nil {
 		return WANDetail{}, wanDetailError(err)
 	}
-	common, err := c.wanDetailService(ctx)
+	common, commonActions, err := c.wanDetailService(ctx)
 	if err != nil {
 		return WANDetail{}, err
 	}
@@ -689,7 +739,7 @@ func (c *Client) WANDetail(ctx context.Context) (WANDetail, error) {
 	if err != nil {
 		return WANDetail{}, err
 	}
-	accessType, err := normalizeWANDetailState(link.WANAccessType, []string{"DSL", "POTS", "Cable", "Ethernet", "Other"}, "access type")
+	accessType, err := normalizeWANDetailState(link.WANAccessType, []string{"DSL", "Ethernet", "X_AVM-DE_Fiber", "X_AVM-DE_UMTS", "X_AVM-DE_Cable", "X_AVM-DE_LTE", "unknown", "POTS", "Cable", "Other"}, "access type")
 	if err != nil {
 		return WANDetail{}, err
 	}
@@ -705,47 +755,192 @@ func (c *Client) WANDetail(ctx context.Context) (WANDetail, error) {
 	if err != nil {
 		return WANDetail{}, wanDetailError(err)
 	}
-	active, addonActions, err := c.wanDetailAddonActions(ctx, active)
+	active, activeActions, err := c.wanDetailActiveActions(ctx, active)
 	if err != nil {
 		return WANDetail{}, err
 	}
-	if !addonActions["GetAddonInfos"] {
-		return result, nil
-	}
-	addon, err := c.actionOnService(ctx, active, "GetAddonInfos")
-	if err != nil {
-		return WANDetail{}, wanDetailError(err)
-	}
-	addonFields := []struct {
-		value  string
-		target **uint64
-	}{
-		{addon.DownloadRate, &result.RouterReportedDownloadBytesPerSecond},
-		{addon.UploadRate, &result.RouterReportedUploadBytesPerSecond},
-		{addon.TotalDownload, &result.TotalDownloadBytes},
-		{addon.TotalUpload, &result.TotalUploadBytes},
-	}
-	for _, field := range addonFields {
-		n, parseErr := parseWANDetailUint(field.value, "add-on numeric value")
-		if parseErr != nil {
-			return WANDetail{}, parseErr
+	if activeActions["X_GetDNSServers"] {
+		dns, err := c.actionOnService(ctx, active, "X_GetDNSServers")
+		if err != nil {
+			return WANDetail{}, wanDetailError(err)
 		}
-		*field.target = &n
+		if strings.TrimSpace(dns.DNSServers) != "" {
+			for _, value := range strings.Split(dns.DNSServers, ",") {
+				address, err := netip.ParseAddr(strings.TrimSpace(value))
+				if err != nil {
+					return WANDetail{}, &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an invalid DNS server address"}
+				}
+				result.DNSServers = append(result.DNSServers, address.String())
+			}
+		}
 	}
-	for _, value := range []string{addon.DNSServer1, addon.DNSServer2} {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, err := netip.ParseAddr(value); err != nil {
-			return WANDetail{}, &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an invalid DNS server address"}
-		}
-		result.DNSServers = append(result.DNSServers, value)
+	if err := c.wanDetailCommonReads(ctx, common, commonActions, &result); err != nil {
+		return WANDetail{}, err
 	}
 	return result, nil
 }
 
-func (c *Client) wanDetailService(ctx context.Context) (service, error) {
+func (c *Client) wanDetailCommonReads(ctx context.Context, common service, actions map[string]bool, result *WANDetail) error {
+	for _, counter := range []struct {
+		action string
+		value  func(soapValues) string
+		target **uint64
+	}{
+		{"GetTotalBytesReceived", func(v soapValues) string { return v.TotalDownload }, &result.TotalDownloadBytes},
+		{"GetTotalBytesSent", func(v soapValues) string { return v.TotalUpload }, &result.TotalUploadBytes},
+		{"GetTotalPacketsReceived", func(v soapValues) string { return v.TotalPacketsReceived }, &result.TotalDownloadPackets},
+		{"GetTotalPacketsSent", func(v soapValues) string { return v.TotalPacketsSent }, &result.TotalUploadPackets},
+	} {
+		if !actions[counter.action] {
+			continue
+		}
+		values, err := c.actionOnService(ctx, common, counter.action)
+		if err != nil {
+			return wanDetailError(err)
+		}
+		n, err := parseWANDetailUint(counter.value(values), "WAN counter")
+		if err != nil {
+			return err
+		}
+		*counter.target = &n
+	}
+	addon, addonAuthorized, err := c.wanDetailRightsRestrictedRead(ctx, common, actions, "X_AVM-DE_GetAddonInfos")
+	if err != nil {
+		return err
+	}
+	if addonAuthorized {
+		for _, field := range []struct {
+			value        string
+			target       **uint64
+			zeroIsAbsent bool
+		}{
+			{addon.SyncDownstream, &result.SyncDownloadBitsPerSecond, false},
+			{addon.SyncUpstream, &result.SyncUploadBitsPerSecond, false},
+			{addon.TariffDownstream, &result.TariffDownloadBitsPerSecond, true},
+			{addon.TariffUpstream, &result.TariffUploadBitsPerSecond, true},
+		} {
+			n, err := parseWANDetailUint(field.value, "sync or tariff bit rate")
+			if err != nil {
+				return err
+			}
+			if n == 0 && field.zeroIsAbsent {
+				continue
+			}
+			*field.target = &n
+		}
+	}
+	active, providerAuthorized, err := c.wanDetailRightsRestrictedRead(ctx, common, actions, "X_AVM-DE_GetActiveProvider")
+	if err != nil {
+		return err
+	}
+	if providerAuthorized {
+		provider := strings.TrimSpace(active.Provider)
+		if len(provider) > 128 || strings.IndexFunc(provider, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0 {
+			return &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an invalid provider name"}
+		}
+		if provider != "" {
+			result.Provider = &provider
+		}
+	}
+	if actions["X_AVM-DE_GetOnlineMonitor"] {
+		groups, err := c.wanDetailSyncGroups(ctx, common)
+		if err != nil {
+			return err
+		}
+		result.SyncGroups = groups
+	}
+	return nil
+}
+
+func (c *Client) wanDetailRightsRestrictedRead(ctx context.Context, common service, actions map[string]bool, action string) (soapValues, bool, error) {
+	if !actions[action] {
+		return soapValues{}, false, nil
+	}
+	values, err := c.actionOnService(ctx, common, action)
+	if err != nil {
+		var protocolErr *Error
+		if errors.As(err, &protocolErr) && protocolErr.Kind == "router" && protocolErr.FaultCode == "606" {
+			return soapValues{}, false, nil
+		}
+		return soapValues{}, false, wanDetailError(err)
+	}
+	return values, true, nil
+}
+
+const maxWANSyncGroups = 16
+const maxWANRateSamples = 256
+
+func (c *Client) wanDetailSyncGroups(ctx context.Context, common service) ([]WANSyncGroup, error) {
+	groups := []WANSyncGroup{}
+	var count uint64
+	for index := uint64(0); index == 0 || index < count; index++ {
+		values, err := c.actionOnService(ctx, common, "X_AVM-DE_GetOnlineMonitor", soapArgument{"NewSyncGroupIndex", strconv.FormatUint(index, 10)})
+		if err != nil {
+			return nil, wanDetailError(err)
+		}
+		n, err := parseWANDetailUint(values.TotalNumberSyncGroups, "sync group count")
+		if err != nil {
+			return nil, err
+		}
+		if n > maxWANSyncGroups || index > 0 && n != count {
+			return nil, &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an excessive or changing sync group count"}
+		}
+		count = n
+		if count == 0 {
+			break
+		}
+		group, err := parseWANSyncGroup(values, index)
+		if err != nil {
+			return nil, err
+		}
+		groups = append(groups, group)
+	}
+	return groups, nil
+}
+
+func parseWANSyncGroup(values soapValues, index uint64) (WANSyncGroup, error) {
+	group := WANSyncGroup{Index: index}
+	var err error
+	group.MaxDownloadBytesPerSecond, err = parseWANDetailUint(values.MonitorMaxDownstream, "sync group maximum download byte rate")
+	if err != nil {
+		return WANSyncGroup{}, err
+	}
+	group.MaxUploadBytesPerSecond, err = parseWANDetailUint(values.MonitorMaxUpstream, "sync group maximum upload byte rate")
+	if err != nil {
+		return WANSyncGroup{}, err
+	}
+	for _, field := range []struct {
+		value  string
+		target *[]uint64
+	}{
+		{values.DSCurrent, &group.DSCurrentBytesPerSecond},
+		{values.MCCurrent, &group.MCCurrentBytesPerSecond},
+		{values.USCurrent, &group.UploadBytesPerSecond},
+		{values.PrioRealtime, &group.RealtimeUploadBytesPerSecond},
+		{values.PrioHigh, &group.HighUploadBytesPerSecond},
+		{values.PrioDefault, &group.DefaultUploadBytesPerSecond},
+		{values.PrioLow, &group.LowUploadBytesPerSecond},
+	} {
+		*field.target = []uint64{}
+		if strings.TrimSpace(field.value) == "" {
+			continue
+		}
+		parts := strings.Split(field.value, ",")
+		if len(parts) > maxWANRateSamples {
+			return WANSyncGroup{}, &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an excessive sync group rate series"}
+		}
+		for _, part := range parts {
+			n, err := parseWANDetailUint(part, "sync group byte rate")
+			if err != nil {
+				return WANSyncGroup{}, err
+			}
+			*field.target = append(*field.target, n)
+		}
+	}
+	return group, nil
+}
+
+func (c *Client) wanDetailService(ctx context.Context) (service, map[string]bool, error) {
 	const prefix = "urn:dslforum-org:service:WANCommonInterfaceConfig:"
 	var services []service
 	for _, svc := range c.allServices {
@@ -754,17 +949,17 @@ func (c *Client) wanDetailService(ctx context.Context) (service, error) {
 		}
 	}
 	if len(services) != 1 {
-		return service{}, &Error{Kind: "unsupported", Operation: "wan detail", Message: "router does not advertise exactly one WANCommonInterfaceConfig service; " + wanDetailRemediation}
+		return service{}, nil, &Error{Kind: "unsupported", Operation: "wan detail", Message: "router does not advertise exactly one WANCommonInterfaceConfig service; " + wanDetailRemediation}
 	}
 	svc := services[0]
 	control, controlErr := c.base.Parse(svc.ControlURL)
 	scpdURL, scpdErr := c.base.Parse(svc.SCPDURL)
 	if controlErr != nil || svc.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.Fragment != "" || scpdErr != nil || svc.SCPDURL == "" || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.Fragment != "" {
-		return service{}, &Error{Kind: "protocol", Operation: "wan detail", Message: "router advertised an invalid WAN common-interface URL"}
+		return service{}, nil, &Error{Kind: "protocol", Operation: "wan detail", Message: "router advertised an invalid WAN common-interface URL"}
 	}
 	body, err := c.get(ctx, scpdURL)
 	if err != nil {
-		return service{}, wanDetailError(err)
+		return service{}, nil, wanDetailError(err)
 	}
 	var scpd struct {
 		XMLName xml.Name `xml:"scpd"`
@@ -773,20 +968,20 @@ func (c *Client) wanDetailService(ctx context.Context) (service, error) {
 		} `xml:"actionList>action"`
 	}
 	if err := xml.Unmarshal(body, &scpd); err != nil || scpd.XMLName.Local != "scpd" {
-		return service{}, &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an invalid WAN common-interface service description"}
+		return service{}, nil, &Error{Kind: "protocol", Operation: "wan detail", Message: "router returned an invalid WAN common-interface service description"}
 	}
 	actions := map[string]bool{}
 	for _, action := range scpd.Actions {
 		actions[strings.TrimSpace(action.Name)] = true
 	}
 	if !actions["GetCommonLinkProperties"] {
-		return service{}, &Error{Kind: "unsupported", Operation: "wan detail", Message: "router does not advertise WANCommonInterfaceConfig:GetCommonLinkProperties; " + wanDetailRemediation}
+		return service{}, nil, &Error{Kind: "unsupported", Operation: "wan detail", Message: "router does not advertise WANCommonInterfaceConfig:GetCommonLinkProperties; " + wanDetailRemediation}
 	}
 	svc.ControlURL = control.Path
-	return svc, nil
+	return svc, actions, nil
 }
 
-func (c *Client) wanDetailAddonActions(ctx context.Context, svc service) (service, map[string]bool, error) {
+func (c *Client) wanDetailActiveActions(ctx context.Context, svc service) (service, map[string]bool, error) {
 	control, controlErr := c.base.Parse(svc.ControlURL)
 	scpdURL, scpdErr := c.base.Parse(svc.SCPDURL)
 	if controlErr != nil || svc.ControlURL == "" || !sameOrigin(c.base, control) || control.User != nil || control.RawQuery != "" || control.Fragment != "" || scpdErr != nil || svc.SCPDURL == "" || !sameOrigin(c.base, scpdURL) || scpdURL.User != nil || scpdURL.RawQuery != "" || scpdURL.Fragment != "" {

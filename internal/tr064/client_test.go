@@ -42,6 +42,24 @@ var wanCommonSCPDFixture string
 //go:embed testdata/wan-addon-scpd.xml
 var wanAddonSCPDFixture string
 
+//go:embed testdata/wan-detail-common-scpd.xml
+var wanDetailCommonSCPDFixture string
+
+//go:embed testdata/wan-dns-scpd.xml
+var wanDNSSCPDFixture string
+
+//go:embed testdata/wan-dns.xml
+var wanDNSFixture string
+
+//go:embed testdata/wan-online-monitor.xml
+var wanOnlineMonitorFixture string
+
+//go:embed testdata/wan-provider.xml
+var wanProviderFixture string
+
+//go:embed testdata/wan-packets.xml
+var wanPacketsFixture string
+
 //go:embed testdata/wan-addon.xml
 var wanAddonFixture string
 
@@ -1356,12 +1374,15 @@ func forwardFixtureClient(t *testing.T, exchanges []forwardExchange) *Client {
 		var wantBody, wantAction string
 		if exchange.action != "" {
 			method = http.MethodPost
-			if exchange.action != "GetPortMappingNumberOfEntries" && exchange.action != "GetGenericPortMappingEntry" && (exchange.path != "/device" || exchange.action != "GetInfo") && (exchange.path != "/layer3" || exchange.action != "GetDefaultConnectionService") && (exchange.path != "/ip1" && exchange.path != "/ip2" && exchange.path != "/ppp1" || exchange.action != "GetStatusInfo" && exchange.action != "GetExternalIPAddress" && exchange.action != "GetAddonInfos") && (exchange.path != "/common" || exchange.action != "GetTotalBytesReceived" && exchange.action != "GetTotalBytesSent" && exchange.action != "GetCommonLinkProperties") {
+			if exchange.action != "GetPortMappingNumberOfEntries" && exchange.action != "GetGenericPortMappingEntry" && (exchange.path != "/device" || exchange.action != "GetInfo") && (exchange.path != "/layer3" || exchange.action != "GetDefaultConnectionService") && (exchange.path != "/ip1" && exchange.path != "/ip2" && exchange.path != "/ppp1" || exchange.action != "GetStatusInfo" && exchange.action != "GetExternalIPAddress" && exchange.action != "X_GetDNSServers") && (exchange.path != "/common" || exchange.action != "GetTotalBytesReceived" && exchange.action != "GetTotalBytesSent" && exchange.action != "GetCommonLinkProperties" && exchange.action != "X_AVM-DE_GetAddonInfos" && exchange.action != "X_AVM-DE_GetOnlineMonitor" && exchange.action != "X_AVM-DE_GetActiveProvider" && exchange.action != "GetTotalPacketsReceived" && exchange.action != "GetTotalPacketsSent") {
 				t.Errorf("test permitted forbidden action %q", exchange.action)
 			}
 			argument := ""
 			if exchange.action == "GetGenericPortMappingEntry" {
 				argument = "<NewPortMappingIndex>" + exchange.index + "</NewPortMappingIndex>"
+			}
+			if exchange.action == "X_AVM-DE_GetOnlineMonitor" {
+				argument = "<NewSyncGroupIndex>" + exchange.index + "</NewSyncGroupIndex>"
 			}
 			wantAction = `"` + serviceType + "#" + exchange.action + `"`
 			wantBody = `<?xml version="1.0"?><s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` + exchange.action + ` xmlns:u="` + serviceType + `">` + argument + `</u:` + exchange.action + `></s:Body></s:Envelope>`
@@ -1574,8 +1595,23 @@ func wanDetailScript(version, activeType, activePath, activeSCPD string, addon b
 		{path: "/layer3", action: "GetDefaultConnectionService", body: `<Envelope><NewDefaultConnectionService>` + defaultService + `</NewDefaultConnectionService></Envelope>`},
 		{path: activePath + ".xml", body: activeSCPD},
 	}
+	if strings.Contains(activeSCPD, "<name>X_GetDNSServers</name>") {
+		script = append(script, forwardExchange{path: activePath, action: "X_GetDNSServers", body: wanDNSFixture, serviceType: activeType})
+	}
 	if addon {
-		script = append(script, forwardExchange{path: activePath, action: "GetAddonInfos", body: strings.ReplaceAll(wanAddonFixture, "__SERVICE_TYPE__", activeType), serviceType: activeType})
+		script[1].body = wanDetailCommonSCPDFixture
+		commonType := "urn:dslforum-org:service:WANCommonInterfaceConfig:" + version
+		for _, read := range []struct{ action, body string }{
+			{"GetTotalBytesReceived", trafficFixture},
+			{"GetTotalBytesSent", trafficFixture},
+			{"GetTotalPacketsReceived", wanPacketsFixture},
+			{"GetTotalPacketsSent", wanPacketsFixture},
+			{"X_AVM-DE_GetAddonInfos", strings.ReplaceAll(wanAddonFixture, "__SERVICE_TYPE__", commonType)},
+			{"X_AVM-DE_GetActiveProvider", wanProviderFixture},
+		} {
+			script = append(script, forwardExchange{path: "/common", action: read.action, body: read.body, serviceType: commonType})
+		}
+		script = append(script, forwardExchange{path: "/common", action: "X_AVM-DE_GetOnlineMonitor", index: "0", body: wanOnlineMonitorFixture, serviceType: commonType})
 	}
 	return script
 }
@@ -1586,20 +1622,248 @@ func TestWANDetailUsesOnlyAdvertisedDocumentedActions(t *testing.T) {
 		{"2", "urn:dslforum-org:service:WANPPPConnection:1", "/ppp1"},
 	} {
 		t.Run(test.version+test.activePath, func(t *testing.T) {
-			client := forwardFixtureClient(t, wanDetailScript(test.version, test.activeType, test.activePath, wanAddonSCPDFixture, true))
+			client := forwardFixtureClient(t, wanDetailScript(test.version, test.activeType, test.activePath, wanDNSSCPDFixture, true))
 			detail, err := client.WANDetail(t.Context())
 			if err != nil {
 				t.Fatal(err)
 			}
-			if detail.AccessType != "Cable" || detail.PhysicalLinkStatus != "Up" || detail.MaxDownloadBitsPerSecond != 1100000000 || detail.MaxUploadBitsPerSecond != 55000000 || detail.RouterReportedDownloadBytesPerSecond == nil || *detail.RouterReportedDownloadBytesPerSecond != 2500000 || detail.RouterReportedUploadBytesPerSecond == nil || *detail.RouterReportedUploadBytesPerSecond != 125000 || detail.TotalDownloadBytes == nil || *detail.TotalDownloadBytes != 12345678901 || detail.TotalUploadBytes == nil || *detail.TotalUploadBytes != 987654321 || !reflect.DeepEqual(detail.DNSServers, []string{"192.0.2.53", "192.0.2.54"}) {
+			if detail.AccessType != "Cable" || detail.PhysicalLinkStatus != "Up" || detail.MaxDownloadBitsPerSecond != 1100000000 || detail.MaxUploadBitsPerSecond != 55000000 || detail.RouterReportedDownloadBytesPerSecond != nil || detail.RouterReportedUploadBytesPerSecond != nil || detail.TotalDownloadBytes == nil || *detail.TotalDownloadBytes != 12345678901 || detail.TotalUploadBytes == nil || *detail.TotalUploadBytes != 987654321 || !reflect.DeepEqual(detail.DNSServers, []string{"192.0.2.53", "2001:db8::53"}) {
 				t.Fatalf("detail=%#v", detail)
 			}
 		})
 	}
 }
 
+func TestWANDetailAcceptsDocumentedAndLegacyAccessTypes(t *testing.T) {
+	for _, accessType := range []string{"DSL", "Ethernet", "X_AVM-DE_Fiber", "X_AVM-DE_UMTS", "X_AVM-DE_Cable", "X_AVM-DE_LTE", "unknown", "POTS", "Cable", "Other", "future-type"} {
+		t.Run(accessType, func(t *testing.T) {
+			script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanAddonSCPDFixture, false)
+			script[2].body = strings.Replace(wanCommonLinkFixture, ">Cable<", ">"+accessType+"<", 1)
+			detail, err := forwardFixtureClient(t, script).WANDetail(t.Context())
+			want := accessType
+			if want == "future-type" {
+				want = "unknown"
+			}
+			if err != nil || detail.AccessType != want {
+				t.Fatalf("detail=%#v error=%v", detail, err)
+			}
+		})
+	}
+}
+
+func TestWANDetailIgnoresUndocumentedConnectionAddonInfos(t *testing.T) {
+	for _, activeType := range []string{"urn:dslforum-org:service:WANIPConnection:1", "urn:dslforum-org:service:WANPPPConnection:1"} {
+		t.Run(activeType, func(t *testing.T) {
+			script := wanDetailScript("1", activeType, "/ip1", wanAddonSCPDFixture, false)
+			detail, err := forwardFixtureClient(t, script).WANDetail(t.Context())
+			if err != nil || detail.TotalDownloadBytes != nil || detail.RouterReportedDownloadBytesPerSecond != nil || len(detail.DNSServers) != 0 {
+				t.Fatalf("detail=%#v error=%v", detail, err)
+			}
+		})
+	}
+}
+
+func TestWANDetailNewFieldsAndPrivacy(t *testing.T) {
+	detail, err := forwardFixtureClient(t, wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)).WANDetail(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.TotalDownloadPackets == nil || *detail.TotalDownloadPackets != 123456 || detail.TotalUploadPackets == nil || *detail.TotalUploadPackets != 98765 || detail.SyncDownloadBitsPerSecond == nil || *detail.SyncDownloadBitsPerSecond != 1100000000 || detail.SyncUploadBitsPerSecond == nil || *detail.SyncUploadBitsPerSecond != 55000000 || detail.TariffDownloadBitsPerSecond == nil || *detail.TariffDownloadBitsPerSecond != 1000000000 || detail.TariffUploadBitsPerSecond == nil || *detail.TariffUploadBitsPerSecond != 50000000 || detail.Provider == nil || *detail.Provider != "Synthetic Provider" {
+		t.Fatalf("detail=%#v", detail)
+	}
+	wantGroups := []WANSyncGroup{{Index: 0, MaxDownloadBytesPerSecond: 125000000, MaxUploadBytesPerSecond: 6250000, DSCurrentBytesPerSecond: []uint64{100, 200}, MCCurrentBytesPerSecond: []uint64{2500000, 2000000}, UploadBytesPerSecond: []uint64{125000, 120000}, RealtimeUploadBytesPerSecond: []uint64{1000, 0}, HighUploadBytesPerSecond: []uint64{2000, 1000}, DefaultUploadBytesPerSecond: []uint64{120000, 118000}, LowUploadBytesPerSecond: []uint64{2000, 1000}}}
+	if !reflect.DeepEqual(detail.SyncGroups, wantGroups) {
+		t.Fatalf("groups=%#v", detail.SyncGroups)
+	}
+	encoded, err := json.Marshal(detail)
+	if err != nil || strings.Contains(string(encoded), "private") || strings.Contains(string(encoded), "mac_address") || strings.Contains(string(encoded), "username") {
+		t.Fatalf("JSON=%s error=%v", encoded, err)
+	}
+}
+
+func TestWANDetailLegacyByteRatesStayUnknown(t *testing.T) {
+	script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)
+	last := len(script) - 1
+	script[last].body = strings.ReplaceAll(script[last].body, "2500000,2000000", "2500000")
+	script[last].body = strings.ReplaceAll(script[last].body, "125000,120000", "125000")
+	detail, err := forwardFixtureClient(t, script).WANDetail(t.Context())
+	if err != nil || detail.RouterReportedDownloadBytesPerSecond != nil || detail.RouterReportedUploadBytesPerSecond != nil || len(detail.SyncGroups) != 1 || !reflect.DeepEqual(detail.SyncGroups[0].MCCurrentBytesPerSecond, []uint64{2500000}) || !reflect.DeepEqual(detail.SyncGroups[0].UploadBytesPerSecond, []uint64{125000}) {
+		t.Fatalf("detail=%#v error=%v", detail, err)
+	}
+}
+
+func TestWANDetailZeroTariffRateIsUnknown(t *testing.T) {
+	script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)
+	for index := range script {
+		if script[index].action == "X_AVM-DE_GetAddonInfos" {
+			for _, value := range []string{"1100000000", "55000000", "1000000000", "50000000"} {
+				script[index].body = strings.Replace(script[index].body, "stream>"+value+"<", "stream>0<", 1)
+			}
+		}
+	}
+	detail, err := forwardFixtureClient(t, script).WANDetail(t.Context())
+	if err != nil || detail.TariffDownloadBitsPerSecond != nil || detail.TariffUploadBitsPerSecond != nil || detail.SyncDownloadBitsPerSecond == nil || *detail.SyncDownloadBitsPerSecond != 0 || detail.SyncUploadBitsPerSecond == nil || *detail.SyncUploadBitsPerSecond != 0 {
+		t.Fatalf("detail=%#v error=%v", detail, err)
+	}
+}
+
+func TestWANDetailEmptyOrAbsentMonitorSeriesIsEmptyArray(t *testing.T) {
+	script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)
+	last := len(script) - 1
+	script[last].body = strings.Replace(script[last].body, ">100,200<", "><", 1)
+	script[last].body = strings.Replace(script[last].body, "<Newprio_low_bps>2000,1000</Newprio_low_bps>", "", 1)
+	detail, err := forwardFixtureClient(t, script).WANDetail(t.Context())
+	if err != nil || detail.AccessType != "Cable" || detail.PhysicalLinkStatus != "Up" || len(detail.SyncGroups) != 1 {
+		t.Fatalf("detail=%#v error=%v", detail, err)
+	}
+	encoded, err := json.Marshal(detail.SyncGroups[0])
+	if err != nil || !strings.Contains(string(encoded), `"ds_current_bytes_per_second":[]`) || !strings.Contains(string(encoded), `"low_upload_bytes_per_second":[]`) || !strings.Contains(string(encoded), `"mc_current_bytes_per_second":[2500000,2000000]`) {
+		t.Fatalf("JSON=%s error=%v", encoded, err)
+	}
+}
+
+func TestWANDetailOptionalReadFailuresAreAtomicAndRedacted(t *testing.T) {
+	for _, action := range []string{"X_GetDNSServers", "GetTotalBytesReceived", "GetTotalBytesSent", "GetTotalPacketsReceived", "GetTotalPacketsSent", "X_AVM-DE_GetAddonInfos", "X_AVM-DE_GetActiveProvider", "X_AVM-DE_GetOnlineMonitor"} {
+		for _, fault := range []struct{ code, kind string }{{"401", "unsupported"}, {"606", "router"}, {"501", "router"}} {
+			if fault.code == "606" && (action == "X_AVM-DE_GetAddonInfos" || action == "X_AVM-DE_GetActiveProvider") {
+				continue
+			}
+			t.Run(action+fault.code, func(t *testing.T) {
+				script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)
+				for index := range script {
+					if script[index].action == action {
+						script[index].status = http.StatusInternalServerError
+						script[index].body = `<Envelope><errorCode>` + fault.code + `</errorCode><errorDescription>private-canary</errorDescription></Envelope>`
+						script = script[:index+1]
+						break
+					}
+				}
+				detail, err := forwardFixtureClient(t, script).WANDetail(t.Context())
+				var protocolErr *Error
+				if !errors.As(err, &protocolErr) || protocolErr.Kind != fault.kind || protocolErr.Operation != "wan detail" || protocolErr.StatusCode != http.StatusInternalServerError || strings.Contains(fmt.Sprintf("%#v", err), "private") || !reflect.DeepEqual(detail, WANDetail{}) {
+					t.Fatalf("detail=%#v error=%#v", detail, err)
+				}
+			})
+		}
+	}
+}
+
+func TestWANDetailKeepsLinkPropertiesWithoutAppOrPhoneRights(t *testing.T) {
+	script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)
+	for index := range script {
+		if script[index].action == "X_AVM-DE_GetAddonInfos" || script[index].action == "X_AVM-DE_GetActiveProvider" {
+			script[index].status = http.StatusInternalServerError
+			script[index].body = `<Envelope><errorCode>606</errorCode><errorDescription>private-canary</errorDescription></Envelope>`
+		}
+	}
+	detail, err := forwardFixtureClient(t, script).WANDetail(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.AccessType != "Cable" || detail.PhysicalLinkStatus != "Up" || detail.MaxDownloadBitsPerSecond != 1100000000 || detail.MaxUploadBitsPerSecond != 55000000 {
+		t.Fatalf("detail=%#v", detail)
+	}
+	if detail.SyncDownloadBitsPerSecond != nil || detail.SyncUploadBitsPerSecond != nil || detail.TariffDownloadBitsPerSecond != nil || detail.TariffUploadBitsPerSecond != nil || detail.Provider != nil {
+		t.Fatalf("detail=%#v", detail)
+	}
+	if detail.TotalDownloadPackets == nil || len(detail.DNSServers) != 2 || len(detail.SyncGroups) != 1 {
+		t.Fatalf("detail=%#v", detail)
+	}
+}
+
+func TestWANDetailOptionalActionsAreIndependent(t *testing.T) {
+	for _, action := range []string{"X_GetDNSServers", "GetTotalBytesReceived", "GetTotalBytesSent", "GetTotalPacketsReceived", "GetTotalPacketsSent", "X_AVM-DE_GetAddonInfos", "X_AVM-DE_GetActiveProvider", "X_AVM-DE_GetOnlineMonitor"} {
+		t.Run(action, func(t *testing.T) {
+			script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)
+			for index := range script {
+				if script[index].path == "/common.xml" || script[index].path == "/ip1.xml" {
+					script[index].body = strings.ReplaceAll(script[index].body, "<action><name>"+action+"</name></action>", "")
+				}
+			}
+			filtered := []forwardExchange{}
+			for _, exchange := range script {
+				if exchange.action != action {
+					filtered = append(filtered, exchange)
+				}
+			}
+			detail, err := forwardFixtureClient(t, filtered).WANDetail(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var available bool
+			switch action {
+			case "X_GetDNSServers":
+				available = len(detail.DNSServers) != 0
+			case "GetTotalBytesReceived":
+				available = detail.TotalDownloadBytes != nil
+			case "GetTotalBytesSent":
+				available = detail.TotalUploadBytes != nil
+			case "GetTotalPacketsReceived":
+				available = detail.TotalDownloadPackets != nil
+			case "GetTotalPacketsSent":
+				available = detail.TotalUploadPackets != nil
+			case "X_AVM-DE_GetAddonInfos":
+				available = detail.SyncDownloadBitsPerSecond != nil || detail.SyncUploadBitsPerSecond != nil || detail.TariffDownloadBitsPerSecond != nil || detail.TariffUploadBitsPerSecond != nil
+			case "X_AVM-DE_GetActiveProvider":
+				available = detail.Provider != nil
+			case "X_AVM-DE_GetOnlineMonitor":
+				available = detail.SyncGroups != nil
+			}
+			if available {
+				t.Fatalf("absent action %s produced data: %#v", action, detail)
+			}
+		})
+	}
+}
+
+func TestWANDetailSyncGroupBoundsAndVariants(t *testing.T) {
+	for _, test := range []struct {
+		name, firstCount, secondCount string
+		wantKind                      string
+	}{
+		{"zero", "0", "", ""},
+		{"two", "2", "2", ""},
+		{"maximum", "16", "16", ""},
+		{"excessive", "17", "", "protocol"},
+		{"changing", "2", "1", "protocol"},
+		{"invalid", "private", "", "protocol"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)
+			last := len(script) - 1
+			script[last].body = strings.Replace(wanOnlineMonitorFixture, ">1<", ">"+test.firstCount+"<", 1)
+			if test.secondCount != "" {
+				count, _ := strconv.Atoi(test.firstCount)
+				if test.wantKind != "" {
+					count = 2
+				}
+				for index := 1; index < count; index++ {
+					script = append(script, forwardExchange{path: "/common", action: "X_AVM-DE_GetOnlineMonitor", index: strconv.Itoa(index), body: strings.Replace(wanOnlineMonitorFixture, ">1<", ">"+test.secondCount+"<", 1)})
+				}
+			}
+			detail, err := forwardFixtureClient(t, script).WANDetail(t.Context())
+			if test.wantKind == "" {
+				count, _ := strconv.Atoi(test.firstCount)
+				if err != nil || detail.SyncGroups == nil || len(detail.SyncGroups) != count {
+					t.Fatalf("detail=%#v error=%v", detail, err)
+				}
+				for index, group := range detail.SyncGroups {
+					if group.Index != uint64(index) {
+						t.Fatalf("group=%#v", group)
+					}
+				}
+			} else {
+				var protocolErr *Error
+				if !errors.As(err, &protocolErr) || protocolErr.Kind != test.wantKind || protocolErr.Operation != "wan detail" || strings.Contains(fmt.Sprintf("%#v", err), "private") {
+					t.Fatalf("error=%#v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestWANDetailNormalizesSameOriginAbsoluteControlURLs(t *testing.T) {
-	script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanAddonSCPDFixture, true)
+	script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)
 	script[0].body = strings.Replace(script[0].body, "<controlURL>/layer3</controlURL>", "<controlURL>__ORIGIN__/layer3</controlURL>", 1)
 	script[0].body = strings.Replace(script[0].body, "<controlURL>/ip1</controlURL>", "<controlURL>__ORIGIN__/ip1</controlURL>", 1)
 	if _, err := forwardFixtureClient(t, script).WANDetail(t.Context()); err != nil {
@@ -1616,7 +1880,7 @@ func TestWANDetailWorksWithoutOptionalAddonInfos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"access_type":"Cable","physical_link_status":"Up","max_download_bits_per_second":1100000000,"max_upload_bits_per_second":55000000,"router_reported_download_bytes_per_second":null,"router_reported_upload_bytes_per_second":null,"total_download_bytes":null,"total_upload_bytes":null,"dns_servers":[]}`
+	want := `{"access_type":"Cable","physical_link_status":"Up","max_download_bits_per_second":1100000000,"max_upload_bits_per_second":55000000,"router_reported_download_bytes_per_second":null,"router_reported_upload_bytes_per_second":null,"total_download_bytes":null,"total_upload_bytes":null,"dns_servers":[],"total_download_packets":null,"total_upload_packets":null,"sync_download_bits_per_second":null,"sync_upload_bits_per_second":null,"tariff_download_bits_per_second":null,"tariff_upload_bits_per_second":null,"provider":null,"sync_groups":null}`
 	if string(encoded) != want {
 		t.Fatalf("JSON=%s", encoded)
 	}
@@ -1689,25 +1953,28 @@ func TestWANDetailCapabilityDetectionAndValidation(t *testing.T) {
 }
 
 func TestWANDetailRejectsMalformedSafeFields(t *testing.T) {
-	for _, test := range []struct{ name, body string }{
-		{"missing-access-type", strings.Replace(wanCommonLinkFixture, "<NewWANAccessType>Cable</NewWANAccessType>", "", 1)},
-		{"invalid-link-rate", strings.Replace(wanCommonLinkFixture, ">1100000000<", ">private<", 1)},
-		{"invalid-addon-rate", strings.Replace(wanAddonFixture, ">2500000<", ">private<", 1)},
-		{"invalid-dns", strings.Replace(wanAddonFixture, ">192.0.2.53<", ">private<", 1)},
+	for _, test := range []struct{ name, action, body string }{
+		{"missing-access-type", "GetCommonLinkProperties", strings.Replace(wanCommonLinkFixture, "<NewWANAccessType>Cable</NewWANAccessType>", "", 1)},
+		{"invalid-link-rate", "GetCommonLinkProperties", strings.Replace(wanCommonLinkFixture, ">1100000000<", ">private<", 1)},
+		{"invalid-addon-rate", "X_AVM-DE_GetAddonInfos", strings.Replace(wanAddonFixture, ">1100000000<", ">private<", 1)},
+		{"invalid-dns", "X_GetDNSServers", strings.Replace(wanDNSFixture, ">192.0.2.53,2001:db8::53<", ">private<", 1)},
+		{"invalid-counter", "GetTotalPacketsSent", strings.Replace(wanPacketsFixture, ">98765<", ">private<", 1)},
+		{"invalid-provider", "X_AVM-DE_GetActiveProvider", strings.Replace(wanProviderFixture, "Synthetic Provider", "private&#10;canary", 1)},
+		{"invalid-monitor-rate", "X_AVM-DE_GetOnlineMonitor", strings.Replace(wanOnlineMonitorFixture, ">100,200<", ">private<", 1)},
+		{"trailing-comma-monitor-series", "X_AVM-DE_GetOnlineMonitor", strings.Replace(wanOnlineMonitorFixture, ">100,200<", ">100,200,<", 1)},
+		{"empty-monitor-series-element", "X_AVM-DE_GetOnlineMonitor", strings.Replace(wanOnlineMonitorFixture, ">100,200<", ">100,,200<", 1)},
+		{"excessive-monitor-series", "X_AVM-DE_GetOnlineMonitor", strings.Replace(wanOnlineMonitorFixture, ">100,200<", ">"+strings.Repeat("1,", maxWANRateSamples)+"1<", 1)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			link, addon := wanCommonLinkFixture, trafficFixture
-			if strings.Contains(test.name, "link") || strings.Contains(test.name, "access") {
-				link = test.body
-			} else {
-				addon = test.body
-			}
-			script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanAddonSCPDFixture, true)
-			script[2].body = link
-			script[len(script)-1].body = strings.ReplaceAll(addon, "__SERVICE_TYPE__", "urn:dslforum-org:service:WANIPConnection:1")
-			if strings.Contains(test.name, "link") || strings.Contains(test.name, "access") {
-				for index := 3; index < len(script); index++ {
+			script := wanDetailScript("1", "urn:dslforum-org:service:WANIPConnection:1", "/ip1", wanDNSSCPDFixture, true)
+			failed := false
+			for index := range script {
+				if failed {
 					script[index].optional = true
+				}
+				if script[index].action == test.action {
+					script[index].body = test.body
+					failed = true
 				}
 			}
 			_, err := forwardFixtureClient(t, script).WANDetail(t.Context())

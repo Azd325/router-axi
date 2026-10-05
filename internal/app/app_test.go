@@ -115,9 +115,12 @@ func (f fakeReader) WAN(context.Context) (tr064.WAN, error) {
 	return tr064.WAN{Status: "Connected", ExternalIP: "203.0.113.42", IPFamily: "ipv4", UptimeSeconds: 86400, LastError: "ERROR_NONE"}, f.err
 }
 func (f fakeReader) WANDetail(context.Context) (tr064.WANDetail, error) {
-	downloadRate, uploadRate := uint64(2500000), uint64(125000)
 	totalDownload, totalUpload := uint64(12345678901), uint64(987654321)
-	return tr064.WANDetail{AccessType: "Cable", PhysicalLinkStatus: "Up", MaxDownloadBitsPerSecond: 1100000000, MaxUploadBitsPerSecond: 55000000, RouterReportedDownloadBytesPerSecond: &downloadRate, RouterReportedUploadBytesPerSecond: &uploadRate, TotalDownloadBytes: &totalDownload, TotalUploadBytes: &totalUpload, DNSServers: []string{"192.0.2.53", "192.0.2.54"}}, f.err
+	totalDownloadPackets, totalUploadPackets := uint64(123456), uint64(98765)
+	syncDownload, syncUpload := uint64(1100000000), uint64(55000000)
+	tariffDownload, tariffUpload := uint64(1000000000), uint64(50000000)
+	provider := "Synthetic Provider"
+	return tr064.WANDetail{AccessType: "Cable", PhysicalLinkStatus: "Up", MaxDownloadBitsPerSecond: 1100000000, MaxUploadBitsPerSecond: 55000000, TotalDownloadBytes: &totalDownload, TotalUploadBytes: &totalUpload, DNSServers: []string{"192.0.2.53", "192.0.2.54"}, TotalDownloadPackets: &totalDownloadPackets, TotalUploadPackets: &totalUploadPackets, SyncDownloadBitsPerSecond: &syncDownload, SyncUploadBitsPerSecond: &syncUpload, TariffDownloadBitsPerSecond: &tariffDownload, TariffUploadBitsPerSecond: &tariffUpload, Provider: &provider, SyncGroups: []tr064.WANSyncGroup{{Index: 0, MaxDownloadBytesPerSecond: 125000000, MaxUploadBytesPerSecond: 6250000, DSCurrentBytesPerSecond: []uint64{100, 200}, MCCurrentBytesPerSecond: []uint64{2500000, 2000000}, UploadBytesPerSecond: []uint64{125000, 120000}, RealtimeUploadBytesPerSecond: []uint64{1000, 0}, HighUploadBytesPerSecond: []uint64{2000, 1000}, DefaultUploadBytesPerSecond: []uint64{120000, 118000}, LowUploadBytesPerSecond: []uint64{2000, 1000}}}}, f.err
 }
 func (f fakeReader) Traffic(context.Context) (tr064.Traffic, error) {
 	return tr064.Traffic{TotalDownloadBytes: 12345678901, TotalUploadBytes: 987654321, ObservedAt: "2025-03-08T09:11:12Z"}, f.err
@@ -660,8 +663,8 @@ func TestWANDetailOutputContractAndCompactWANRegression(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"wan", "detail"}, "wan_detail:\n  access_type: Cable\n  physical_link_status: Up\n  max_download_bits_per_second: 1100000000\n  max_upload_bits_per_second: 55000000\n  router_reported_download_bytes_per_second: 2500000\n  router_reported_upload_bytes_per_second: 125000\n  total_download_bytes: 12345678901\n  total_upload_bytes: 987654321\n  dns_servers: 192.0.2.53,192.0.2.54\n"},
-		{[]string{"wan", "detail", "--json"}, `{"access_type":"Cable","physical_link_status":"Up","max_download_bits_per_second":1100000000,"max_upload_bits_per_second":55000000,"router_reported_download_bytes_per_second":2500000,"router_reported_upload_bytes_per_second":125000,"total_download_bytes":12345678901,"total_upload_bytes":987654321,"dns_servers":["192.0.2.53","192.0.2.54"]}` + "\n"},
+		{[]string{"wan", "detail"}, "wan_detail:\n  access_type: Cable\n  physical_link_status: Up\n  max_download_bits_per_second: 1100000000\n  max_upload_bits_per_second: 55000000\n  router_reported_download_bytes_per_second: unknown\n  router_reported_upload_bytes_per_second: unknown\n  total_download_bytes: 12345678901\n  total_upload_bytes: 987654321\n  dns_servers: 192.0.2.53,192.0.2.54\n  total_download_packets: 123456\n  total_upload_packets: 98765\n  sync_download_bits_per_second: 1100000000\n  sync_upload_bits_per_second: 55000000\n  tariff_download_bits_per_second: 1000000000\n  tariff_upload_bits_per_second: 50000000\n  provider: \"Synthetic Provider\"\n  sync_groups[1]{index,max_download_bytes_per_second,max_upload_bytes_per_second,ds_current_bytes_per_second,mc_current_bytes_per_second,upload_bytes_per_second,realtime_upload_bytes_per_second,high_upload_bytes_per_second,default_upload_bytes_per_second,low_upload_bytes_per_second}:\n    0,125000000,6250000,\"100,200\",\"2500000,2000000\",\"125000,120000\",\"1000,0\",\"2000,1000\",\"120000,118000\",\"2000,1000\"\n"},
+		{[]string{"wan", "detail", "--json"}, `{"access_type":"Cable","physical_link_status":"Up","max_download_bits_per_second":1100000000,"max_upload_bits_per_second":55000000,"router_reported_download_bytes_per_second":null,"router_reported_upload_bytes_per_second":null,"total_download_bytes":12345678901,"total_upload_bytes":987654321,"dns_servers":["192.0.2.53","192.0.2.54"],"total_download_packets":123456,"total_upload_packets":98765,"sync_download_bits_per_second":1100000000,"sync_upload_bits_per_second":55000000,"tariff_download_bits_per_second":1000000000,"tariff_upload_bits_per_second":50000000,"provider":"Synthetic Provider","sync_groups":[{"index":0,"max_download_bytes_per_second":125000000,"max_upload_bytes_per_second":6250000,"ds_current_bytes_per_second":[100,200],"mc_current_bytes_per_second":[2500000,2000000],"upload_bytes_per_second":[125000,120000],"realtime_upload_bytes_per_second":[1000,0],"high_upload_bytes_per_second":[2000,1000],"default_upload_bytes_per_second":[120000,118000],"low_upload_bytes_per_second":[2000,1000]}]}` + "\n"},
 	} {
 		code, stdout, stderr := runTest(t, test.args...)
 		if code != ExitOK || stdout != test.want || stderr != "" {
@@ -674,7 +677,7 @@ func TestWANDetailEmptyDNSServersRemainEmptyInCompactOutput(t *testing.T) {
 	application := New(func(Config) (Reader, error) { return fakeReaderWithoutDNS{}, nil }, func(string) string { return "" })
 	var stdout, stderr bytes.Buffer
 	code := application.Run(t.Context(), []string{"wan", "detail"}, &stdout, &stderr)
-	if code != ExitOK || stderr.Len() != 0 || !strings.Contains(stdout.String(), "  dns_servers: \n") {
+	if code != ExitOK || stderr.Len() != 0 || !strings.Contains(stdout.String(), "  dns_servers: \n") || !strings.Contains(stdout.String(), "  provider: unknown\n  sync_groups: unknown\n") {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
