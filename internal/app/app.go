@@ -721,7 +721,7 @@ var commandHelp = map[string]string{
 	"account":  "usage: router-axi account [--host ADDRESS] [--json] [--help]\nRead-only current username, configured rights, anonymous login, default password posture, and second-factor enabled state. Never enumerates users or retrieves passwords.\nexamples: router-axi account; router-axi account --json\n",
 	"dsl":      "usage: router-axi dsl [detail] [--host ADDRESS] [--json] [--help]\nRead-only DSL link diagnostics from documented WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo. Reports link state, rates, margins, attenuation, and error counters; never credentials or line identifiers. dsl detail reports the total error counters and the router's line-fault diagnosis.\nexamples: router-axi dsl; router-axi dsl --json; router-axi dsl detail\n",
 	"wifi":     "usage: router-axi wifi [detail [--instance N]] [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection; wifi detail reports one radio's safe documented properties. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi detail --instance 1; router-axi wifi disable --instance 1 --confirm\n",
-	"guest":    "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID and aggregate radio state only; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n",
+	"guest":    "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID, aggregate radio state, and raw timeout/isolation configuration; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n",
 	"forwards": "usage: router-axi forwards [--all] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi forwards; router-axi forwards --all --json\n",
 	"version":  "usage: router-axi version [--json] [--help]\nPrint the router-axi version without contacting the router.\nexamples: router-axi version; router-axi version --json\n",
 }
@@ -855,7 +855,7 @@ func help(command, action string) string {
 		return "usage: router-axi firmware check [--confirm] [--host ADDRESS] [--json] [--help]\nWithout --confirm: preview only. With --confirm: send UserInterface:X_AVM-DE_CheckUpdate once; the router checks for a firmware update and never installs one.\nReports router acceptance, not that an update exists; read the result with router-axi firmware. No retries or polling; a lost response is uncertain.\nexamples: router-axi firmware check; router-axi firmware check --confirm\n"
 	}
 	if command == "wifi" && action == "detail" {
-		return "usage: router-axi wifi detail [--instance N] [--host ADDRESS] [--json] [--help]\nRead-only per-radio Wi-Fi detail from documented WLANConfiguration:GetInfo and GetChannelInfo, validated against the service description first.\nReports enable status, status, standard, max bitrate, channel, and band; absent optional fields are unknown. --instance N (1 or greater) is required when the router advertises more than one radio.\nBSSIDs, keys, and client details are never read or printed.\nexamples: router-axi wifi detail; router-axi wifi detail --instance 2; router-axi wifi detail --instance 1 --json\n"
+		return "usage: router-axi wifi detail [--instance N] [--host ADDRESS] [--json] [--help]\nRead-only per-radio Wi-Fi detail from documented WLANConfiguration actions, validated against the service description first.\nReports enable status, status, standard, max bitrate, channel, band, channel configuration, beacon advertisement, night schedule, WPS state, and IPTV optimization. Unsupported configuration parts are unsupported (null in JSON); absent optional fields are unknown. --instance N (1 or greater) is required when the router advertises more than one radio.\nBSSIDs, keys, and client details are never read or printed.\nexamples: router-axi wifi detail; router-axi wifi detail --instance 2; router-axi wifi detail --instance 1 --json\n"
 	}
 	if command == "dsl" && action == "detail" {
 		return "usage: router-axi dsl detail [--host ADDRESS] [--json] [--help]\nRead-only DSL total error counters and the router's own line-fault diagnosis from documented WANDSLInterfaceConfig:GetStatisticsTotal and X_AVM-DE_GetDSLDiagnoseInfo, validated against the service description first.\nA part whose action the router does not advertise or rejects as an invalid action is unsupported (null in JSON); the command fails as unsupported only when neither part is available.\ncable_fault_distance_meters is unknown when the router reports -1. The document reports -1 in every state except DONE_CABLE_NOK with a detected location; in DONE_CABLE_NOK it means that the distance could not be detected or is too inaccurate. Nothing is reset, started, or changed.\nexamples: router-axi dsl detail; router-axi dsl detail --json\n"
@@ -1025,7 +1025,10 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 	case "wifi":
 		if v, ok := value.(tr064.RadioDetail); ok {
 			_, err := fmt.Fprintf(w, "wifi_detail:\n  instance: %s\n  enabled: %t\n  status: %s\n  standard: %s\n  max_bit_rate: %s\n  channel: %s\n  band: %s\n", scalar(v.ServiceID), v.Enabled, optionalText(v.Status), scalar(v.Standard), optionalText(v.MaxBitRate), optionalUint(v.Channel), scalar(v.Band))
-			return err
+			if err != nil {
+				return err
+			}
+			return writeWiFiConfiguration(w, v)
 		}
 		result := value.(wifiResult)
 		if len(result.Radios) == 0 {
@@ -1054,6 +1057,7 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 				return err
 			}
 		}
+		return writeGuestConfiguration(w, result.Guests)
 	case "devices":
 		if v, ok := value.(tr064.DeviceDetail); ok {
 			return writeDeviceDetail(w, v)

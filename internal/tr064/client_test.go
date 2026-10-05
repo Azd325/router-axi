@@ -200,11 +200,15 @@ func wifiFixtureClient(t *testing.T, description string, overrides map[string]wi
 	t.Helper()
 	requests := make(chan string, 100)
 	responses := map[string]string{
-		"GetInfo":                 wifiInfoFixture,
-		"GetChannelInfo":          wifiChannelFixture,
-		"GetTotalAssociations":    wifiAssociationsFixture,
-		"GetBeaconType":           wifiSecurityFixture,
-		"X_AVM-DE_GetWLANExtInfo": wifiExtInfoFixture,
+		"GetInfo":                   wifiInfoFixture,
+		"GetBeaconAdvertisement":    wifiBeaconFixture,
+		"X_AVM-DE_GetNightControl":  wifiNightFixture,
+		"X_AVM-DE_GetWPSInfo":       wifiWPSFixture,
+		"X_AVM-DE_GetIPTVOptimized": wifiIPTVFixture,
+		"GetChannelInfo":            wifiChannelFixture,
+		"GetTotalAssociations":      wifiAssociationsFixture,
+		"GetBeaconType":             wifiSecurityFixture,
+		"X_AVM-DE_GetWLANExtInfo":   wifiExtInfoFixture,
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == descriptionPath {
@@ -829,6 +833,7 @@ func TestWiFiDetailReportsDocumentedSafeFields(t *testing.T) {
 			want := RadioDetail{
 				ServiceID: wlanIDPrefix + strconv.FormatUint(test.instance, 10), Enabled: true, Status: &status,
 				Standard: "ax", MaxBitRate: &maxBitRate, Channel: &channel, Band: "5000",
+				ChannelConfiguration: &WiFiChannelConfiguration{},
 			}
 			if !reflect.DeepEqual(detail, want) {
 				t.Fatalf("detail = %#v, want %#v", detail, want)
@@ -848,7 +853,7 @@ func TestWiFiDetailReportsDocumentedSafeFields(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if string(encoded) != `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration`+strconv.FormatUint(test.instance, 10)+`","enabled":true,"status":"Up","standard":"ax","max_bit_rate":"Auto","channel":36,"band":"5000"}` {
+			if string(encoded) != `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration`+strconv.FormatUint(test.instance, 10)+`","enabled":true,"status":"Up","standard":"ax","max_bit_rate":"Auto","channel":36,"band":"5000","channel_configuration":{"possible_channels":null,"auto_channel_enabled":null},"beacon_advertisement":null,"night_control":null,"wps":null,"iptv_optimization":null}` {
 				t.Fatalf("detail JSON = %s", encoded)
 			}
 			if strings.Contains(string(encoded), "synthetic-sensitive-bssid") || strings.Contains(string(encoded), "synthetic-ap") {
@@ -907,7 +912,7 @@ func TestWiFiDetailReportsMissingOptionalFieldsAsUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := RadioDetail{ServiceID: wlanIDPrefix + "2", Enabled: true, Standard: "ax", Band: "unknown"}
+	want := RadioDetail{ServiceID: wlanIDPrefix + "2", Enabled: true, Standard: "ax", Band: "unknown", ChannelConfiguration: &WiFiChannelConfiguration{}}
 	if !reflect.DeepEqual(detail, want) {
 		t.Fatalf("detail = %#v, want %#v", detail, want)
 	}
@@ -915,7 +920,7 @@ func TestWiFiDetailReportsMissingOptionalFieldsAsUnknown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(encoded) != `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","enabled":true,"status":null,"standard":"ax","max_bit_rate":null,"channel":null,"band":"unknown"}` {
+	if string(encoded) != `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","enabled":true,"status":null,"standard":"ax","max_bit_rate":null,"channel":null,"band":"unknown","channel_configuration":{"possible_channels":null,"auto_channel_enabled":null},"beacon_advertisement":null,"night_control":null,"wps":null,"iptv_optimization":null}` {
 		t.Fatalf("detail JSON = %s", encoded)
 	}
 }
@@ -927,7 +932,6 @@ func TestWiFiDetailRequiresAdvertisedDocumentedActions(t *testing.T) {
 		kind   string
 		wanted string
 	}{
-		{name: "missing GetChannelInfo", scpd: strings.Replace(wifiSCPDFixture, "<action><name>GetChannelInfo</name></action>", "", 1), kind: "unsupported"},
 		{name: "missing GetInfo", scpd: strings.Replace(wifiSCPDFixture, "<action><name>GetInfo</name></action>", "", 1), kind: "unsupported"},
 		{name: "invalid description", scpd: `<not-scpd/>`, kind: "protocol"},
 	} {
@@ -960,8 +964,8 @@ func TestWiFiDetailRejectsInvalidRouterValues(t *testing.T) {
 		statusCode int
 	}{
 		{name: "invalid enable state", overrides: map[string]wifiResponse{"GetInfo": {body: strings.Replace(wifiInfoFixture, ">1</NewEnable>", ">maybe</NewEnable>", 1)}}, kind: "protocol"},
+		{name: "unsupported base info", overrides: map[string]wifiResponse{"GetInfo": {body: fault, status: http.StatusInternalServerError}}, kind: "unsupported"},
 		{name: "invalid channel", overrides: map[string]wifiResponse{"GetChannelInfo": {body: strings.Replace(wifiChannelFixture, ">36<", ">256<", 1)}}, kind: "protocol"},
-		{name: "unsupported action", overrides: map[string]wifiResponse{"GetChannelInfo": {body: fault, status: http.StatusInternalServerError}}, kind: "unsupported"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client, _ := wifiFixtureClient(t, wifiDescriptionFixture, test.overrides)
@@ -998,7 +1002,7 @@ func TestGuestWiFiUsesDocumentedAPTypeAndReportsEveryExplicitGuest(t *testing.T)
 				t.Fatalf("guests = %#v", guests)
 			}
 			for i, wantID := range test.wantIDs {
-				if guests[i] != (GuestNetwork{ServiceID: wantID, SSID: "synthetic-ap", Enabled: true, Channel: 36, Band: "5000", Standard: "ax", AssociatedClients: 2, SecurityMode: "11iandWPA3"}) {
+				if !reflect.DeepEqual(guests[i], GuestNetwork{ServiceID: wantID, SSID: "synthetic-ap", Enabled: true, Channel: 36, Band: "5000", Standard: "ax", AssociatedClients: 2, SecurityMode: "11iandWPA3", Configuration: &GuestConfiguration{}}) {
 					t.Fatalf("guest = %#v", guests[i])
 				}
 				encoded, err := json.Marshal(guests[i])
@@ -1010,6 +1014,9 @@ func TestGuestWiFiUsesDocumentedAPTypeAndReportsEveryExplicitGuest(t *testing.T)
 				}
 			}
 			for _, path := range []string{"/wifi1", "/wifi2", "/wifi10"} {
+				if got := <-requests; got != "/wlan.xml#SCPD" {
+					t.Fatalf("classification preflight = %q", got)
+				}
 				if got := <-requests; got != path+"#X_AVM-DE_GetWLANExtInfo" {
 					t.Fatalf("classification request = %q", got)
 				}
@@ -1038,7 +1045,7 @@ func TestGuestWiFiRejectsUnknownOrMissingAPType(t *testing.T) {
 		if guests != nil || !errors.As(err, &protocolErr) || protocolErr.Kind != "protocol" || protocolErr.Operation != "guest" || strings.Contains(fmt.Sprintf("%#v", err), "private-value") {
 			t.Fatalf("guests=%#v error=%#v", guests, err)
 		}
-		if len(requests) != 3 {
+		if len(requests) != 6 {
 			t.Fatalf("request count = %d", len(requests))
 		}
 	}

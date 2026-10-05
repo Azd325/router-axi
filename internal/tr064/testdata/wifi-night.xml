@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:X_AVM-DE_GetNightControlResponse xmlns:u="urn:dslforum-org:service:WLANConfiguration:1"><NewNightControl>&lt;night&gt;&lt;enabled&gt;1&lt;/enabled&gt;&lt;/night&gt;</NewNightControl><NewNightTimeControlNoForcedOff>1</NewNightTimeControlNoForcedOff></u:X_AVM-DE_GetNightControlResponse></s:Body></s:Envelope>

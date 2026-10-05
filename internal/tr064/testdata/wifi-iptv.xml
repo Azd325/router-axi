@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:X_AVM-DE_GetIPTVOptimizedResponse xmlns:u="urn:dslforum-org:service:WLANConfiguration:1"><NewX_AVM-DE_IPTVoptimize>0</NewX_AVM-DE_IPTVoptimize></u:X_AVM-DE_GetIPTVOptimizedResponse></s:Body></s:Envelope>
