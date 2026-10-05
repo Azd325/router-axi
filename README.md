@@ -1214,7 +1214,7 @@ router-axi event-log --group fon
 
 Default groups are `sys` (system), `net` (Internet), `wlan` (Wi-Fi), and `usb`.
 `--group` accepts a comma-separated selection of those groups plus `fon` (phone).
-`--group fon` or `--group all` explicitly includes telephony; default output
+Only a selection that names `fon` includes telephony; default output
 excludes it. Groups come from the documented XML `group` field, never guesses
 from message text. A log entry with a missing, duplicate, or unknown group fails
 closed with exit `6` because its telephony status cannot be established. An

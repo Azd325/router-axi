@@ -97,7 +97,7 @@ func TestEventLogGroupsAndLimits(t *testing.T) {
 		{"", 100, 4, []string{"sys", "net", "wlan", "usb"}},
 		{"sys,net", 1, 2, []string{"sys", "net"}},
 		{"fon", 1000, 1, []string{"fon"}},
-		{"all", 100, 5, []string{"sys", "net", "fon", "wlan", "usb"}},
+		{"sys,net,fon,wlan,usb", 100, 5, []string{"sys", "net", "fon", "wlan", "usb"}},
 	} {
 		filter := "all"
 		if len(test.groups) == 1 {
@@ -152,7 +152,7 @@ func TestEventLogInvalidInputBeforeNetwork(t *testing.T) {
 	for _, test := range []struct {
 		group string
 		limit int
-	}{{"unknown", 100}, {"sys,sys", 100}, {"all,sys", 100}, {"", 0}, {"", 1001}} {
+	}{{"unknown", 100}, {"sys,sys", 100}, {"all", 100}, {"", 0}, {"", 1001}} {
 		client, requests := eventLogFixtureClient(t, nil)
 		_, err := client.EventLog(t.Context(), test.group, test.limit)
 		var failure *Error

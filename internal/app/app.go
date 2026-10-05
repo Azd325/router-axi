@@ -465,7 +465,7 @@ func parse(args []string) (options, error) {
 			opts.flags["--group"] = true
 			i++
 			if _, err := tr064.EventLogGroups(args[i]); err != nil {
-				return opts, errors.New("--group requires distinct sys, net, fon, wlan, usb groups separated by commas, or all (includes telephony)")
+				return opts, errors.New("--group requires distinct sys, net, fon, wlan, usb groups separated by commas")
 			}
 			opts.group = args[i]
 		case "--limit":
@@ -678,7 +678,7 @@ func validCommand(command string) bool {
 // commandHelp holds dedicated per-command help text: usage line, purpose,
 // flag defaults and bounds, and concrete examples.
 var commandHelp = map[string]string{
-	"event-log": "usage: router-axi event-log [--host ADDRESS] [--group GROUPS] [--limit N] [--json] [--help]\nBounded read-only router event text from DeviceInfo:X_AVM-DE_GetDeviceLogPath. Default groups: sys,net,wlan,usb (excludes telephony); --group accepts comma-separated sys,net,fon,wlan,usb or all (includes telephony). Default 100 lines, hard maximum 1000; download maximum 8 MiB. No redirects; HTTPS certificates are always verified. Text may contain usernames, client addresses, and explicitly requested call data.\nexamples: router-axi event-log; router-axi event-log --group sys,net --limit 1000 --json\n",
+	"event-log": "usage: router-axi event-log [--host ADDRESS] [--group GROUPS] [--limit N] [--json] [--help]\nBounded read-only router event text from DeviceInfo:X_AVM-DE_GetDeviceLogPath. Default groups: sys,net,wlan,usb (excludes telephony); --group accepts comma-separated sys,net,fon,wlan,usb; fon includes telephony. Default 100 lines, hard maximum 1000; download maximum 8 MiB. No redirects; HTTPS certificates are always verified. Text may contain usernames, client addresses, and explicitly requested call data.\nexamples: router-axi event-log; router-axi event-log --group sys,net --limit 1000 --json\n",
 
 	"wake":     "usage: router-axi wake MAC [--confirm] [--host ADDRESS] [--json] [--help]\nMAC is exactly one nonzero unicast address of six colon-separated hexadecimal octets. Without --confirm: preview only. With --confirm: send Hosts:X_AVM-DE_WakeOnLANByMACAddress once.\nReports router acceptance, not that the device woke. No device lookup, retries, or polling; a lost response is uncertain.\nexamples: router-axi wake 02:00:00:00:00:01; router-axi wake 02:00:00:00:00:01 --confirm\n",
 	"doctor":   "usage: router-axi doctor [--host ADDRESS] [--json] [--help]\nOne bounded read-only diagnosis: reachability, TR-064 availability, authentication, model and firmware, and candidate capabilities for every command.\nUnsupported optional capabilities are a successful diagnosis and include remediation; no command's actions are invoked beyond DeviceInfo:GetInfo.\nexamples: router-axi doctor; router-axi doctor --host 192.0.2.1 --json\n",

@@ -36,19 +36,16 @@ type EventLog struct {
 }
 
 // EventLogGroups expands only AVM's documented filters. Phone logs require
-// an explicit fon or all selection; the empty selection excludes them.
+// an explicit fon selection; the empty selection excludes them.
 func EventLogGroups(selection string) ([]string, error) {
 	if selection == "" {
 		return []string{"sys", "net", "wlan", "usb"}, nil
-	}
-	if selection == "all" {
-		return []string{"sys", "net", "fon", "wlan", "usb"}, nil
 	}
 	var groups []string
 	seen := map[string]bool{}
 	for _, group := range strings.Split(selection, ",") {
 		if !eventLogGroupKnown(group) || seen[group] {
-			return nil, &Error{Kind: "usage", Operation: "event-log", Message: "--group requires distinct sys, net, fon, wlan, usb groups separated by commas, or all (includes telephony)"}
+			return nil, &Error{Kind: "usage", Operation: "event-log", Message: "--group requires distinct sys, net, fon, wlan, usb groups separated by commas"}
 		}
 		seen[group] = true
 		groups = append(groups, group)

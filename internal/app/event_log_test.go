@@ -32,7 +32,7 @@ func TestEventLogOutputContract(t *testing.T) {
 func TestEventLogHelpAndInvalidFlagsAreOffline(t *testing.T) {
 	application := New(func(Config) (Reader, error) { t.Fatal("invalid input contacted router"); return nil, nil }, func(string) string { t.Fatal("invalid input read environment"); return "" })
 	for _, args := range [][]string{
-		{"event-log", "--help"}, {"event-log", "--confirm"}, {"event-log", "--all"}, {"event-log", "--limit", "0"}, {"event-log", "--limit", "1001"}, {"event-log", "--limit", "1", "--limit", "2"}, {"event-log", "--limit"}, {"event-log", "--group"}, {"event-log", "--group", ""}, {"event-log", "--group", "sys,unknown"}, {"event-log", "--group", "sys,sys"}, {"event-log", "--group", "sys", "--group", "fon"}, {"event-log", "extra"}, {"status", "--group", "sys"}, {"calls", "--limit", "5"},
+		{"event-log", "--help"}, {"event-log", "--confirm"}, {"event-log", "--all"}, {"event-log", "--limit", "0"}, {"event-log", "--limit", "1001"}, {"event-log", "--limit", "1", "--limit", "2"}, {"event-log", "--limit"}, {"event-log", "--group"}, {"event-log", "--group", ""}, {"event-log", "--group", "sys,unknown"}, {"event-log", "--group", "sys,sys"}, {"event-log", "--group", "all"}, {"event-log", "--group", "sys", "--group", "fon"}, {"event-log", "extra"}, {"status", "--group", "sys"}, {"calls", "--limit", "5"},
 	} {
 		var stdout, stderr bytes.Buffer
 		code := application.Run(t.Context(), args, &stdout, &stderr)
