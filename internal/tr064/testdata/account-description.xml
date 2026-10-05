@@ -1,0 +1,6 @@
+<?xml version="1.0"?>
+<root><device><serviceList>
+  <service><serviceType>urn:dslforum-org:service:LANConfigSecurity:1</serviceType><serviceId>urn:LANConfigSecurity-com:serviceId:LANConfigSecurity1</serviceId><controlURL>/security</controlURL><SCPDURL>/security.xml</SCPDURL></service>
+  <service><serviceType>urn:dslforum-org:service:X_AVM-DE_Auth:1</serviceType><serviceId>urn:X_AVM-DE_Auth-com:serviceId:X_AVM-DE_Auth1</serviceId><controlURL>/auth</controlURL><SCPDURL>/auth.xml</SCPDURL></service>
+  <service><serviceType>urn:dslforum-org:service:DeviceInfo:1</serviceType><controlURL>/device</controlURL></service>
+</serviceList></device></root>
