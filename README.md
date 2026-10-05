@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, account rights and login posture, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, WAN reconnect, reboot, and configuration export.
+The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, account rights and login posture, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, WAN reconnect, reboot, Wake-on-LAN, and configuration export.
 
 ## Design constraints
 
@@ -73,6 +73,8 @@ router-axi overview
 router-axi wan
 router-axi wan detail
 router-axi wan detail --json
+router-axi wake 02:00:00:00:00:01
+router-axi wake 02:00:00:00:00:01 --confirm
 router-axi traffic
 router-axi watch
 router-axi watch --interval 2s --count 10 --json
@@ -833,6 +835,39 @@ only. No live WAN reconnect test is provided or run; existing live-test flags
 cannot reconnect a router. Acceptance and recovery are **not
 hardware-validated**.
 
+### Wake-on-LAN
+
+`router-axi wake MAC` previews a Wake-on-LAN request to exactly one MAC supplied
+by the operator. It never looks up or lists devices to select a target. The MAC
+must be a nonzero unicast address of six colon-separated hexadecimal octets; the
+command normalizes it to uppercase. Missing, malformed, and multiple targets
+fail before any router request.
+
+```sh
+router-axi wake 02:00:00:00:00:01
+router-axi wake 02:00:00:00:00:01 --confirm --json
+```
+
+The preview identifies the router endpoint, target MAC, intended effect, and
+exact confirmed command. With and without `--confirm`, the command first
+requires exactly one advertised Hosts service whose service description lists
+the documented `X_AVM-DE_WakeOnLANByMACAddress(NewMACAddress)` signature, and
+exits `5` otherwise. With `--confirm`, it then sends the action once and
+reports `accepted: true` only for a valid acknowledgement. Acceptance means the
+router accepted the request; it does **not** mean the device woke. There are no
+retries or polls. A lost or invalid response is an uncertain outcome with a
+nonzero exit code; check the device manually and do not automatically repeat.
+
+The [AVM Hosts document](https://fritz.support/resources/TR-064_Hosts.pdf),
+section 2.9, specifies one input and no outputs, and gives no required-rights declaration
+for this action. Router authentication and fault responses remain authoritative.
+If credentials are configured, a `DeviceInfo:GetInfo` read supplies the Digest
+challenge before sending. No device inventory is read. Doctor's generic Hosts advertisement
+is not proof of Wake-on-LAN support; `wake` checks its action before execution.
+Tests use synthetic servers only. No live Wake-on-LAN test is provided, and
+existing live-test flags cannot wake a device; future coverage needs a distinct
+opt-in and must stay skipped by default.
+
 ### Configuration backup
 
 `backup` uses only the documented
@@ -1200,7 +1235,7 @@ parsing output text:
 
 | Code | Meaning |
 | ---- | ------- |
-| `0`  | Success, including an already-satisfied `wifi enable\|disable` or a reboot or `wan reconnect` preview. |
+| `0`  | Success, including an already-satisfied `wifi enable\|disable` or a reboot, `wan reconnect`, or `wake` preview. |
 | `1`  | Internal failure, such as a local output or backup-file write error. |
 | `2`  | Usage or configuration error (invalid arguments, missing `--output`, missing passphrase, ambiguous instance). |
 | `3`  | Authentication failure; the router rejected the credentials from `ROUTER_AXI_USERNAME`/`ROUTER_AXI_PASSWORD`. |
@@ -1214,9 +1249,9 @@ record in the selected format; exit codes stay authoritative. If writing stdout
 fails, watch instead emits its sanitized `output_failed` diagnostic on stderr.
 
 The implementation discovers services through `/tr64desc.xml` and invokes only
-read actions, plus the confirmed `wifi enable|disable`, `wan reconnect`, and `reboot`
+read actions, plus the confirmed `wifi enable|disable`, `wan reconnect`, `reboot`, and `wake MAC`
 mutations described above, which invoke only the documented `WLANConfiguration:SetEnable`,
-`WANIPConnection` or `WANPPPConnection:ForceTermination`, and `DeviceConfig:Reboot`
+`WANIPConnection` or `WANPPPConnection:ForceTermination`, `DeviceConfig:Reboot`, and `Hosts:X_AVM-DE_WakeOnLANByMACAddress`
 respectively, and the documented
 `DeviceConfig:X_AVM-DE_GetConfigFile` export described above.
 Doctor uses only `DeviceInfo:GetInfo`; inspection commands use

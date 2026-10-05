@@ -1967,11 +1967,19 @@ func (c *Client) Reboot(ctx context.Context, confirm bool) (RebootResult, error)
 	return result, nil
 }
 
-// postOnce sends one argument-free SOAP action outside the retrying request
+// postOnce sends one SOAP action outside the retrying request
 // path. sent is false when the request never left this process.
-func (c *Client) postOnce(ctx context.Context, target service, action, challenge string) (body []byte, status int, sent bool, err error) {
+func (c *Client) postOnce(ctx context.Context, target service, action, challenge string, arguments ...soapArgument) (body []byte, status int, sent bool, err error) {
 	control := c.base.ResolveReference(&url.URL{Path: target.ControlURL})
-	envelope := `<?xml version="1.0"?><s:Envelope xmlns:s="` + soapNamespace + `" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` + action + ` xmlns:u="` + target.Type + `"></u:` + action + `></s:Body></s:Envelope>`
+	var argumentXML strings.Builder
+	for _, argument := range arguments {
+		argumentXML.WriteString("<" + argument.Name + ">")
+		if err := xml.EscapeText(&argumentXML, []byte(argument.Value)); err != nil {
+			return nil, 0, false, err
+		}
+		argumentXML.WriteString("</" + argument.Name + ">")
+	}
+	envelope := `<?xml version="1.0"?><s:Envelope xmlns:s="` + soapNamespace + `" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` + action + ` xmlns:u="` + target.Type + `">` + argumentXML.String() + `</u:` + action + `></s:Body></s:Envelope>`
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, control.String(), strings.NewReader(envelope))
 	if err != nil {
 		return nil, 0, false, err
