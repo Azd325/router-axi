@@ -29,6 +29,7 @@ documentation; run the CLI for live router state.
 - `leases` — observed Hosts-table lease metadata (100 entries by default,
   `--all` for the full list).
 - `dhcp` — read-only DHCP server configuration; never reservation inventory.
+- `firmware` — read-only installed firmware, reported update availability, and auto-update state; never checks for or installs updates.
 - `dsl` — read-only DSL link diagnostics from documented WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo: link state, modulation, profile, current/max rates, noise margin, attenuation, and FEC/CRC error counters.
 - `wifi` — Wi-Fi inspection; `wifi detail [--instance N]` reports one radio's safe documented properties; `wifi enable|disable` changes a radio.
 - `guest` — documented guest Wi-Fi inspection (public SSID, aggregate state).
@@ -104,6 +105,7 @@ commands:
   leases    observed Hosts table lease metadata
   dhcp      DHCP server configuration (never reservation inventory)
   dsl       DSL link diagnostics
+  firmware  installed firmware, reported update availability, and auto-update state
   wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm
   guest     documented guest Wi-Fi inspection
   forwards  port-forwarding rules

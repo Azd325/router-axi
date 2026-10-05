@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<scpd xmlns="urn:dslforum-org:service-1-0"><actionList>
+  <action><name>GetInfo</name></action>
+  <action><name>X_AVM-DE_GetInfo</name></action>
+  <action><name>X_AVM-DE_CheckUpdate</name></action>
+  <action><name>X_AVM-DE_DoUpdate</name></action>
+  <action><name>X_AVM-DE_SetConfig</name></action>
+</actionList></scpd>

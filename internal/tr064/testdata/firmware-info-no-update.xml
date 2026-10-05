@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>
+<u:GetInfoResponse xmlns:u="urn:dslforum-org:service:UserInterface:1">
+  <NewUpgradeAvailable>false</NewUpgradeAvailable>
+  <NewX_AVM-DE_Version></NewX_AVM-DE_Version>
+  <NewX_AVM-DE_UpdateState>NoUpdate</NewX_AVM-DE_UpdateState>
+ </u:GetInfoResponse>
+</s:Body></s:Envelope>

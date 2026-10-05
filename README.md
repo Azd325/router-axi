@@ -2,7 +2,7 @@
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
-The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, reboot, and configuration export.
+The current release provides device information, WAN status, traffic statistics, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, Wi-Fi, documented guest Wi-Fi, and port-forward inspection through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, reboot, and configuration export.
 
 ## Design constraints
 
@@ -86,6 +86,8 @@ router-axi dhcp
 router-axi dhcp --json
 router-axi dsl
 router-axi dsl --json
+router-axi firmware
+router-axi firmware --json
 router-axi wifi
 router-axi wifi --json
 router-axi wifi detail
@@ -122,7 +124,7 @@ description once and, when `DeviceInfo` is advertised, invokes only
 `DeviceInfo:GetInfo` to verify authentication and obtain model and firmware.
 It reports endpoint reachability, TR-064 availability, authentication, and
 whether the router advertises the services required by `status`, `overview`,
-`wan`, `traffic`, `watch`, `calls`, `devices`, `leases`, `dhcp`, `dsl`, `wifi`, `forwards`, `reboot`, and
+`wan`, `traffic`, `watch`, `calls`, `devices`, `leases`, `dhcp`, `dsl`, `firmware`, `wifi`, `forwards`, `reboot`, and
 `backup`. `watch` is advertised only when the description includes Layer3Forwarding,
 WANCommonInterfaceConfig, and either WANIPConnection or WANPPPConnection; doctor does
 not invoke any of their actions. Doctor does not report a separate `guest` capability: WLANConfiguration
@@ -390,8 +392,53 @@ other router faults `6`. Errors discard router addresses, fault text, URLs, and
 response bodies. Doctor reports service advertisement only and does not fetch
 the SCPD or invoke a DHCP action; the `dsl` capability is likewise advertisement-only,
 so doctor never fetches the WANDSLInterfaceConfig SCPD or invokes `X_AVM-DE_GetDSLInfo`.
+The `firmware` capability likewise reports UserInterface advertisement only,
+without fetching its SCPD or invoking either firmware read.
 Compatibility is fixture-backed for aggregate
 `GetInfo` and service versions 1 and 2; it is not inferred from router models.
+
+### Firmware update status
+
+`firmware` reports installed firmware and the router's existing update status using
+only `UserInterface:GetInfo` and `UserInterface:X_AVM-DE_GetInfo`
+([FRITZ! TR-064 UserInterface v25, §§2.1 and 2.8](https://fritz.support/resources/TR-064_User_Interface.pdf)).
+Both actions have no input arguments and require no rights in the AVM document;
+router authentication policy may still require the usual environment credentials.
+The router must advertise exactly one UserInterface service, with both actions
+in its SCPD, before either read is sent. Missing or ambiguous services/actions
+return `unsupported` (exit 5); malformed responses return a structured protocol
+error (exit 6).
+
+```text
+firmware:
+  current_version: 8.00
+  update_available: true
+  offered_version: 8.10
+  update_state: UpdateAvailable
+  build_type: Release
+  auto_update_mode: important
+  update_time: 2026-01-30T03:00:00+01:00
+  last_version: 7.90
+  update_successful: succeeded
+```
+
+JSON has stable field order:
+
+```json
+{"current_version":"8.00","update_available":true,"offered_version":"8.10","update_state":"UpdateAvailable","build_type":"Release","auto_update_mode":"important","update_time":"2026-01-30T03:00:00+01:00","last_version":"7.90","update_successful":"succeeded"}
+```
+
+`offered_version` comes from GetInfo's `NewX_AVM-DE_Version`, while
+`current_version` comes from X_AVM-DE_GetInfo's `NewX_AVM-DE_CurrentFwVersion`.
+Update state, build type, auto-update mode, and update result preserve the router's
+reported strings, including legacy `off` mode and future values. Missing/empty
+fields and the documented unset update time `0000-00-00T00:00:00` are `unknown`
+in text and `null` in JSON. Availability is never inferred from a version or
+update state. Update time retains the router's reported timezone when present.
+The command omits download/info URLs, password posture, warranty defaults, and
+setup-assistant state. It never calls `X_AVM-DE_CheckUpdate`, `X_AVM-DE_DoUpdate`,
+or `X_AVM-DE_SetConfig`: availability may reflect an earlier router check,
+and running this command neither refreshes that check nor installs an update.
 
 ### DSL link diagnostics
 
@@ -945,7 +992,8 @@ documented `X_AVM-DE_OnTel:GetCallList`, and the standard
 `Hosts:GetHostNumberOfEntries` plus zero-based `GetGenericHostEntry(NewIndex)`,
 the SCPD-advertised documented `LANHostConfigManagement:GetInfo` DHCP
 configuration read (never reservation inventory), the SCPD-advertised documented
-`WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo` DSL link read, and `WLANConfiguration:GetInfo`,
+`WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo` DSL link read, the SCPD-advertised
+`UserInterface:GetInfo` and `X_AVM-DE_GetInfo` firmware status reads, and `WLANConfiguration:GetInfo`,
 `GetChannelInfo`, `GetTotalAssociations`, and
 `GetBeaconType`. Guest inspection additionally uses the documented AVM
 `WLANConfiguration:X_AVM-DE_GetWLANExtInfo` action only to read

@@ -130,6 +130,7 @@ type DoctorCapabilities struct {
 	Leases   DoctorCheck `json:"leases"`
 	DHCP     DoctorCheck `json:"dhcp"`
 	DSL      DoctorCheck `json:"dsl"`
+	Firmware DoctorCheck `json:"firmware"`
 	WiFi     DoctorCheck `json:"wifi"`
 	Forwards DoctorCheck `json:"forwards"`
 	Reboot   DoctorCheck `json:"reboot"`
@@ -278,6 +279,11 @@ type soapValues struct {
 	UpstreamNoiseMargin, DownstreamNoiseMargin                                  string
 	UpstreamAttenuation, DownstreamAttenuation, FECErrors, CRCErrors            string
 	ATURVendor, ATURCountry, UpstreamPower, DownstreamPower                     string
+
+	UpgradeAvailable, OfferedVersion, UpdateState, BuildType string
+	AutoUpdateMode, UpdateTime, LastFWVersion                string
+	CurrentFWVersion, UpdateSuccessful                       string
+	FirmwareResponseName                                     string
 }
 
 type soapArgument struct{ Name, Value string }
@@ -448,6 +454,26 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.UpstreamPower
 		case "NewDownstreamPower":
 			target = &v.DownstreamPower
+		case "GetInfoResponse", "X_AVM-DE_GetInfoResponse":
+			v.FirmwareResponseName = e.Name.Local
+		case "NewUpgradeAvailable":
+			target = &v.UpgradeAvailable
+		case "NewX_AVM-DE_Version":
+			target = &v.OfferedVersion
+		case "NewX_AVM-DE_UpdateState":
+			target = &v.UpdateState
+		case "NewX_AVM-DE_BuildType":
+			target = &v.BuildType
+		case "NewX_AVM-DE_AutoUpdateMode":
+			target = &v.AutoUpdateMode
+		case "NewX_AVM-DE_UpdateTime":
+			target = &v.UpdateTime
+		case "NewX_AVM-DE_LastFwVersion":
+			target = &v.LastFWVersion
+		case "NewX_AVM-DE_CurrentFwVersion":
+			target = &v.CurrentFWVersion
+		case "NewX_AVM-DE_UpdateSuccessful":
+			target = &v.UpdateSuccessful
 		case "errorCode":
 			target = &v.FaultCode
 		case "errorDescription":
@@ -503,7 +529,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 		Protocol:       unknown,
 		Authentication: unknown,
 		Capabilities: DoctorCapabilities{
-			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Watch: unknown, Calls: unknown, Devices: unknown, Leases: unknown, DHCP: unknown, DSL: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown, Backup: unknown,
+			Status: unknown, Overview: unknown, WAN: unknown, Traffic: unknown, Watch: unknown, Calls: unknown, Devices: unknown, Leases: unknown, DHCP: unknown, DSL: unknown, Firmware: unknown, WiFi: unknown, Forwards: unknown, Reboot: unknown, Backup: unknown,
 		},
 	}
 	if err := c.discover(ctx); err != nil {
@@ -533,6 +559,7 @@ func (c *Client) Doctor(ctx context.Context) (Doctor, error) {
 	report.Capabilities.Leases = hostsCapability
 	report.Capabilities.DHCP = c.advertisedCapability([]string{dhcpServicePrefix}, dhcpRemediation)
 	report.Capabilities.DSL = c.advertisedCapability([]string{dslServicePrefix}, dslRemediation)
+	report.Capabilities.Firmware = c.advertisedCapability([]string{firmwareServicePrefix}, firmwareRemediation)
 	report.Capabilities.WiFi = c.advertisedCapability([]string{wlanServicePrefix}, wifiRemediation)
 	report.Capabilities.Forwards = c.advertisedCapability(wanMappingPrefixes, forwardsRemediation)
 	report.Capabilities.Reboot = c.rebootCapability()
