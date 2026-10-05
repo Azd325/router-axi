@@ -79,6 +79,8 @@ router-axi watch --interval 2s --count 10 --json
 router-axi calls
 router-axi devices
 router-axi devices --json
+router-axi devices detail --ip 192.0.2.20
+router-axi devices detail --ip 192.0.2.20 --json
 router-axi leases
 router-axi leases --json
 router-axi leases --all
@@ -176,6 +178,55 @@ faults, malformed or implausibly large host counts, and malformed active states
 remain protocol errors with exit `6`. Names, addresses, and interface types can be empty when the router
 does not know them. `interface_type` is the service's documented interface
 classification, not a physical switch port or inferred connection detail.
+
+### Device detail
+
+Bare `devices` keeps its list output unchanged. `devices detail --ip ADDRESS`
+is the explicit read-only detail view of exactly one device. `--ip` takes one
+IPv4 address and is required. A missing, repeated, or non-IPv4 `--ip`, a
+positional address, and `--all` exit `2` before any request is sent; the
+command never reports more than one device.
+
+The command uses only the documented
+[FRITZ! Hosts, §2.10](https://fritz.support/resources/TR-064_Hosts.pdf) action
+`Hosts:X_AVM-DE_GetSpecificHostEntryByIP`. It requires exactly one advertised
+`Hosts` service and confirms the action in that service's SCPD before invoking
+it; a missing advertisement exits `5` and no action request is sent. The
+logged-in account needs the `App` or `Phone` right; router fault `606` is
+reported with that requirement and exit `6`. An address without a host entry
+(fault `714`) is `unknown_device` with exit `2`.
+
+Output is the `devices` identification fields plus `port` (Ethernet port number,
+beginning with 1), `speed_mbps`, `guest`, `vpn`, `wan_access` (`granted`,
+`denied`, `error`, or `unknown`), `update_available`, and `update_successful`
+(`succeeded`, `failed`, or `unknown`). Optional fields the router omits, and a
+port of `0`, are `unknown` in compact output and JSON `null`; unrecognized
+`wan_access` and `update_successful` values are reported as `unknown`. Every
+other argument of the response is discarded and never printed.
+
+Compact output is:
+
+```
+device_detail:
+  name: synthetic-host
+  ip_address: 192.0.2.20
+  mac_address: 02:00:00:00:00:20
+  interface_type: Ethernet
+  active: true
+  port: 2
+  speed_mbps: 1000
+  guest: false
+  vpn: false
+  wan_access: granted
+  update_available: true
+  update_successful: succeeded
+```
+
+JSON fields are deterministic:
+
+```json
+{"name":"synthetic-host","ip_address":"192.0.2.20","mac_address":"02:00:00:00:00:20","interface_type":"Ethernet","active":true,"port":2,"speed_mbps":1000,"guest":false,"vpn":false,"wan_access":"granted","update_available":true,"update_successful":"succeeded"}
+```
 
 ### Bounded WAN detail
 
@@ -1122,6 +1173,8 @@ Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 SCPD-advertised `GetAddonInfos` on the active WANIPConnection/WANPPPConnection service, AVM's
 documented `X_AVM-DE_OnTel:GetCallList`, and the standard
 `Hosts:GetHostNumberOfEntries` plus zero-based `GetGenericHostEntry(NewIndex)`,
+the SCPD-advertised documented `Hosts:X_AVM-DE_GetSpecificHostEntryByIP` read of
+`devices detail`,
 the SCPD-advertised documented `LANHostConfigManagement:GetInfo` DHCP
 configuration read (never reservation inventory), the SCPD-advertised documented
 `WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo` DSL link read, the SCPD-advertised

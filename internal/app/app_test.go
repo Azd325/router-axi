@@ -1072,7 +1072,7 @@ func TestWiFiDetailStructuredErrors(t *testing.T) {
 func TestCallsAndDevicesHelp(t *testing.T) {
 	for command, want := range map[string]string{
 		"calls":   "usage: router-axi calls [--all] [--host ADDRESS] [--json] [--help]\nRead-only call history. Defaults to the 100 most recent entries; --all lists everything. No required arguments.\nexamples: router-axi calls; router-axi calls --all; router-axi calls --all --json\n",
-		"devices": "usage: router-axi devices [--all] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi devices; router-axi devices --all --json\n",
+		"devices": "usage: router-axi devices [--all] [detail --ip ADDRESS] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments. devices detail reports one device selected by its IPv4 address.\nexamples: router-axi devices; router-axi devices --all --json; router-axi devices detail --ip 192.0.2.20\n",
 	} {
 		code, stdout, stderr := runTest(t, command, "--help")
 		if code != ExitOK || stdout != want || stderr != "" {

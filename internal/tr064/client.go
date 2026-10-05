@@ -282,6 +282,7 @@ type soapValues struct {
 	ATURVendor, ATURCountry, UpstreamPower, DownstreamPower                     string
 	CurrentUsername, CurrentUserRights                                          *string
 	AnonymousLoginEnabled, DefaultPasswordActive                                string
+	HostPort, HostSpeed, HostGuest, HostVPN, HostWANAccess, HostUpdateAvailable string
 
 	UpgradeAvailable, OfferedVersion, UpdateState, BuildType string
 	AutoUpdateMode, UpdateTime, LastFWVersion                string
@@ -487,6 +488,18 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.AnonymousLoginEnabled
 		case "NewX_AVM-DE_IsDefaultPasswordActive":
 			target = &v.DefaultPasswordActive
+		case "NewX_AVM-DE_Port":
+			target = &v.HostPort
+		case "NewX_AVM-DE_Speed":
+			target = &v.HostSpeed
+		case "NewX_AVM-DE_Guest":
+			target = &v.HostGuest
+		case "NewX_AVM-DE_VPN":
+			target = &v.HostVPN
+		case "NewX_AVM-DE_WANAccess":
+			target = &v.HostWANAccess
+		case "NewX_AVM-DE_UpdateAvailable":
+			target = &v.HostUpdateAvailable
 		case "errorCode":
 			target = &v.FaultCode
 		case "errorDescription":

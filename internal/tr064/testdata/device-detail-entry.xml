@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:X_AVM-DE_GetSpecificHostEntryByIPResponse xmlns:u="urn:dslforum-org:service:Hosts:1">
+  <NewMACAddress>02:00:00:00:00:20</NewMACAddress>
+  <NewActive>1</NewActive>
+  <NewHostName>synthetic-host</NewHostName>
+  <NewInterfaceType>Ethernet</NewInterfaceType>
+  <NewX_AVM-DE_Port>2</NewX_AVM-DE_Port>
+  <NewX_AVM-DE_Speed>1000</NewX_AVM-DE_Speed>
+  <NewX_AVM-DE_UpdateAvailable>1</NewX_AVM-DE_UpdateAvailable>
+  <NewX_AVM-DE_UpdateSuccessful>succeeded</NewX_AVM-DE_UpdateSuccessful>
+  <NewX_AVM-DE_InfoURL>http://unapproved.example.test/info.txt</NewX_AVM-DE_InfoURL>
+  <NewX_AVM-DE_MACAddressList>02:00:00:00:00:20,02:00:00:00:00:21</NewX_AVM-DE_MACAddressList>
+  <NewX_AVM-DE_Model>unapproved-model</NewX_AVM-DE_Model>
+  <NewX_AVM-DE_URL>http://unapproved.example.test/</NewX_AVM-DE_URL>
+  <NewX_AVM-DE_URLParameters>unapproved-token</NewX_AVM-DE_URLParameters>
+  <NewX_AVM-DE_Guest>0</NewX_AVM-DE_Guest>
+  <NewX_AVM-DE_RequestClient>1</NewX_AVM-DE_RequestClient>
+  <NewX_AVM-DE_VPN>0</NewX_AVM-DE_VPN>
+  <NewX_AVM-DE_WANAccess>granted</NewX_AVM-DE_WANAccess>
+  <NewX_AVM-DE_Disallow>0</NewX_AVM-DE_Disallow>
+  <NewX_AVM-DE_IsMeshable>1</NewX_AVM-DE_IsMeshable>
+  <NewX_AVM-DE_Priority>1</NewX_AVM-DE_Priority>
+  <NewX_AVM-DE_DeviceClass>unapproved-class</NewX_AVM-DE_DeviceClass>
+  <NewX_AVM-DE_DeviceClassUser>unapproved-user-class</NewX_AVM-DE_DeviceClassUser>
+  <NewX_AVM-DE_FriendlyName>unapproved-friendly-name</NewX_AVM-DE_FriendlyName>
+  <NewX_AVM-DE_FriendlyNameIsWriteable>1</NewX_AVM-DE_FriendlyNameIsWriteable>
+  <NewX_AVM-DE_FilterProfileID>unapproved-profile</NewX_AVM-DE_FilterProfileID>
+  <NewX_AVM-DE_HostFilterEditHide>1</NewX_AVM-DE_HostFilterEditHide>
+  <NewX_AVM-DE_AddTicketAvailable>1</NewX_AVM-DE_AddTicketAvailable>
+</u:X_AVM-DE_GetSpecificHostEntryByIPResponse></s:Body></s:Envelope>
