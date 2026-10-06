@@ -82,6 +82,12 @@ type WANDetail struct {
 	TariffUploadBitsPerSecond            *uint64        `json:"tariff_upload_bits_per_second"`
 	Provider                             *string        `json:"provider"`
 	SyncGroups                           []WANSyncGroup `json:"sync_groups"`
+
+	ConnectionService    string                   `json:"connection_service"`
+	Connection           *WANConnection           `json:"connection"`
+	NAT                  *WANNAT                  `json:"nat"`
+	LinkLayerMaxBitRates *WANLinkLayerMaxBitRates `json:"link_layer_max_bit_rates"`
+	DisconnectPrevention *WANDisconnectPrevention `json:"disconnect_prevention"`
 }
 
 type WANSyncGroup struct {
@@ -322,6 +328,9 @@ type soapValues struct {
 	UPnPMediaServer, PeriodicInformEnable, UpgradesManaged                        string
 	EnableTCP, EnableUDP, EnableUDPBidirect, WANEnableTCP, WANEnableUDP           string
 	PortTCP, PortUDP, PortUDPBidirect                                             string
+	ConnectionType, IPv6ConnectionStatus, IPv6Uptime, RSIPAvailable, NATEnabled   string
+	LinkLayerUpstreamMaxBitRate, LinkLayerDownstreamMaxBitRate                    string
+	DisconnectPreventionEnable, DisconnectPreventionHour                          string
 
 	UpgradeAvailable, OfferedVersion, UpdateState, BuildType string
 	AutoUpdateMode, UpdateTime, LastFWVersion                string
@@ -670,6 +679,24 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.PeriodicInformEnable
 		case "NewUpgradesManaged":
 			target = &v.UpgradesManaged
+		case "NewConnectionType":
+			target = &v.ConnectionType
+		case "NewX_AVM-DE_IPv6ConnectionStatus":
+			target = &v.IPv6ConnectionStatus
+		case "NewX_AVM-DE_IPv6Uptime":
+			target = &v.IPv6Uptime
+		case "NewRSIPAvailable":
+			target = &v.RSIPAvailable
+		case "NewNATEnabled":
+			target = &v.NATEnabled
+		case "NewUpstreamMaxBitRate":
+			target = &v.LinkLayerUpstreamMaxBitRate
+		case "NewDownstreamMaxBitRate":
+			target = &v.LinkLayerDownstreamMaxBitRate
+		case "NewX_AVM-DE_DisconnectPreventionEnable":
+			target = &v.DisconnectPreventionEnable
+		case "NewX_AVM-DE_DisconnectPreventionHour":
+			target = &v.DisconnectPreventionHour
 		case "errorCode":
 			target = &v.FaultCode
 		case "errorDescription":
@@ -896,6 +923,9 @@ func (c *Client) WANDetail(ctx context.Context) (WANDetail, error) {
 		}
 	}
 	if err := c.wanDetailCommonReads(ctx, common, commonActions, &result); err != nil {
+		return WANDetail{}, err
+	}
+	if err := c.wanConnectionReads(ctx, active, activeActions, &result); err != nil {
 		return WANDetail{}, err
 	}
 	return result, nil

@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:X_AVM_DE_GetAutoDisconnectTimeSpanResponse xmlns:u="urn:dslforum-org:service:WANPPPConnection:1"><NewX_AVM-DE_DisconnectPreventionEnable>1</NewX_AVM-DE_DisconnectPreventionEnable><NewX_AVM-DE_DisconnectPreventionHour>3</NewX_AVM-DE_DisconnectPreventionHour></u:X_AVM_DE_GetAutoDisconnectTimeSpanResponse></s:Body></s:Envelope>

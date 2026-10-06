@@ -714,7 +714,7 @@ var commandHelp = map[string]string{
 	"doctor":   "usage: router-axi doctor [--host ADDRESS] [--json] [--help]\nOne bounded read-only diagnosis: reachability, TR-064 availability, authentication, model and firmware, and candidate capabilities for every command.\nUnsupported optional capabilities are a successful diagnosis and include remediation; no command's actions are invoked beyond DeviceInfo:GetInfo.\nexamples: router-axi doctor; router-axi doctor --host 192.0.2.1 --json\n",
 	"status":   "usage: router-axi status [--host ADDRESS] [--json] [--help]\nRead-only router identity and firmware; the default command when no command is given.\nexamples: router-axi status; router-axi status --json\n",
 	"overview": "usage: router-axi overview [--host ADDRESS] [--json] [--help]\nRead-only combined view: router identity, WAN state, and traffic totals in one read.\nexamples: router-axi overview; router-axi overview --json\n",
-	"wan":      "usage: router-axi wan [detail] [--host ADDRESS] [--json] [reconnect [--confirm]] [--help]\nRead-only internet connection state: status, external address, IP family, uptime, and last error. Use wan detail for bounded physical-link properties and optional router-reported rates, totals, and DNS. wan reconnect drops the internet connection once: preview without --confirm.\nexamples: router-axi wan; router-axi wan --json; router-axi wan detail; router-axi wan reconnect\n",
+	"wan":      "usage: router-axi wan [detail] [--host ADDRESS] [--json] [reconnect [--confirm]] [--help]\nRead-only internet connection state: status, external address, IP family, uptime, and last error. Use wan detail for bounded physical-link properties, optional router-reported rates, totals, and DNS, and connection type, IPv6 status, NAT, and PPP disconnect prevention. wan reconnect drops the internet connection once: preview without --confirm.\nexamples: router-axi wan; router-axi wan --json; router-axi wan detail; router-axi wan reconnect\n",
 	"traffic":  "usage: router-axi traffic [--host ADDRESS] [--json] [--help]\nRead-only total downloaded and uploaded byte counters with the observation time.\nexamples: router-axi traffic; router-axi traffic --json\n",
 	"calls":    "usage: router-axi calls [--all] [--host ADDRESS] [--json] [--help]\nRead-only call history. Defaults to the 100 most recent entries; --all lists everything. No required arguments.\nexamples: router-axi calls; router-axi calls --all; router-axi calls --all --json\n",
 	"devices":  "usage: router-axi devices [--all] [detail --ip ADDRESS] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments. devices detail reports one device selected by its IPv4 address.\nexamples: router-axi devices; router-axi devices --all --json; router-axi devices detail --ip 192.0.2.20\n",
@@ -851,7 +851,7 @@ func usageHint(opts options) string {
 
 func help(command, action string) string {
 	if command == "wan" && action == "detail" {
-		return "usage: router-axi wan detail [--host ADDRESS] [--json] [--help]\nRead-only bounded WAN physical-link detail from documented WANCommonInterfaceConfig actions.\nGetCommonLinkProperties is required. Advertised common-interface actions add sync/tariff bit rates, provider, byte/packet totals, and bounded per-sync-group byte-rate series. Active WAN X_GetDNSServers adds DNS servers. These are not watch's observed-delta rates. sync_groups carries the byte rates in router order; the two router_reported byte-rate fields are always unknown. A tariff rate of 0 is unknown.\nexamples: router-axi wan detail; router-axi wan detail --json\n"
+		return "usage: router-axi wan detail [--host ADDRESS] [--json] [--help]\nRead-only bounded WAN physical-link detail from documented WANCommonInterfaceConfig actions.\nGetCommonLinkProperties is required. Advertised common-interface actions add sync/tariff bit rates, provider, byte/packet totals, and bounded per-sync-group byte-rate series. Active WAN X_GetDNSServers adds DNS servers. These are not watch's observed-delta rates. sync_groups carries the byte rates in router order; the two router_reported byte-rate fields are always unknown. A tariff rate of 0 is unknown.\nconnection_service names the active WANIPConnection or WANPPPConnection service. Its SCPD-advertised GetInfo adds connection type, IPv6 status, and IPv6 uptime; GetNATRSIPStatus adds NAT and RSIP flags; on WANPPPConnection only, GetLinkLayerMaxBitRates adds link-layer maximum bit rates and X_AVM_DE_GetAutoDisconnectTimeSpan adds disconnect prevention and its hour (0..23). A part whose action the router does not advertise or rejects as an invalid action is unsupported (null in JSON). On WANIPConnection the two PPP-only parts are not_applicable (null in JSON) and are never read. The documents state no unit for ipv6_uptime or the link-layer bit rates. The PPP user name and the WAN MAC address are never kept.\nexamples: router-axi wan detail; router-axi wan detail --json\n"
 	}
 	if command == "wan" && action == "reconnect" {
 		return "usage: router-axi wan reconnect [--confirm] [--host ADDRESS] [--json] [--help]\nWithout --confirm: preview only. With --confirm: send one documented ForceTermination to the active WAN connection service; the internet connection drops and a new external address may be assigned.\nNo prompts, retries, or recovery polling; wan reconnect is not idempotent.\nexamples: router-axi wan reconnect; router-axi wan reconnect --confirm\n"
@@ -982,25 +982,10 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 			if err != nil {
 				return err
 			}
-			if v.SyncGroups == nil {
-				_, err = fmt.Fprintln(w, "  sync_groups: unknown")
+			if err := writeWANSyncGroups(w, v.SyncGroups); err != nil {
 				return err
 			}
-			if len(v.SyncGroups) == 0 {
-				_, err = fmt.Fprintln(w, "  sync_groups: 0 groups found")
-				return err
-			}
-			_, err = fmt.Fprintf(w, "  sync_groups[%d]{index,max_download_bytes_per_second,max_upload_bytes_per_second,ds_current_bytes_per_second,mc_current_bytes_per_second,upload_bytes_per_second,realtime_upload_bytes_per_second,high_upload_bytes_per_second,default_upload_bytes_per_second,low_upload_bytes_per_second}:\n", len(v.SyncGroups))
-			if err != nil {
-				return err
-			}
-			for _, group := range v.SyncGroups {
-				_, err = fmt.Fprintf(w, "    %d,%d,%d,%s,%s,%s,%s,%s,%s,%s\n", group.Index, group.MaxDownloadBytesPerSecond, group.MaxUploadBytesPerSecond, wanRateSeries(group.DSCurrentBytesPerSecond), wanRateSeries(group.MCCurrentBytesPerSecond), wanRateSeries(group.UploadBytesPerSecond), wanRateSeries(group.RealtimeUploadBytesPerSecond), wanRateSeries(group.HighUploadBytesPerSecond), wanRateSeries(group.DefaultUploadBytesPerSecond), wanRateSeries(group.LowUploadBytesPerSecond))
-				if err != nil {
-					return err
-				}
-			}
-			return err
+			return writeWANConnection(w, v)
 		}
 		v := value.(tr064.WAN)
 		_, err := fmt.Fprintf(w, "wan:\n  status: %s\n  external_ip: %s\n  ip_family: %s\n  uptime: %s\n  last_error: %s\nnext: router-axi traffic\n", scalar(v.Status), scalar(v.ExternalIP), scalar(v.IPFamily), duration(v.UptimeSeconds), scalar(v.LastError))
@@ -1493,6 +1478,26 @@ func duration(seconds uint64) string {
 	return fmt.Sprintf("%dd %02dh %02dm", seconds/86400, seconds%86400/3600, seconds%3600/60)
 }
 func size(bytes uint64) string { return fmt.Sprintf("%.2f GB", float64(bytes)/1_000_000_000) }
+
+func writeWANSyncGroups(w io.Writer, groups []tr064.WANSyncGroup) error {
+	if groups == nil {
+		_, err := fmt.Fprintln(w, "  sync_groups: unknown")
+		return err
+	}
+	if len(groups) == 0 {
+		_, err := fmt.Fprintln(w, "  sync_groups: 0 groups found")
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "  sync_groups[%d]{index,max_download_bytes_per_second,max_upload_bytes_per_second,ds_current_bytes_per_second,mc_current_bytes_per_second,upload_bytes_per_second,realtime_upload_bytes_per_second,high_upload_bytes_per_second,default_upload_bytes_per_second,low_upload_bytes_per_second}:\n", len(groups)); err != nil {
+		return err
+	}
+	for _, group := range groups {
+		if _, err := fmt.Fprintf(w, "    %d,%d,%d,%s,%s,%s,%s,%s,%s,%s\n", group.Index, group.MaxDownloadBytesPerSecond, group.MaxUploadBytesPerSecond, wanRateSeries(group.DSCurrentBytesPerSecond), wanRateSeries(group.MCCurrentBytesPerSecond), wanRateSeries(group.UploadBytesPerSecond), wanRateSeries(group.RealtimeUploadBytesPerSecond), wanRateSeries(group.HighUploadBytesPerSecond), wanRateSeries(group.DefaultUploadBytesPerSecond), wanRateSeries(group.LowUploadBytesPerSecond)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func wanRateSeries(values []uint64) string {
 	parts := make([]string, len(values))
