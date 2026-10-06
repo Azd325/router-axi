@@ -61,6 +61,7 @@ type Reader interface {
 	GuestWiFi(context.Context) ([]tr064.GuestNetwork, error)
 	WiFiMutation(context.Context, uint64, bool, bool) (tr064.WiFiMutation, error)
 	Forwards(context.Context) ([]tr064.Forward, error)
+	Exposure(context.Context) (tr064.Exposure, error)
 	Reboot(context.Context, bool) (tr064.RebootResult, error)
 	WANReconnect(context.Context, bool) (tr064.WANReconnectResult, error)
 	Wake(context.Context, string, bool) (tr064.WakeResult, error)
@@ -440,6 +441,8 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 				}
 				value = forwardResult{Forwards: forwards, Total: total, Omitted: total - len(forwards)}
 			}
+		case "exposure":
+			value, err = reader.Exposure(ctx)
 		}
 	}
 	if err != nil {
@@ -699,7 +702,7 @@ func parse(args []string) (options, error) {
 }
 
 func validCommand(command string) bool {
-	return command == "event-log" || command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "dhcp" || command == "dsl" || command == "firmware" || command == "account" || command == "wifi" || command == "guest" || command == "forwards" || command == "reboot" || command == "wake" || command == "backup" || command == "skill" || command == "setup" || command == "session" || command == "version"
+	return command == "event-log" || command == "watch" || command == "doctor" || command == "status" || command == "overview" || command == "wan" || command == "traffic" || command == "calls" || command == "devices" || command == "leases" || command == "dhcp" || command == "dsl" || command == "firmware" || command == "account" || command == "wifi" || command == "guest" || command == "forwards" || command == "exposure" || command == "reboot" || command == "wake" || command == "backup" || command == "skill" || command == "setup" || command == "session" || command == "version"
 }
 
 // commandHelp holds dedicated per-command help text: usage line, purpose,
@@ -723,6 +726,7 @@ var commandHelp = map[string]string{
 	"wifi":     "usage: router-axi wifi [detail [--instance N]] [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection; wifi detail reports one radio's safe documented properties. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi detail --instance 1; router-axi wifi disable --instance 1 --confirm\n",
 	"guest":    "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID, aggregate radio state, and raw timeout/isolation configuration; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n",
 	"forwards": "usage: router-axi forwards [--all] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi forwards; router-axi forwards --all --json\n",
+	"exposure": "usage: router-axi exposure [--host ADDRESS] [--json] [--help]\nRead-only exposure flags of router services: enabled, port, and status values only. remote reports remote_access and ddns from X_AVM-DE_RemoteAccess:GetInfo and GetDDNSInfo and myfritz from X_AVM-DE_MyFritz:GetInfo. local reports storage, upnp, webdav, speedtest, and tr069 from GetInfo of X_AVM-DE_Storage, X_AVM-DE_UPnP, X_AVM-DE_WebDAVClient, X_AVM-DE_Speedtest, and ManagementServer. Each action is validated against the service description first.\nA part whose service or action the router does not advertise or rejects as an invalid action is unsupported (null in JSON); the command fails as unsupported only when no part is available. Arguments that the documents added later are unknown when absent. Usernames, e-mail addresses, host names, URLs, and every other returned identifier are never kept or printed. tr069 reports the periodic-inform and managed-upgrade flags; the action returns no TR-069 enable flag.\nThe logged-in account needs the configuration right for upnp, webdav, speedtest, and tr069. Port-forwarding rules are in router-axi forwards.\nexamples: router-axi exposure; router-axi exposure --json\n",
 	"version":  "usage: router-axi version [--json] [--help]\nPrint the router-axi version without contacting the router.\nexamples: router-axi version; router-axi version --json\n",
 }
 
@@ -792,6 +796,7 @@ var commandFlags = map[string][]string{
 	"firmware": {"--host", "--json", "--confirm", "--help"},
 	"account":  {"--host", "--json", "--help"},
 	"forwards": {"--host", "--json", "--all", "--help"},
+	"exposure": {"--host", "--json", "--help"},
 	"wifi":     {"--host", "--json", "--instance", "--confirm", "--help"},
 	"reboot":   {"--host", "--json", "--confirm", "--help"},
 	"wake":     {"--host", "--json", "--confirm", "--help"},
@@ -901,7 +906,7 @@ func help(command, action string) string {
 		}
 		return "usage: router-axi " + command + " [--host ADDRESS] [--json]" + extra + " [--help]\n"
 	}
-	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details; wan reconnect drops the connection once with --confirm\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  event-log bounded router events (telephony excluded by default)\n  devices   connected and known LAN clients; devices detail adds one device's link and access state\n  leases    observed Hosts table lease metadata\n  dhcp      DHCP server configuration (never reservation inventory)\n  dsl       DSL link diagnostics; dsl detail adds total error counters and the router's line-fault diagnosis\n  firmware  installed firmware, reported update availability, and auto-update state; firmware check requests one update check with --confirm\n  account   own rights and login posture\n  wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  reboot    preview router restart; execute once with --confirm\n  wake      preview Wake-on-LAN to one MAC; send once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
+	return "usage: router-axi [--host ADDRESS] [--json] [command]\n\ncommands:\n  doctor    bounded connectivity and capability diagnosis\n  status    router identity and firmware (default)\n  overview  identity, WAN state, and traffic totals\n  wan       internet connection state; wan detail adds bounded link details; wan reconnect drops the connection once with --confirm\n  traffic   byte totals\n  watch     bounded WAN state and traffic polling (6 samples, 5s interval)\n  calls     call history\n  event-log bounded router events (telephony excluded by default)\n  devices   connected and known LAN clients; devices detail adds one device's link and access state\n  leases    observed Hosts table lease metadata\n  dhcp      DHCP server configuration (never reservation inventory)\n  dsl       DSL link diagnostics; dsl detail adds total error counters and the router's line-fault diagnosis\n  firmware  installed firmware, reported update availability, and auto-update state; firmware check requests one update check with --confirm\n  account   own rights and login posture\n  wifi      Wi-Fi inspection; wifi detail adds per-radio properties; wifi enable|disable changes a radio with --confirm\n  guest     documented guest Wi-Fi inspection\n  forwards  port-forwarding rules\n  exposure  remote-access and local-service exposure flags\n  reboot    preview router restart; execute once with --confirm\n  wake      preview Wake-on-LAN to one MAC; send once with --confirm\n  backup    download the documented configuration export to a file\n  skill     install the router-axi agent skill (explicit opt-in)\n  setup     manage opt-in Claude Code, Codex, and OpenCode session integrations\n  session   print the offline session dashboard\n  version   CLI version\n\nauthentication: ROUTER_AXI_USERNAME and ROUTER_AXI_PASSWORD\nbackup export passphrase: ROUTER_AXI_BACKUP_PASSWORD\n"
 }
 
 func writeJSON(w io.Writer, value any) int {
@@ -1142,6 +1147,8 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 			_, err := fmt.Fprintf(w, "omitted: %d\nnext: router-axi forwards --all\n", result.Omitted)
 			return err
 		}
+	case "exposure":
+		return writeExposure(w, value.(tr064.Exposure))
 	}
 	return nil
 }

@@ -465,7 +465,7 @@ func TestTopLevelHelpListsPublicCommands(t *testing.T) {
 	if code != ExitOK || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "watch", "calls", "devices", "leases", "dhcp", "dsl", "firmware", "wifi", "guest", "forwards", "reboot", "backup", "skill", "version"} {
+	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "watch", "calls", "devices", "leases", "dhcp", "dsl", "firmware", "wifi", "guest", "forwards", "exposure", "reboot", "backup", "skill", "version"} {
 		if !strings.Contains(stdout, "\n  "+command+" ") {
 			t.Fatalf("top-level help does not list %q: %q", command, stdout)
 		}
@@ -925,7 +925,7 @@ func TestWiFiClientPrivacyBoundary(t *testing.T) {
 // TestEverySubcommandHelpDepth asserts the AXI help contract: every
 // subcommand help must include a usage line, flags, and concrete examples.
 func TestEverySubcommandHelpDepth(t *testing.T) {
-	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "calls", "devices", "leases", "dhcp", "dsl", "firmware", "wifi", "guest", "forwards", "watch", "reboot", "backup"} {
+	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "calls", "devices", "leases", "dhcp", "dsl", "firmware", "wifi", "guest", "forwards", "exposure", "watch", "reboot", "backup"} {
 		text := help(command, "")
 		if !strings.HasPrefix(text, "usage: router-axi "+command) || !strings.Contains(text, "--host ADDRESS") || !strings.Contains(text, "--json") || !strings.Contains(text, "examples: router-axi "+command) && !strings.Contains(text, "Examples: router-axi "+command) {
 			t.Fatalf("help for %s lacks usage, flags, or examples: %q", command, text)
@@ -1273,7 +1273,7 @@ func TestFactoryFailuresDoNotExposeRouterEndpoints(t *testing.T) {
 	const factoryError = "invalid router address " + host
 	commands := [][]string{
 		{"watch"}, {"doctor"}, {"status"}, {"overview"}, {"wan"}, {"traffic"}, {"calls"}, {"devices"},
-		{"leases"}, {"dhcp"}, {"dsl"}, {"firmware"}, {"wifi"}, {"guest"}, {"forwards"}, {"reboot"}, {"backup", "--output", "backup.export"},
+		{"leases"}, {"dhcp"}, {"dsl"}, {"firmware"}, {"wifi"}, {"guest"}, {"forwards"}, {"exposure"}, {"reboot"}, {"backup", "--output", "backup.export"},
 	}
 	for _, command := range commands {
 		for _, jsonOutput := range []bool{false, true} {

@@ -1,0 +1,1 @@
+<scpd><actionList><action><name>GetInfo</name></action><action><name>SetConfig</name></action><action><name>GetDDNSInfo</name></action><action><name>GetDDNSProviders</name></action><action><name>SetDDNSConfig</name></action><action><name>SetEnable</name></action><action><name>SetLetsEncryptEnable</name></action></actionList></scpd>

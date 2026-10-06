@@ -57,7 +57,7 @@ func (c *Client) DSLDetail(ctx context.Context) (DSLDetail, error) {
 	if err := client.discover(ctx); err != nil {
 		return DSLDetail{}, dslDetailError(err)
 	}
-	target, actions, err := client.dslServiceActions(ctx, "dsl detail", dslDetailRemediation, dslDetailError)
+	target, actions, err := client.serviceActions(ctx, dslServicePrefix, "WANDSLInterfaceConfig", "dsl detail", dslDetailRemediation, dslDetailError)
 	if err != nil {
 		return DSLDetail{}, err
 	}
@@ -182,5 +182,5 @@ func dslDetailFieldError(field string) *Error {
 }
 
 func dslDetailError(err error) *Error {
-	return dslOperationError("dsl detail", "DSL detail inspection failed", "router does not support the documented DSL detail reads; "+dslDetailRemediation, err)
+	return readOperationError("dsl detail", "DSL detail inspection failed", "router does not support the documented DSL detail reads; "+dslDetailRemediation, err)
 }
