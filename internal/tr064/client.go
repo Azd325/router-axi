@@ -328,7 +328,7 @@ type soapValues struct {
 	UPnPMediaServer, PeriodicInformEnable, UpgradesManaged                        string
 	EnableTCP, EnableUDP, EnableUDPBidirect, WANEnableTCP, WANEnableUDP           string
 	PortTCP, PortUDP, PortUDPBidirect                                             string
-	ConnectionType, IPv6ConnectionStatus, IPv6Uptime, RSIPAvailable, NATEnabled   string
+	ConnectionType, IPv6ConnectionStatus, RSIPAvailable, NATEnabled               string
 	LinkLayerUpstreamMaxBitRate, LinkLayerDownstreamMaxBitRate                    string
 	DisconnectPreventionEnable, DisconnectPreventionHour                          string
 
@@ -683,8 +683,6 @@ func (v *soapValues) UnmarshalXML(d *xml.Decoder, start xml.StartElement) error 
 			target = &v.ConnectionType
 		case "NewX_AVM-DE_IPv6ConnectionStatus":
 			target = &v.IPv6ConnectionStatus
-		case "NewX_AVM-DE_IPv6Uptime":
-			target = &v.IPv6Uptime
 		case "NewRSIPAvailable":
 			target = &v.RSIPAvailable
 		case "NewNATEnabled":

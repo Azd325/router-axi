@@ -82,11 +82,11 @@ func TestWANDetailReportsPPPConnectionState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status, uptime := "Connected", uint64(3600)
+	status := "Connected"
 	want := WANDetail{
 		AccessType: "Cable", PhysicalLinkStatus: "Up", MaxDownloadBitsPerSecond: 1100000000, MaxUploadBitsPerSecond: 55000000, DNSServers: []string{},
 		ConnectionService:    "WANPPPConnection",
-		Connection:           &WANConnection{Type: "IP_Routed", IPv6Status: &status, IPv6Uptime: &uptime},
+		Connection:           &WANConnection{Type: "IP_Routed", IPv6Status: &status},
 		NAT:                  &WANNAT{Enabled: true, RSIPAvailable: false},
 		LinkLayerMaxBitRates: &WANLinkLayerMaxBitRates{Upstream: 40000000, Downstream: 100000000},
 		DisconnectPrevention: &WANDisconnectPrevention{Enabled: true, Hour: 3},
@@ -98,7 +98,7 @@ func TestWANDetailReportsPPPConnectionState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantSuffix := `"sync_groups":null,"connection_service":"WANPPPConnection","connection":{"type":"IP_Routed","ipv6_status":"Connected","ipv6_uptime":3600},"nat":{"enabled":true,"rsip_available":false},"link_layer_max_bit_rates":{"upstream":40000000,"downstream":100000000},"disconnect_prevention":{"enabled":true,"hour":3}}`
+	wantSuffix := `"sync_groups":null,"connection_service":"WANPPPConnection","connection":{"type":"IP_Routed","ipv6_status":"Connected"},"nat":{"enabled":true,"rsip_available":false},"link_layer_max_bit_rates":{"upstream":40000000,"downstream":100000000},"disconnect_prevention":{"enabled":true,"hour":3}}`
 	if !strings.HasSuffix(string(encoded), wantSuffix) || strings.Contains(string(encoded), "private") || strings.Contains(string(encoded), "203.0.113.42") || strings.Contains(string(encoded), "192.0.2.53") {
 		t.Fatalf("JSON=%s", encoded)
 	}
@@ -174,13 +174,13 @@ func TestWANDetailConnectionReadFailuresAreAtomicAndRedacted(t *testing.T) {
 
 func TestWANDetailLegacyConnectionInfoLeavesIPv6Unknown(t *testing.T) {
 	script := wanConnectionScript(wanPPPConnectionType)
-	replaceWANConnectionBody(t, script, "GetInfo", "<NewX_AVM-DE_IPv6ConnectionStatus>Connected</NewX_AVM-DE_IPv6ConnectionStatus><NewX_AVM-DE_IPv6Uptime>3600</NewX_AVM-DE_IPv6Uptime>", "")
+	replaceWANConnectionBody(t, script, "GetInfo", "<NewX_AVM-DE_IPv6ConnectionStatus>Connected</NewX_AVM-DE_IPv6ConnectionStatus>", "")
 	detail, err := forwardFixtureClient(t, script).WANDetail(t.Context())
-	if err != nil || detail.Connection == nil || detail.Connection.Type != "IP_Routed" || detail.Connection.IPv6Status != nil || detail.Connection.IPv6Uptime != nil {
+	if err != nil || detail.Connection == nil || detail.Connection.Type != "IP_Routed" || detail.Connection.IPv6Status != nil {
 		t.Fatalf("detail=%#v error=%v", detail, err)
 	}
 	encoded, err := json.Marshal(detail.Connection)
-	if err != nil || string(encoded) != `{"type":"IP_Routed","ipv6_status":null,"ipv6_uptime":null}` {
+	if err != nil || string(encoded) != `{"type":"IP_Routed","ipv6_status":null}` {
 		t.Fatalf("JSON=%s error=%v", encoded, err)
 	}
 }
@@ -232,7 +232,6 @@ func TestWANDetailConnectionValueSets(t *testing.T) {
 func TestWANDetailRejectsMalformedConnectionFields(t *testing.T) {
 	for _, test := range []struct{ name, action, old, replacement string }{
 		{"missing-connection-type", "GetInfo", "<NewConnectionType>IP_Routed</NewConnectionType>", ""},
-		{"ipv6-uptime", "GetInfo", "IPv6Uptime>3600<", "IPv6Uptime>private-canary<"},
 		{"nat-enabled", "GetNATRSIPStatus", "NATEnabled>1<", "NATEnabled>private-canary<"},
 		{"missing-nat-enabled", "GetNATRSIPStatus", "<NewNATEnabled>1</NewNATEnabled>", ""},
 		{"rsip-available", "GetNATRSIPStatus", "RSIPAvailable>0<", "RSIPAvailable>2<"},

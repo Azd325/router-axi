@@ -30,10 +30,10 @@ func runWANConnectionDetail(t *testing.T, detail tr064.WANDetail, args ...string
 }
 
 func TestWANDetailConnectionStateOutputContract(t *testing.T) {
-	status, uptime := "Connected", uint64(3600)
+	status := "Connected"
 	ppp := tr064.WANDetail{
 		ConnectionService:    tr064.WANPPPConnectionService,
-		Connection:           &tr064.WANConnection{Type: "IP_Routed", IPv6Status: &status, IPv6Uptime: &uptime},
+		Connection:           &tr064.WANConnection{Type: "IP_Routed", IPv6Status: &status},
 		NAT:                  &tr064.WANNAT{Enabled: true},
 		LinkLayerMaxBitRates: &tr064.WANLinkLayerMaxBitRates{Upstream: 40000000, Downstream: 100000000},
 		DisconnectPrevention: &tr064.WANDisconnectPrevention{Enabled: true, Hour: 3},
@@ -45,8 +45,8 @@ func TestWANDetailConnectionStateOutputContract(t *testing.T) {
 	}{
 		{
 			"ppp", ppp,
-			"  sync_groups: unknown\n  connection_service: WANPPPConnection\n  connection:\n    type: IP_Routed\n    ipv6_status: Connected\n    ipv6_uptime: 3600\n  nat:\n    enabled: true\n    rsip_available: false\n  link_layer_max_bit_rates:\n    upstream: 40000000\n    downstream: 100000000\n  disconnect_prevention:\n    enabled: true\n    hour: 3\n",
-			`"sync_groups":null,"connection_service":"WANPPPConnection","connection":{"type":"IP_Routed","ipv6_status":"Connected","ipv6_uptime":3600},"nat":{"enabled":true,"rsip_available":false},"link_layer_max_bit_rates":{"upstream":40000000,"downstream":100000000},"disconnect_prevention":{"enabled":true,"hour":3}}` + "\n",
+			"  sync_groups: unknown\n  connection_service: WANPPPConnection\n  connection:\n    type: IP_Routed\n    ipv6_status: Connected\n  nat:\n    enabled: true\n    rsip_available: false\n  link_layer_max_bit_rates:\n    upstream: 40000000\n    downstream: 100000000\n  disconnect_prevention:\n    enabled: true\n    hour: 3\n",
+			`"sync_groups":null,"connection_service":"WANPPPConnection","connection":{"type":"IP_Routed","ipv6_status":"Connected"},"nat":{"enabled":true,"rsip_available":false},"link_layer_max_bit_rates":{"upstream":40000000,"downstream":100000000},"disconnect_prevention":{"enabled":true,"hour":3}}` + "\n",
 		},
 		{
 			"ppp-unsupported", tr064.WANDetail{ConnectionService: tr064.WANPPPConnectionService},

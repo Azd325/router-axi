@@ -254,7 +254,7 @@ It never looks up or invokes the undocumented connection-service `GetAddonInfos`
 The same active-service SCPD gates the connection-state parts. `connection_service` names
 the active service: `WANIPConnection` or `WANPPPConnection`.
 
-- `GetInfo` supplies `connection`: `type`, `ipv6_status`, and `ipv6_uptime`.
+- `GetInfo` supplies `connection`: `type` and `ipv6_status`.
 - `GetNATRSIPStatus` supplies `nat`: `enabled` and `rsip_available`.
 - On `WANPPPConnection` only, `GetLinkLayerMaxBitRates` supplies
   `link_layer_max_bit_rates`: `upstream` and `downstream`.
@@ -268,9 +268,9 @@ still reported. On `WANIPConnection` the two PPP-only parts are `not_applicable`
 output and `null` in JSON, and their actions are never invoked. Any other fault or a
 malformed value fails the command. The WANIPConnection document (version 7) and the
 WANPPPConnection document (version 16), both dated 2025-12-18, state no unit for
-`X_AVM-DE_IPv6Uptime` or the link-layer bit rates, so these field names carry none; they
-state no required rights for these actions. Both IPv6 arguments were added in those
-versions; when the router omits them, the fields are `null`/`unknown`. A connection type or
+the link-layer bit rates, so these field names carry none; they state no required rights
+for these actions. The IPv6 status argument was added in those versions; when the router
+omits it, the field is `null`/`unknown`. A connection type or
 IPv6 state outside the documented value set of the active service becomes `unknown`. Every
 other `GetInfo` argument, including the PPP user name, the WAN MAC address, the external
 address, and the DNS servers, is dropped in the client.

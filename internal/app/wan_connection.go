@@ -15,7 +15,7 @@ func writeWANConnection(w io.Writer, value tr064.WANDetail) error {
 		if _, err := io.WriteString(w, "  connection: unsupported\n"); err != nil {
 			return err
 		}
-	} else if _, err := fmt.Fprintf(w, "  connection:\n    type: %s\n    ipv6_status: %s\n    ipv6_uptime: %s\n", c.Type, optionalText(c.IPv6Status), optionalUint(c.IPv6Uptime)); err != nil {
+	} else if _, err := fmt.Fprintf(w, "  connection:\n    type: %s\n    ipv6_status: %s\n", c.Type, optionalText(c.IPv6Status)); err != nil {
 		return err
 	}
 	if n := value.NAT; n == nil {

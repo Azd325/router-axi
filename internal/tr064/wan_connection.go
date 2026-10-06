@@ -8,7 +8,6 @@ import (
 type WANConnection struct {
 	Type       string  `json:"type"`
 	IPv6Status *string `json:"ipv6_status"`
-	IPv6Uptime *uint64 `json:"ipv6_uptime"`
 }
 
 type WANNAT struct {
@@ -122,13 +121,6 @@ func parseWANConnection(values soapValues, connectionTypes []string) (*WANConnec
 	if strings.TrimSpace(values.IPv6ConnectionStatus) != "" {
 		status := exposureState(values.IPv6ConnectionStatus, wanConnectionStatuses...)
 		connection.IPv6Status = &status
-	}
-	if strings.TrimSpace(values.IPv6Uptime) != "" {
-		uptime, err := parseWANDetailUint(values.IPv6Uptime, "IPv6 uptime")
-		if err != nil {
-			return nil, err
-		}
-		connection.IPv6Uptime = &uptime
 	}
 	return &connection, nil
 }
