@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<scpd xmlns="urn:dslforum-org:service-1-0"><actionList><action><name>GetInfo</name></action><action><name>GetNATRSIPStatus</name></action><action><name>GetLinkLayerMaxBitRates</name></action><action><name>X_AVM_DE_GetAutoDisconnectTimeSpan</name></action><action><name>X_AVM_DE_SetAutoDisconnectTimeSpan</name></action></actionList></scpd>

@@ -251,6 +251,30 @@ The command resolves the active WANIPConnection or WANPPPConnection through docu
 `X_GetDNSServers`. The returned comma-separated DNS list accepts IPv4 and IPv6 addresses.
 It never looks up or invokes the undocumented connection-service `GetAddonInfos` action.
 
+The same active-service SCPD gates the connection-state parts. `connection_service` names
+the active service: `WANIPConnection` or `WANPPPConnection`.
+
+- `GetInfo` supplies `connection`: `type` and `ipv6_status`.
+- `GetNATRSIPStatus` supplies `nat`: `enabled` and `rsip_available`.
+- On `WANPPPConnection` only, `GetLinkLayerMaxBitRates` supplies
+  `link_layer_max_bit_rates`: `upstream` and `downstream`.
+- On `WANPPPConnection` only, `X_AVM_DE_GetAutoDisconnectTimeSpan` supplies
+  `disconnect_prevention`: `enabled` and `hour` (0–23), the hour at which the router
+  terminates the connection to prevent the provider's 24-hour termination.
+
+A part whose action is not advertised, or that the router rejects with the invalid-action
+fault `401`, is `unsupported` in compact output and `null` in JSON; the other parts are
+still reported. On `WANIPConnection` the two PPP-only parts are `not_applicable` in compact
+output and `null` in JSON, and their actions are never invoked. Any other fault or a
+malformed value fails the command. The WANIPConnection document (version 7) and the
+WANPPPConnection document (version 16), both dated 2025-12-18, state no unit for
+the link-layer bit rates, so these field names carry none; they state no required rights
+for these actions. The IPv6 status argument was added in those versions; when the router
+omits it, the field is `null`/`unknown`. A connection type or
+IPv6 state outside the documented value set of the active service becomes `unknown`. Every
+other `GetInfo` argument, including the PPP user name, the WAN MAC address, the external
+address, and the DNS servers, is dropped in the client.
+
 Each optional WANCommonInterfaceConfig action is checked in the common service's SCPD:
 
 - `X_AVM-DE_GetAddonInfos` supplies sync and tariff download/upload rates in **bits/s**.
@@ -275,7 +299,8 @@ compact output says `unknown`, and an unavailable monitor is `"sync_groups":null
 An absent DNS action produces `"dns_servers":[]`, preserving the existing contract.
 An advertised action that fails or returns malformed data fails the entire command with a
 structured error; unavailable capability is never confused with a failed read. The only
-exception is the authorization refusal of the two rights-restricted reads described below.
+exceptions are the authorization refusal of the two rights-restricted reads described below
+and the invalid-action fault on a connection-state read.
 
 The [WANCommonInterfaceConfig document](https://fritz.support/resources/TR-064_WAN_Common_Interface_Config.pdf)
 (version 22, dated 2026-02-25) documents the prefixed `X_AVM-DE_GetAddonInfos` on the common
@@ -294,11 +319,12 @@ on these two reads, and an authorization error on any other read, remains an err
 The existing nine JSON fields retain their order. New fields follow them in this order:
 `total_download_packets`, `total_upload_packets`, `sync_download_bits_per_second`,
 `sync_upload_bits_per_second`, `tariff_download_bits_per_second`,
-`tariff_upload_bits_per_second`, `provider`, `sync_groups`.
+`tariff_upload_bits_per_second`, `provider`, `sync_groups`, `connection_service`,
+`connection`, `nat`, `link_layer_max_bit_rates`, `disconnect_prevention`.
 For example, with all optional actions absent:
 
 ```json
-{"access_type":"X_AVM-DE_Cable","physical_link_status":"Up","max_download_bits_per_second":1100000000,"max_upload_bits_per_second":55000000,"router_reported_download_bytes_per_second":null,"router_reported_upload_bytes_per_second":null,"total_download_bytes":null,"total_upload_bytes":null,"dns_servers":[],"total_download_packets":null,"total_upload_packets":null,"sync_download_bits_per_second":null,"sync_upload_bits_per_second":null,"tariff_download_bits_per_second":null,"tariff_upload_bits_per_second":null,"provider":null,"sync_groups":null}
+{"access_type":"X_AVM-DE_Cable","physical_link_status":"Up","max_download_bits_per_second":1100000000,"max_upload_bits_per_second":55000000,"router_reported_download_bytes_per_second":null,"router_reported_upload_bytes_per_second":null,"total_download_bytes":null,"total_upload_bytes":null,"dns_servers":[],"total_download_packets":null,"total_upload_packets":null,"sync_download_bits_per_second":null,"sync_upload_bits_per_second":null,"tariff_download_bits_per_second":null,"tariff_upload_bits_per_second":null,"provider":null,"sync_groups":null,"connection_service":"WANIPConnection","connection":null,"nat":null,"link_layer_max_bit_rates":null,"disconnect_prevention":null}
 ```
 
 Monitor fields ending in `bytes_per_second` use **bytes/s**, despite the action's `_bps`
@@ -1566,7 +1592,9 @@ Doctor uses only `DeviceInfo:GetInfo`; inspection commands use
 `wan detail` actions `GetCommonLinkProperties`, `X_AVM-DE_GetAddonInfos`,
 `X_AVM-DE_GetOnlineMonitor`, `X_AVM-DE_GetActiveProvider`, `GetTotalPacketsSent`, and
 `GetTotalPacketsReceived` on WANCommonInterfaceConfig plus SCPD-advertised
-`X_GetDNSServers` on the active WANIPConnection/WANPPPConnection service, AVM's
+`X_GetDNSServers`, `GetInfo`, and `GetNATRSIPStatus` on the active
+WANIPConnection/WANPPPConnection service and SCPD-advertised `GetLinkLayerMaxBitRates` and
+`X_AVM_DE_GetAutoDisconnectTimeSpan` on an active WANPPPConnection service, AVM's
 documented `X_AVM-DE_OnTel:GetCallList`, and the standard
 `Hosts:GetHostNumberOfEntries` plus zero-based `GetGenericHostEntry(NewIndex)`,
 the SCPD-advertised documented `Hosts:X_AVM-DE_GetSpecificHostEntryByIP` read of

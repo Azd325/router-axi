@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:GetNATRSIPStatusResponse xmlns:u="__SERVICE_TYPE__"><NewRSIPAvailable>0</NewRSIPAvailable><NewNATEnabled>1</NewNATEnabled></u:GetNATRSIPStatusResponse></s:Body></s:Envelope>

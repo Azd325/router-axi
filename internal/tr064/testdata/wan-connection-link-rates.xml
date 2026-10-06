@@ -1,0 +1,2 @@
+<?xml version="1.0"?>
+<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body><u:GetLinkLayerMaxBitRatesResponse xmlns:u="urn:dslforum-org:service:WANPPPConnection:1"><NewUpstreamMaxBitRate>40000000</NewUpstreamMaxBitRate><NewDownstreamMaxBitRate>100000000</NewDownstreamMaxBitRate></u:GetLinkLayerMaxBitRatesResponse></s:Body></s:Envelope>
