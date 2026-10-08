@@ -38,10 +38,10 @@ See [VISION.md](VISION.md) for the acceptance policy. Contributors should read
 
 ## Installation
 
-Install v0.5.0 with Go:
+Install the latest release with Go:
 
 ```sh
-go install github.com/Azd325/router-axi/cmd/router-axi@v0.5.0
+go install github.com/Azd325/router-axi/cmd/router-axi@latest
 ```
 
 This installs `router-axi` in `GOBIN`, or in `GOPATH/bin` when `GOBIN` is not
