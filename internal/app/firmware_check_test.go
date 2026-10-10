@@ -222,8 +222,8 @@ func TestFirmwareCheckConfigurationErrorsArePrivate(t *testing.T) {
 	if code != ExitUsage || stderr.Len() != 0 || !json.Valid(stdout.Bytes()) || strings.Contains(stdout.String(), "private-") {
 		t.Fatal("configuration error exposed data")
 	}
-	spec := protocolError(&tr064.Error{Kind: "usage", Code: "invalid_configuration", Operation: "firmware check", Message: "synthetic"})
-	if spec.exit != ExitUsage || spec.detail.Hint != "router-axi firmware check --help" {
+	spec := protocolError(&tr064.Error{Kind: "usage", Code: "invalid_configuration", Operation: "firmware check", Message: "synthetic"}, "")
+	if spec.exit != ExitUsage || spec.detail.Hint != "router-axi firmware check --host <address>" {
 		t.Fatalf("spec=%#v", spec)
 	}
 }

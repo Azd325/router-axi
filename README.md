@@ -22,7 +22,7 @@ router-axi setup check --agent claude
 router-axi setup uninstall --agent opencode
 ```
 
-Repeated installs repair the executable path and are idempotent. OpenCode setup adds `@opencode-ai/plugin` when needed; uninstall removes that declaration only when router-axi added it and its value remains unchanged. Pre-existing or modified dependencies and all unrelated package metadata are preserved.
+With `--agent all`, the compact result is one `setup[3]{agent,state,command,codex_hooks_feature}` table with one row for each agent; one agent prints a `setup:` block. Repeated installs repair the executable path and are idempotent. OpenCode setup adds `@opencode-ai/plugin` when needed; uninstall removes that declaration only when router-axi added it and its value remains unchanged. Pre-existing or modified dependencies and all unrelated package metadata are preserved.
 
 A failed setup prints a fixed message that names the file with the home directory shown as `~` (`permission denied for …`, `cannot read …`, `cannot write …`) and never the raw system error text.
 
@@ -94,6 +94,7 @@ router-axi devices detail --ip 192.0.2.20 --json
 router-axi leases
 router-axi leases --json
 router-axi leases --all
+router-axi leases --fields name,ip_address,lease_time_remaining
 router-axi dhcp
 router-axi dhcp --json
 router-axi dsl
@@ -183,8 +184,11 @@ router provides one, `ip_address`, `mac_address`, `interface_type`, and
 one; router-assigned table indexes are not exposed because they are not stable.
 Entries are sorted by MAC address, then IP address and name. Compact and JSON
 output return at most 100 entries by default and accept `--all`; compact output
-reports omitted entries, while JSON includes `total` and `omitted`. Empty output
-is `devices[0]: no devices found` in compact form and
+reports omitted entries, while JSON includes `total` and `omitted`. `--fields NAMES`
+selects compact columns in the order given from `name`, `ip_address`,
+`mac_address`, `interface_type`, and `active`; `calls` accepts it with `id`,
+`direction`, `remote`, `name`, `date`, and `duration`. Empty output
+is `devices: no devices found` in compact form and
 `{"devices":[],"total":0,"omitted":0}` in JSON.
 
 The `Hosts` service is optional on some TR-064 implementations. A router that
@@ -444,9 +448,12 @@ provides DHCP server configuration, not a per-client reservation table.
 Neither that service nor AVM host-list URLs are needed here. No browser
 scraping, undocumented endpoints, DNS lookups, scanning, or mutations occur.
 
-Compact columns are
-`leases[N]{name,ip_address,mac_address,address_source,lease_time_remaining,interface_type,active}`.
-JSON fields follow the same order, omitting absent names and remaining times:
+Compact columns are `leases[N]{name,ip_address,mac_address,active}`.
+`--fields NAMES` selects other columns in the order given from `name`,
+`ip_address`, `mac_address`, `address_source`, `lease_time_remaining`,
+`interface_type`, and `active`; an unknown name is a usage error (exit `2`)
+that lists the valid names. `--json` always reports every field, in this order,
+omitting absent names and remaining times:
 
 ```json
 {"leases":[{"name":"synthetic-client","ip_address":"192.0.2.10","mac_address":"02:00:00:00:00:10","address_source":"DHCP","lease_time_remaining":3600,"interface_type":"Ethernet","active":true}],"total":1,"omitted":0}
@@ -473,7 +480,7 @@ Entries are sorted by MAC address (case-insensitive), then IP address and name.
 Both formats show 100 entries by default, with `--all` for the complete inspected
 list. JSON always includes `total` and `omitted`; compact output reports omitted
 entries and suggests `leases --all`. Empty output is
-`leases[0]: no host observations found` or
+`leases: no host observations found` or
 `{"leases":[],"total":0,"omitted":0}`. Missing Hosts support is unsupported,
 never a successful empty result. The safety limit is 4096 host entries even
 with `--all`.
@@ -560,14 +567,14 @@ error (exit 6).
 
 ```text
 firmware:
-  current_version: 8.00
+  current_version: "8.00"
   update_available: true
-  offered_version: 8.10
+  offered_version: "8.10"
   update_state: UpdateAvailable
   build_type: Release
   auto_update_mode: important
   update_time: 2026-01-30T03:00:00+01:00
-  last_version: 7.90
+  last_version: "7.90"
   update_successful: succeeded
 ```
 
@@ -1117,9 +1124,13 @@ discarded and never emitted, and keys and passphrases are never retrieved:
 and every other key- or client-returning action are never called. No browser
 or undocumented endpoint is used.
 
-Compact output has the ordered columns
-`radios[N]{service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode}`.
-JSON uses the same ordered fields:
+Compact output has the columns `radios[N]{ssid,enabled,band,channel,associated_devices}`
+and a `next:` hint for `wifi detail`. `--fields NAMES` selects other columns in
+the order given from `service_id`, `ssid`, `enabled`, `channel`, `band`,
+`standard`, `associated_devices`, and `security_mode`; `service_id` is the
+column that identifies a radio for `--instance` on routers with more than one
+radio. An unknown name is a usage error (exit `2`) that lists the valid names.
+JSON always reports every field, in this order:
 
 ```json
 {"radios":[{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration1","ssid":"synthetic-ap","enabled":true,"channel":6,"band":"2400","standard":"ax","associated_devices":2,"security_mode":"11i"}],"total":1}
@@ -1143,7 +1154,7 @@ Missing WLANConfiguration support exits `5` with remediation; invalid required
 values and router faults exit `6`, authentication failure `3`, and network
 failure `4`. No partial list is reported as success. Reads are sequential, not
 a simultaneous snapshot. The empty result schema is
-`radios[0]: no Wi-Fi services found` or `{"radios":[],"total":0}`; absent
+`radios: no Wi-Fi services found` or `{"radios":[],"total":0}`; absent
 service advertisement is unsupported, **not** a successful empty result.
 Doctor reports advertisement only, with explicit unsupported remediation; it
 does not probe these actions. Firmware must support all four reads and the
@@ -1239,8 +1250,11 @@ Classification of all advertised WLAN instances completes before guest details a
 read. Each explicit guest is then read with the same documented actions as `wifi`:
 `GetInfo`, `GetChannelInfo`, `GetTotalAssociations`, and `GetBeaconType`. Compact
 output is
-`guests[N]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}`;
-JSON preserves those ordered fields, appends `configuration` to each guest,
+`guests[N]{ssid,enabled,band,channel,associated_clients}`; `--fields NAMES`
+selects other columns from `service_id`, `ssid`, `enabled`, `channel`, `band`,
+`standard`, `associated_clients`, and `security_mode`. JSON always reports the
+ordered fields `service_id`, `ssid`, `enabled`, `channel`, `band`, `standard`,
+`associated_clients`, `security_mode`, appends `configuration` to each guest,
 and returns `guests` followed by `total`. Compact output appends a
 `guest_configuration[N]{service_id,timeout_active,timeout,time_remain,no_forced_off,user_isolation}`
 table. Configuration reuses the classification response without another request:
@@ -1255,7 +1269,7 @@ current mapping documents zero or one logical guest service, whose position may 
 service 2, 3, or 4; the CLI does not assume that limit and reports every instance
 that explicitly identifies itself as `guest`, in advertised numeric service-ID
 order. An empty, completely classified result is
-`guests[0]: no guest Wi-Fi networks found` or `{"guests":[],"total":0}`.
+`guests: no guest Wi-Fi networks found` or `{"guests":[],"total":0}`.
 
 `enabled` and the public broadcast `ssid` come from `GetInfo`; channel, band,
 standard, per-instance associated-client count, and security mode have the same
@@ -1341,8 +1355,11 @@ numeric internal port, enabled state (false first), description, then lease
 transient table indexes are not exposed. Output is limited to
 100 entries by default. `--all` returns the complete inspected list; compact
 output reports `omitted` and suggests `forwards --all`, while JSON always
-includes `total` and `omitted`. Empty output is
-`forwards[0]: no port forwards found` or
+includes `total` and `omitted`. Compact columns are
+`forwards[N]{enabled,protocol,external_port,internal_client,internal_port}`;
+`--fields NAMES` adds `description`, `remote_host`, and `lease_duration`, and
+`--json` always reports every field. Empty output is
+`forwards: no port forwards found` or
 `{"forwards":[],"total":0,"omitted":0}`. No advertised service or a missing
 required action is **unsupported**, never a successful empty list.
 

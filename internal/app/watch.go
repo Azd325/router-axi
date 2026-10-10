@@ -65,7 +65,7 @@ func runWatch(ctx context.Context, reader Reader, opts options, stdout, stderr i
 			return writeError(stdout, opts.json, ExitNetwork, "watch_timeout", "watch sample exceeded its 30s deadline; polling stopped", "check router responsiveness before running watch again")
 		}
 		if err != nil {
-			return watchReadError(stdout, opts.json, index, err)
+			return watchReadError(stdout, opts, index, err)
 		}
 		sample := makeWatchSample(index, current, previous)
 		if opts.json {
@@ -95,7 +95,8 @@ func watchInterrupted(w io.Writer, jsonOutput bool) int {
 	return writeError(w, jsonOutput, ExitInterrupted, "interrupted", "watch interrupted; polling stopped", "")
 }
 
-func watchReadError(w io.Writer, jsonOutput bool, index int, err error) int {
+func watchReadError(w io.Writer, opts options, index int, err error) int {
+	jsonOutput := opts.json
 	result := &tr064.Error{Kind: "internal", Operation: "watch", Message: fmt.Sprintf("watch sample %d failed; polling stopped", index)}
 	var protocolErr *tr064.Error
 	if !errors.As(err, &protocolErr) {
@@ -106,9 +107,9 @@ func watchReadError(w io.Writer, jsonOutput bool, index int, err error) int {
 		result.Message += "; enable documented Layer3Forwarding, WAN connection and WANCommonInterfaceConfig reads or use supported firmware"
 	}
 	if result.Kind == "usage" {
-		return writeError(w, jsonOutput, ExitUsage, "invalid_configuration", result.Message, "router-axi watch --help")
+		return writeError(w, jsonOutput, ExitUsage, "invalid_configuration", result.Message, "router-axi watch --host <address>")
 	}
-	return renderProtocolError(w, jsonOutput, result)
+	return renderProtocolError(w, opts, result)
 }
 
 func makeWatchSample(index int, current tr064.WatchSnapshot, previous *tr064.WatchSnapshot) watchSample {
