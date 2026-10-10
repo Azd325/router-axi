@@ -1,19 +1,23 @@
 package tr064
 
 import (
+	"context"
 	_ "embed"
 	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -3112,15 +3116,44 @@ func TestLeasesDiscoveryErrorsAreSanitized(t *testing.T) {
 	}
 }
 
-func TestDevicesPreserveOriginalNetworkErrors(t *testing.T) {
+func TestDevicesNetworkErrorsUseFixedMessages(t *testing.T) {
 	client := hostFixtureClient(t, nil)
 	client.http.Transport = wifiFailingTransport{}
 	devices, err := client.Devices(t.Context())
 	var protocolErr *Error
-	if devices != nil || !errors.As(err, &protocolErr) || protocolErr.Kind != "network" || protocolErr.Operation != "GET "+descriptionPath || !strings.Contains(protocolErr.Message, "private-network-error") {
+	if devices != nil || !errors.As(err, &protocolErr) || protocolErr.Kind != "network" || protocolErr.Operation != "GET "+descriptionPath || protocolErr.Message != "the router could not be reached" || strings.Contains(protocolErr.Message, "private-network-error") {
 		t.Fatalf("devices=%#v error=%#v", devices, err)
 	}
 }
+
+func TestRequestNetworkErrorMessagesAreFixedPerFaultClass(t *testing.T) {
+	const address = "http://192.0.2.77:49000/tr64desc.xml"
+	wrap := func(err error) error { return &url.Error{Op: "Get", URL: address, Err: err} }
+	for _, test := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"refused", wrap(&net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}), "the router refused the connection"},
+		{"dns", wrap(&net.OpError{Op: "dial", Err: &net.DNSError{Err: "no such host", Name: "fritz.box"}}), "the router host name could not be resolved"},
+		{"deadline", wrap(context.DeadlineExceeded), "the router did not answer in time"},
+		{"transport timeout", wrap(&net.OpError{Op: "dial", Err: timeoutError{}}), "the router did not answer in time"},
+		{"other", wrap(errors.New("private-network-error 192.0.2.77")), "the router could not be reached"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result := requestNetworkError("GET /x", test.err)
+			if result.Kind != "network" || result.Code != "" || result.Message != test.want || result.Operation != "GET /x" {
+				t.Fatalf("result=%#v want message %q", result, test.want)
+			}
+		})
+	}
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return false }
 
 func TestDoctorReportsLeasesCapabilityAlongsideDevices(t *testing.T) {
 	server := fixtureServer(t)

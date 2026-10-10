@@ -1718,3 +1718,16 @@ func TestStatusDistinguishesUntrustedCertificateFromUnreachableRouter(t *testing
 		}
 	}
 }
+
+func TestInternalErrorsUseFixedMessage(t *testing.T) {
+	for _, jsonOutput := range []bool{false, true} {
+		var stdout bytes.Buffer
+		spec := protocolError(errors.New("private raw dependency failure 192.0.2.77"))
+		if code := writeError(&stdout, jsonOutput, spec.exit, spec.detail.Code, spec.detail.Message, spec.detail.Hint); code != ExitInternal {
+			t.Fatalf("code=%d", code)
+		}
+		if strings.Contains(stdout.String(), "private") || strings.Contains(stdout.String(), "192.0.2.77") || !strings.Contains(stdout.String(), "internal_error") || !strings.Contains(stdout.String(), "an internal error occurred") {
+			t.Fatalf("json=%v stdout=%q", jsonOutput, stdout.String())
+		}
+	}
+}

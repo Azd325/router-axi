@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/netip"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -75,13 +76,16 @@ type App struct {
 	Version    string
 	executable func() (string, error)
 	homeDir    func() (string, error)
+	lookPath   func(string) (string, error)
+	// programExists reports whether a hook's absolute program path exists.
+	programExists func(string) bool
 	// watchSignals controls whether watch registers real OS signal
 	// handling. Tests inside a synthetic-time bubble disable it.
 	watchSignals bool
 }
 
 func New(factory Factory, getenv func(string) string) *App {
-	return &App{factory: factory, getenv: getenv, Version: "dev", watchSignals: true, executable: os.Executable, homeDir: os.UserHomeDir}
+	return &App{factory: factory, getenv: getenv, Version: "dev", watchSignals: true, executable: os.Executable, homeDir: os.UserHomeDir, lookPath: exec.LookPath, programExists: fileExists}
 }
 
 type options struct {
@@ -879,7 +883,7 @@ func help(command, action string) string {
 		return "usage: router-axi reboot [--confirm] [--host ADDRESS] [--json] [--help]\nWithout --confirm: preview only. With --confirm: restart the router and temporarily interrupt all local services.\nNo prompts, retries, or recovery polling; reboot is not idempotent.\nexamples: router-axi reboot; router-axi reboot --confirm\n"
 	}
 	if command == "setup" {
-		return "usage: router-axi setup install|check|uninstall --agent claude|codex|opencode|all [--json] [--help]\nExplicitly installs, inspects, or removes a managed offline SessionStart integration. No router request is made during setup or session start.\nRepeated installs repair the managed executable path; uninstall removes only router-axi-managed configuration.\nexamples: router-axi setup install --agent all; router-axi setup check --agent claude; router-axi setup uninstall --agent opencode\n"
+		return "usage: router-axi setup install|check|uninstall --agent claude|codex|opencode|all [--json] [--help]\nExplicitly installs, inspects, or removes a managed offline SessionStart integration. No router request is made during setup or session start.\nRepeated installs repair the managed executable path; check reports stale when the hook's program is gone; codex install also sets [features].hooks = true in ~/.codex/config.toml, which uninstall leaves; uninstall removes only router-axi-managed configuration.\nexamples: router-axi setup install --agent all; router-axi setup check --agent claude; router-axi setup uninstall --agent opencode\n"
 	}
 	if command == "session" {
 		return "usage: router-axi session dashboard [--json] [--help]\nPrint the compact offline context used by installed session integrations; it never contacts the router.\nexamples: router-axi session dashboard; router-axi session dashboard --json\n"
@@ -1141,7 +1145,7 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 func protocolError(err error) errorSpec {
 	var protocolErr *tr064.Error
 	if !errors.As(err, &protocolErr) {
-		return errorSpec{ExitInternal, errorDetail{"internal_error", err.Error(), ""}}
+		return errorSpec{ExitInternal, errorDetail{"internal_error", "an internal error occurred", ""}}
 	}
 	switch protocolErr.Kind {
 	case "usage":

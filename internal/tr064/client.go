@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -2613,15 +2614,31 @@ func tlsUntrusted(err error) bool {
 	return errors.As(err, &unknownAuthority) || errors.As(err, &invalidCertificate) || errors.As(err, &hostname) || errors.As(err, &verification)
 }
 
-// requestNetworkError preserves a transport failure verbatim, as other
-// commands do, and only marks TLS trust failures so they can be reported with
-// their remediation.
+// requestNetworkError reports a failed request with a fixed message per fault
+// class. The transport error text embeds the request URL, which carries the
+// router address, so it is never echoed. TLS trust failures keep their own
+// code and remediation.
 func requestNetworkError(operation string, err error) *Error {
-	result := &Error{Kind: "network", Operation: operation, Message: err.Error()}
+	result := &Error{Kind: "network", Operation: operation, Message: networkFaultMessage(err)}
 	if tlsUntrusted(err) {
 		result.Code = tlsUntrustedCode
+		result.Message = tlsRemediation
 	}
 	return result
+}
+
+func networkFaultMessage(err error) string {
+	var dnsErr *net.DNSError
+	var netErr net.Error
+	switch {
+	case errors.Is(err, syscall.ECONNREFUSED):
+		return "the router refused the connection"
+	case errors.As(err, &dnsErr):
+		return "the router host name could not be resolved"
+	case errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) && netErr.Timeout():
+		return "the router did not answer in time"
+	}
+	return "the router could not be reached"
 }
 
 // backupCapability reports DeviceConfig advertisement only. It never invokes
