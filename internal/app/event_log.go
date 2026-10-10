@@ -19,8 +19,21 @@ func writeEventLog(w io.Writer, result tr064.EventLog) error {
 		}
 	}
 	if result.More != "" {
-		_, err := fmt.Fprintf(w, "next: %s\n", result.More)
-		return err
+		return writeNext(w, result.More)
 	}
 	return nil
+}
+
+func eventLogNext(opts options, result tr064.EventLog) string {
+	if result.Omitted == 0 {
+		return ""
+	}
+	limit := " --limit " + strconv.Itoa(tr064.MaxEventLogLimit)
+	if opts.limit < tr064.MaxEventLogLimit {
+		return hintCommand(opts, "event-log --group "+strings.Join(result.Groups, ",")+limit)
+	}
+	if len(result.Groups) > 1 {
+		return hintCommand(opts, "event-log --group <group>"+limit)
+	}
+	return ""
 }

@@ -1357,9 +1357,10 @@ transient table indexes are not exposed. Output is limited to
 output reports `omitted` and suggests `forwards --all`, while JSON always
 includes `total` and `omitted`. Compact columns are
 `forwards[N]{enabled,protocol,external_port,internal_client,internal_port}`;
-`--fields NAMES` adds `description`, `remote_host`, and `lease_duration`, and
-`--json` always reports every field. Empty output is
-`forwards: no port forwards found` or
+`--fields NAMES` selects the columns in the order given from `enabled`,
+`protocol`, `external_port`, `internal_client`, `internal_port`, `description`,
+`remote_host`, and `lease_duration`, and `--json` always reports every field.
+Empty output is `forwards: no port forwards found` or
 `{"forwards":[],"total":0,"omitted":0}`. No advertised service or a missing
 required action is **unsupported**, never a successful empty list.
 
@@ -1525,10 +1526,12 @@ invalid `--group` value is a usage error (exit `2`).
 
 The default limit is **100 lines**, with `--limit N` bounded to **1–1000**.
 Multiline messages count toward the line limit. Router order is preserved.
-Both formats report `total` and `omitted` lines. Truncated output provides `more`
-in JSON or `next` in compact output: repeat with the same host and group
-selection and `--limit 1000`; at that hard maximum, narrow `--group`. There is
-no unbounded `--all` mode. Empty logs report zero lines. The download body is capped at
+Both formats report `total` and `omitted` lines. Truncated output names the next
+command as `more` in JSON or `next` in compact output: the same `--host` and
+`--group` selection with `--limit 1000`. At that hard maximum with several
+groups, the command carries a `--group <group>` placeholder to narrow the
+selection; with one group, no further command exists and the field is absent.
+There is no unbounded `--all` mode. Empty logs report zero lines. The download body is capped at
 8 MiB; a body reaching that cap fails with `event_log_too_large` and asks for a
 single group instead of displaying an incomplete result.
 

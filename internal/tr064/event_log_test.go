@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -117,8 +118,8 @@ func TestEventLogGroupsAndLimits(t *testing.T) {
 				t.Fatalf("sensitive download or phone output")
 			}
 		}
-		if result.Omitted > 0 && (!strings.Contains(result.More, "--limit 1000")) {
-			t.Fatalf("missing truncation metadata: %+v", result)
+		if result.More != "" {
+			t.Fatalf("protocol layer set a next step: %+v", result)
 		}
 		if !reflect.DeepEqual(*requests, []string{"GET /tr64desc.xml", "GET /device-info.xml", "POST /device-info", "GET /event-log.lua"}) {
 			t.Fatalf("requests=%q", *requests)
@@ -161,11 +162,17 @@ func TestEventLogInvalidInputBeforeNetwork(t *testing.T) {
 		}
 	}
 	var failure *Error
-	for _, address := range []string{"https://router.example.test?token=synthetic", "https://router.example.test/private", "https://router.example.test#fragment", "https://sample@router.example.test"} {
-		client, err := New(address, "", "", nil)
+	for _, edit := range []func(*Client){
+		func(client *Client) { client.base.RawQuery = "token=synthetic" },
+		func(client *Client) { client.base.Path = "/private" },
+		func(client *Client) { client.base.Fragment = "fragment" },
+		func(client *Client) { client.base.User = url.User("sample") },
+	} {
+		client, err := New("https://router.example.test", "", "", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
+		edit(client)
 		_, err = client.EventLog(t.Context(), "", 100)
 		if !errors.As(err, &failure) || failure.Code != "invalid_configuration" {
 			t.Fatalf("err=%v", err)

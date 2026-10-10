@@ -2455,6 +2455,29 @@ func TestNewDefaultsToTR064Ports(t *testing.T) {
 	}
 }
 
+func TestNewRefusesUnsafeAddresses(t *testing.T) {
+	for _, address := range []string{
+		"http://private-user:private-password@192.0.2.1",
+		"private-user:private-password@192.0.2.1",
+		"https://private-user@192.0.2.1:49443",
+		"http://192.0.2.1/private-path",
+		"192.0.2.1/private-path",
+		"http://192.0.2.1/?private-query",
+		"http://192.0.2.1/?",
+		"http://192.0.2.1/#private-fragment",
+	} {
+		client, err := New(address, "", "", nil)
+		if client != nil || err == nil || strings.Contains(err.Error(), "private") || strings.Contains(err.Error(), "192.0.2.1") {
+			t.Fatalf("address=%q client=%v err=%v", address, client, err)
+		}
+	}
+	for _, address := range []string{"192.0.2.1", "http://192.0.2.1/", "https://192.0.2.1:49443/"} {
+		if _, err := New(address, "", "", nil); err != nil {
+			t.Fatalf("address=%q err=%v", address, err)
+		}
+	}
+}
+
 func TestClientReadOnlyCommands(t *testing.T) {
 	server := fixtureServer(t)
 	defer server.Close()

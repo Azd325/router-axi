@@ -433,7 +433,12 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 				value, err = reader.DSL(ctx)
 			}
 		case "event-log":
-			value, err = reader.EventLog(ctx, opts.group, opts.limit)
+			var eventLog tr064.EventLog
+			eventLog, err = reader.EventLog(ctx, opts.group, opts.limit)
+			if err == nil {
+				eventLog.More = eventLogNext(opts, eventLog)
+			}
+			value = eventLog
 		case "firmware":
 			value, err = reader.Firmware(ctx)
 		case "account":

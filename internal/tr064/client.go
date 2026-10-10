@@ -730,6 +730,9 @@ func New(address, username, password string, httpClient *http.Client) (*Client, 
 	if base.Scheme != "http" && base.Scheme != "https" {
 		return nil, fmt.Errorf("router address must use http or https")
 	}
+	if base.User != nil || base.RawQuery != "" || base.ForceQuery || base.Fragment != "" || (base.EscapedPath() != "" && base.EscapedPath() != "/") {
+		return nil, errors.New("router address must be an origin without user information, query, fragment, or non-root path")
+	}
 	if base.Port() == "" {
 		port := "49000"
 		if base.Scheme == "https" {
