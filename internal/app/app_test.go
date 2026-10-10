@@ -296,12 +296,12 @@ func TestCompactCommands(t *testing.T) {
 		{"traffic", "observed_at: 2025-03-08T09:11:12Z"},
 		{"calls", "calls[1]{id,direction,remote,name,date,duration}:"},
 		{"devices", "devices[1]{name,ip_address,mac_address,interface_type,active}:"},
-		{"leases", "leases[2]{name,ip_address,mac_address,address_source,lease_time_remaining,interface_type,active}:"},
+		{"leases", "leases[2]{name,ip_address,mac_address,active}:"},
 		{"dhcp", "server_configurable: true"},
 		{"dsl", "downstream_current_kbps: 250000"},
-		{"wifi", "radios[1]{service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode}:"},
-		{"guest", "guests[1]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}:"},
-		{"forwards", "forwards[1]{enabled,protocol,external_port,internal_client,internal_port,description,remote_host,lease_duration}:"},
+		{"wifi", "radios[1]{ssid,enabled,band,channel,associated_devices}:"},
+		{"guest", "guests[1]{ssid,enabled,band,channel,associated_clients}:"},
+		{"forwards", "forwards[1]{enabled,protocol,external_port,internal_client,internal_port}:"},
 	}
 	for _, test := range tests {
 		t.Run(test.command, func(t *testing.T) {
@@ -425,7 +425,7 @@ func TestContextualFlagErrorsRespectCommandAction(t *testing.T) {
 		requireMsg bool
 	}{
 		{args: []string{"version", "--host", "router.test"}, want: "--host is not valid for version", requireMsg: true},
-		{args: []string{"wifi", "--bogus"}, want: "valid flags for wifi: --host, --json, --help", unwanted: "--instance, --confirm"},
+		{args: []string{"wifi", "--bogus"}, want: "valid flags for wifi: --host, --json, --fields, --help", unwanted: "--instance, --confirm"},
 		{args: []string{"wifi", "enable", "--bogus"}, want: "valid flags for wifi: --host, --json, --instance, --confirm, --help", requireMsg: true},
 	} {
 		code, stdout, stderr := runTest(t, test.args...)
@@ -584,7 +584,7 @@ func TestDefaultListLimitBoundary(t *testing.T) {
 		nextHint string
 	}{
 		{100, "devices[100]", "", ""},
-		{101, "devices[100]", "omitted: 1", "next: router-axi devices --all"},
+		{101, "devices[100]", "omitted: 1", "next[2]: router-axi devices --all,router-axi devices detail --ip <ip>"},
 	} {
 		application := New(func(Config) (Reader, error) {
 			return boundedDevicesReader{count: test.count}, nil
@@ -596,7 +596,7 @@ func TestDefaultListLimitBoundary(t *testing.T) {
 			t.Fatalf("count=%d code=%d stdout=%q stderr=%q", test.count, code, out, stderr.String())
 		}
 		if test.omitted == "" {
-			if strings.Contains(out, "omitted:") || strings.Contains(out, "next:") {
+			if strings.Contains(out, "omitted:") || strings.Contains(out, "--all") {
 				t.Fatalf("count=%d unexpected truncation hint: %q", test.count, out)
 			}
 		} else if !strings.Contains(out, test.omitted) || !strings.Contains(out, test.nextHint) {
@@ -609,7 +609,7 @@ func TestDevicesEmptyOutputIsDefinitive(t *testing.T) {
 	application := New(func(Config) (Reader, error) { return emptyDevicesReader{}, nil }, func(string) string { return "" })
 	var stdout, stderr bytes.Buffer
 	code := application.Run(t.Context(), []string{"devices"}, &stdout, &stderr)
-	if code != ExitOK || stdout.String() != "devices[0]: no devices found\n" || stderr.Len() != 0 {
+	if code != ExitOK || stdout.String() != "devices: no devices found\n" || stderr.Len() != 0 {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 
@@ -752,7 +752,7 @@ func TestWiFiOutputContract(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"wifi"}, "radios[1]{service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration1,synthetic-ap,true,6,2400,ax,2,11i\n"},
+		{[]string{"wifi"}, "radios[1]{ssid,enabled,band,channel,associated_devices}:\n  synthetic-ap,true,\"2400\",6,2\nnext: router-axi wifi detail\n"},
 		{[]string{"wifi", "--json"}, `{"radios":[{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration1","ssid":"synthetic-ap","enabled":true,"channel":6,"band":"2400","standard":"ax","associated_devices":2,"security_mode":"11i"}],"total":1}` + "\n"},
 	} {
 		code, stdout, stderr := runTest(t, test.args...)
@@ -767,7 +767,7 @@ func TestGuestOutputContract(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"guest"}, "guests[1]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration2,synthetic-guest,true,36,5000,ax,1,11iandWPA3\nguest_configuration[1]{service_id,timeout_active,timeout,time_remain,no_forced_off,user_isolation}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration2,unknown,unknown,unknown,unknown,unknown\n"},
+		{[]string{"guest"}, "guests[1]{ssid,enabled,band,channel,associated_clients}:\n  synthetic-guest,true,\"5000\",36,1\nguest_configuration[1]{service_id,timeout_active,timeout,time_remain,no_forced_off,user_isolation}:\n  \"urn:WLANConfiguration-com:serviceId:WLANConfiguration2\",unknown,unknown,unknown,unknown,unknown\n"},
 		{[]string{"guest", "--json"}, `{"guests":[{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","ssid":"synthetic-guest","enabled":true,"channel":36,"band":"5000","standard":"ax","associated_clients":1,"security_mode":"11iandWPA3","configuration":{"timeout_active":null,"timeout":null,"time_remain":null,"no_forced_off":null,"user_isolation":null}}],"total":1}` + "\n"},
 	} {
 		code, stdout, stderr := runTest(t, test.args...)
@@ -792,7 +792,7 @@ func TestGuestEmptyAndFailureOutput(t *testing.T) {
 			}
 			application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })
 			args := []string{"guest"}
-			want := "guests[0]: no guest Wi-Fi networks found\n"
+			want := "guests: no guest Wi-Fi networks found\n"
 			if jsonOutput {
 				args = append(args, "--json")
 				want = "{\"guests\":[],\"total\":0}\n"
@@ -824,7 +824,7 @@ func TestGuestFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "guest", "--help")
-	if code != ExitOK || stdout != "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID, aggregate radio state, and raw timeout/isolation configuration; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n" || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi guest [--fields NAMES] [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID, aggregate radio state, and raw timeout/isolation configuration; never keys, BSSIDs, or client details. Default columns: ssid,enabled,band,channel,associated_clients; --fields takes comma-separated columns from service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode; --json always reports every field.\nexamples: router-axi guest; router-axi guest --json; router-axi guest --fields service_id,ssid,standard\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -844,7 +844,7 @@ func TestWiFiEmptyAndFailureOutput(t *testing.T) {
 			}
 			application := New(func(Config) (Reader, error) { return reader, nil }, func(string) string { return "" })
 			args := []string{"wifi"}
-			want := "radios[0]: no Wi-Fi services found\n"
+			want := "radios: no Wi-Fi services found\n"
 			if jsonOutput {
 				args = append(args, "--json")
 				want = "{\"radios\":[],\"total\":0}\n"
@@ -951,7 +951,7 @@ func TestWiFiFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "wifi", "--help")
-	if code != ExitOK || stdout != "usage: router-axi wifi [detail [--instance N]] [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection; wifi detail reports one radio's safe documented properties. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi detail --instance 1; router-axi wifi disable --instance 1 --confirm\n" || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi wifi [--fields NAMES] [detail [--instance N]] [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection. Default columns: ssid,enabled,band,channel,associated_devices; --fields takes comma-separated columns from service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode; --json always reports every field. wifi detail reports one radio's safe documented properties. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi --fields service_id,ssid; router-axi wifi detail --instance 1; router-axi wifi disable --instance 1 --confirm\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 	for action, want := range map[string]string{
@@ -976,20 +976,20 @@ func TestWiFiDetailPassesInstanceAndPrintsCompactAndJSON(t *testing.T) {
 		{
 			name:    "single radio",
 			args:    []string{"wifi", "detail"},
-			compact: "wifi_detail:\n  instance: urn:WLANConfiguration-com:serviceId:WLANConfiguration0\n  enabled: true\n  status: Up\n  standard: ax\n  max_bit_rate: unknown\n  channel: 36\n  band: 5000\n",
+			compact: "wifi_detail:\n  instance: urn:WLANConfiguration-com:serviceId:WLANConfiguration0\n  enabled: true\n  status: Up\n  standard: ax\n  max_bit_rate: unknown\n  channel: 36\n  band: \"5000\"\n",
 			json:    `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration0","enabled":true,"status":"Up","standard":"ax","max_bit_rate":null,"channel":36,"band":"5000"}` + "\n",
 		},
 		{
 			name:    "explicit instance",
 			args:    []string{"wifi", "detail", "--instance", "2"},
-			compact: "wifi_detail:\n  instance: urn:WLANConfiguration-com:serviceId:WLANConfiguration2\n  enabled: true\n  status: Up\n  standard: ax\n  max_bit_rate: unknown\n  channel: 36\n  band: 5000\n",
+			compact: "wifi_detail:\n  instance: urn:WLANConfiguration-com:serviceId:WLANConfiguration2\n  enabled: true\n  status: Up\n  standard: ax\n  max_bit_rate: unknown\n  channel: 36\n  band: \"5000\"\n",
 			json:    `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","enabled":true,"status":"Up","standard":"ax","max_bit_rate":null,"channel":36,"band":"5000"}` + "\n",
 		},
 		{
 			name:    "missing optional fields",
 			args:    []string{"wifi", "detail", "--instance", "2"},
 			omit:    true,
-			compact: "wifi_detail:\n  instance: urn:WLANConfiguration-com:serviceId:WLANConfiguration2\n  enabled: true\n  status: unknown\n  standard: ax\n  max_bit_rate: unknown\n  channel: unknown\n  band: 5000\n",
+			compact: "wifi_detail:\n  instance: urn:WLANConfiguration-com:serviceId:WLANConfiguration2\n  enabled: true\n  status: unknown\n  standard: ax\n  max_bit_rate: unknown\n  channel: unknown\n  band: \"5000\"\n",
 			json:    `{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","enabled":true,"status":null,"standard":"ax","max_bit_rate":null,"channel":null,"band":"5000"}` + "\n",
 		},
 	} {
@@ -1058,7 +1058,7 @@ func TestWiFiDetailStructuredErrors(t *testing.T) {
 		code int
 		want string
 	}{
-		{name: "ambiguous instance", err: &tr064.Error{Kind: "usage", Code: "ambiguous_instance", Operation: "wifi detail", Message: "router advertises 3 WLAN instances; specify the target with --instance"}, code: ExitUsage, want: "hint: router-axi wifi detail --instance N"},
+		{name: "ambiguous instance", err: &tr064.Error{Kind: "usage", Code: "ambiguous_instance", Operation: "wifi detail", Message: "router advertises 3 WLAN instances; specify the target with --instance"}, code: ExitUsage, want: "hint: router-axi wifi detail --instance <n>"},
 		{name: "unsupported capability", err: &tr064.Error{Kind: "unsupported", Operation: "wifi detail", Message: "router does not support the documented Wi-Fi detail actions"}, code: ExitUnsupported, want: "unsupported_capability"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1074,8 +1074,8 @@ func TestWiFiDetailStructuredErrors(t *testing.T) {
 
 func TestCallsAndDevicesHelp(t *testing.T) {
 	for command, want := range map[string]string{
-		"calls":   "usage: router-axi calls [--all] [--host ADDRESS] [--json] [--help]\nRead-only call history. Defaults to the 100 most recent entries; --all lists everything. No required arguments.\nexamples: router-axi calls; router-axi calls --all; router-axi calls --all --json\n",
-		"devices": "usage: router-axi devices [--all] [detail --ip ADDRESS] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments. devices detail reports one device selected by its IPv4 address.\nexamples: router-axi devices; router-axi devices --all --json; router-axi devices detail --ip 192.0.2.20\n",
+		"calls":   "usage: router-axi calls [--all] [--fields NAMES] [--host ADDRESS] [--json] [--help]\nRead-only call history. Defaults to the 100 most recent entries; --all lists everything. No required arguments. --fields takes comma-separated columns from id,direction,remote,name,date,duration (default: all); --json always reports every field.\nexamples: router-axi calls; router-axi calls --all; router-axi calls --fields date,duration; router-axi calls --all --json\n",
+		"devices": "usage: router-axi devices [--all] [--fields NAMES] [detail --ip ADDRESS] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments. --fields takes comma-separated columns from name,ip_address,mac_address,interface_type,active (default: all); --json always reports every field. devices detail reports one device selected by its IPv4 address.\nexamples: router-axi devices; router-axi devices --all --json; router-axi devices --fields name,ip_address; router-axi devices detail --ip 192.0.2.20\n",
 	} {
 		code, stdout, stderr := runTest(t, command, "--help")
 		if code != ExitOK || stdout != want || stderr != "" {
@@ -1095,7 +1095,7 @@ func TestForwardsOutputContract(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"forwards"}, "forwards[2]{enabled,protocol,external_port,internal_client,internal_port,description,remote_host,lease_duration}:\n  true,\"TCP,UDP\",8443,192.0.2.10,443,\"synthetic, \\\"service\\\"\",198.51.100.10,unknown\n  false,UDP,5353,192.0.2.11,5353,\"synthetic\\nservice\",\"\",0\n"},
+		{[]string{"forwards"}, "forwards[2]{enabled,protocol,external_port,internal_client,internal_port}:\n  true,\"TCP,UDP\",8443,192.0.2.10,443\n  false,UDP,5353,192.0.2.11,5353\n"},
 		{[]string{"forwards", "--json"}, `{"forwards":[{"enabled":true,"protocol":"TCP,UDP","external_port":8443,"internal_client":"192.0.2.10","internal_port":443,"description":"synthetic, \"service\"","remote_host":"198.51.100.10"},{"enabled":false,"protocol":"UDP","external_port":5353,"internal_client":"192.0.2.11","internal_port":5353,"description":"synthetic\nservice","remote_host":"","lease_duration":0}],"total":2,"omitted":0}` + "\n"},
 	} {
 		var stdout, stderr bytes.Buffer
@@ -1143,7 +1143,7 @@ func TestForwardsAreBoundedAndEmptyIsExplicit(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"forwards"}, "forwards[0]: no port forwards found\n"},
+		{[]string{"forwards"}, "forwards: no port forwards found\n"},
 		{[]string{"forwards", "--json"}, "{\"forwards\":[],\"total\":0,\"omitted\":0}\n"},
 	} {
 		var stdout, stderr bytes.Buffer
@@ -1236,6 +1236,8 @@ func TestForwardsClientOutputBoundary(t *testing.T) {
 			args := []string{"forwards"}
 			if jsonOutput {
 				args = append(args, "--json")
+			} else {
+				args = append(args, "--fields", "internal_client,description")
 			}
 			var stdout, stderr bytes.Buffer
 			code := application.Run(t.Context(), args, &stdout, &stderr)
@@ -1263,7 +1265,7 @@ func TestForwardsFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "forwards", "--help")
-	if code != ExitOK || stdout != "usage: router-axi forwards [--all] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi forwards; router-axi forwards --all --json\n" || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi forwards [--all] [--fields NAMES] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments. Default columns: enabled,protocol,external_port,internal_client,internal_port; --fields takes comma-separated columns from enabled,protocol,external_port,internal_client,internal_port,description,remote_host,lease_duration; --json always reports every field.\nexamples: router-axi forwards; router-axi forwards --all --json; router-axi forwards --fields external_port,description\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -1299,7 +1301,7 @@ func TestLeasesOutputContract(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"leases"}, "leases[2]{name,ip_address,mac_address,address_source,lease_time_remaining,interface_type,active}:\n  sanitized-static-device,192.0.2.10,02:00:00:00:00:10,Static,unknown,Ethernet,true\n  \"\",192.0.2.20,02:00:00:00:00:20,DHCP,3600,802.11,false\n"},
+		{[]string{"leases"}, "leases[2]{name,ip_address,mac_address,active}:\n  sanitized-static-device,192.0.2.10,\"02:00:00:00:00:10\",true\n  \"\",192.0.2.20,\"02:00:00:00:00:20\",false\n"},
 		{[]string{"leases", "--json"}, `{"leases":[{"name":"sanitized-static-device","ip_address":"192.0.2.10","mac_address":"02:00:00:00:00:10","address_source":"Static","interface_type":"Ethernet","active":true},{"ip_address":"192.0.2.20","mac_address":"02:00:00:00:00:20","address_source":"DHCP","lease_time_remaining":3600,"interface_type":"802.11","active":false}],"total":2,"omitted":0}` + "\n"},
 	} {
 		var stdout, stderr bytes.Buffer
@@ -1465,7 +1467,7 @@ func TestLeasesEmptyOutputIsDefinitive(t *testing.T) {
 	application := New(func(Config) (Reader, error) { return emptyLeasesReader{}, nil }, func(string) string { return "" })
 	var stdout, stderr bytes.Buffer
 	code := application.Run(t.Context(), []string{"leases"}, &stdout, &stderr)
-	if code != ExitOK || stdout.String() != "leases[0]: no host observations found\n" || stderr.Len() != 0 {
+	if code != ExitOK || stdout.String() != "leases: no host observations found\n" || stderr.Len() != 0 {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	stdout.Reset()
@@ -1542,7 +1544,7 @@ func TestLeasesFlagsAndHelp(t *testing.T) {
 		}
 	}
 	code, stdout, stderr := runTest(t, "leases", "--help")
-	if code != ExitOK || stdout != "usage: router-axi leases [--all] [--host ADDRESS] [--json] [--help]\nRead-only observed lease metadata from the Hosts table: name, addresses, address source, and remaining lease time. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi leases; router-axi leases --all --json\n" || stderr != "" {
+	if code != ExitOK || stdout != "usage: router-axi leases [--all] [--fields NAMES] [--host ADDRESS] [--json] [--help]\nRead-only observed lease metadata from the Hosts table: name, addresses, address source, and remaining lease time. Defaults to 100 entries; --all lists everything. No required arguments. Default columns: name,ip_address,mac_address,active; --fields takes comma-separated columns from name,ip_address,mac_address,address_source,lease_time_remaining,interface_type,active; --json always reports every field.\nexamples: router-axi leases; router-axi leases --all --json; router-axi leases --fields name,ip_address,lease_time_remaining\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
@@ -1722,7 +1724,7 @@ func TestStatusDistinguishesUntrustedCertificateFromUnreachableRouter(t *testing
 func TestInternalErrorsUseFixedMessage(t *testing.T) {
 	for _, jsonOutput := range []bool{false, true} {
 		var stdout bytes.Buffer
-		spec := protocolError(errors.New("private raw dependency failure 192.0.2.77"))
+		spec := protocolError(errors.New("private raw dependency failure 192.0.2.77"), "")
 		if code := writeError(&stdout, jsonOutput, spec.exit, spec.detail.Code, spec.detail.Message, spec.detail.Hint); code != ExitInternal {
 			t.Fatalf("code=%d", code)
 		}

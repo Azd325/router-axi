@@ -50,7 +50,7 @@ type hookLocation struct {
 
 func (a *App) runSession(opts options, stdout io.Writer) int {
 	if opts.action != "dashboard" {
-		return writeError(stdout, opts.json, ExitUsage, "invalid_arguments", "session accepts one action: dashboard", "router-axi session --help")
+		return writeError(stdout, opts.json, ExitUsage, "invalid_arguments", "session accepts one action: dashboard", "router-axi session dashboard")
 	}
 	if opts.json {
 		return writeJSON(stdout, map[string]any{"session": map[string]string{"context": "offline", "version": a.Version}})
@@ -64,14 +64,14 @@ func (a *App) runSession(opts options, stdout io.Writer) int {
 
 func (a *App) runSetup(opts options, stdout io.Writer) int {
 	if opts.agent == "" {
-		return writeError(stdout, opts.json, ExitUsage, "invalid_arguments", "setup requires --agent claude, codex, opencode, or all", "router-axi setup --help")
+		return writeError(stdout, opts.json, ExitUsage, "invalid_arguments", "setup requires --agent claude, codex, opencode, or all", "router-axi setup "+opts.action+" --agent all")
 	}
 	agents, err := setupAgents(opts.agent)
 	if err != nil {
-		return writeError(stdout, opts.json, ExitUsage, "invalid_arguments", err.Error(), "router-axi setup --help")
+		return writeError(stdout, opts.json, ExitUsage, "invalid_arguments", err.Error(), "router-axi setup "+opts.action+" --agent all")
 	}
 	if opts.action == "" {
-		return writeError(stdout, opts.json, ExitUsage, "invalid_arguments", "setup requires one action: install, check, or uninstall", "router-axi setup --help")
+		return writeError(stdout, opts.json, ExitUsage, "invalid_arguments", "setup requires one action: install, check, or uninstall", "router-axi setup check --agent "+opts.agent)
 	}
 	results := make([]setupResult, 0, len(agents))
 	for _, agent := range agents {
@@ -83,6 +83,12 @@ func (a *App) runSetup(opts options, stdout io.Writer) int {
 	}
 	if opts.json {
 		return writeJSON(stdout, map[string]any{"setup": results})
+	}
+	if len(results) > 1 {
+		if err := writeSetupTable(stdout, results); err != nil {
+			return ExitInternal
+		}
+		return ExitOK
 	}
 	for _, result := range results {
 		if _, err := fmt.Fprintf(stdout, "setup:\n  agent: %s\n  state: %s\n", result.Agent, result.State); err != nil {
@@ -100,6 +106,15 @@ func (a *App) runSetup(opts options, stdout io.Writer) int {
 		}
 	}
 	return ExitOK
+}
+
+func writeSetupTable(w io.Writer, results []setupResult) error {
+	return writeTable(w, "setup", results, []tableColumn[setupResult]{
+		{"agent", func(r setupResult) string { return toon(r.Agent) }},
+		{"state", func(r setupResult) string { return toon(r.State) }},
+		{"command", func(r setupResult) string { return toon(r.Command) }},
+		{"codex_hooks_feature", func(r setupResult) string { return toon(r.CodexHooksFeature) }},
+	}, []string{"agent", "state", "command", "codex_hooks_feature"}, nil)
 }
 
 func (a *App) setupFailureMessage(err error) string {

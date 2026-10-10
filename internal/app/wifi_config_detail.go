@@ -30,7 +30,7 @@ func writeGuestConfiguration(w io.Writer, guests []tr064.GuestNetwork) error {
 	}
 	for _, guest := range guests {
 		c := guest.Configuration
-		if _, err := fmt.Fprintf(w, "  %s,%s,%s,%s,%s,%s\n", toon(guest.ServiceID), optionalToon(c.TimeoutActive), optionalToon(c.Timeout), optionalToon(c.TimeRemain), optionalToon(c.NoForcedOff), optionalToon(c.UserIsolation)); err != nil {
+		if _, err := fmt.Fprintf(w, "  %s,%s,%s,%s,%s,%s\n", tableCell(toon(guest.ServiceID)), tableCell(optionalToon(c.TimeoutActive)), tableCell(optionalToon(c.Timeout)), tableCell(optionalToon(c.TimeRemain)), tableCell(optionalToon(c.NoForcedOff)), tableCell(optionalToon(c.UserIsolation))); err != nil {
 			return err
 		}
 	}

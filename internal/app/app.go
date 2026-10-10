@@ -103,6 +103,7 @@ type options struct {
 	versionFlag                                bool
 	group                                      string
 	limit                                      int
+	fields                                     []string
 }
 
 type callResult struct {
@@ -240,7 +241,12 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 				opts.json = true
 			}
 		}
-		return writeError(stderr, opts.json, ExitUsage, "invalid_arguments", err.Error(), usageHint(opts))
+		hint := usageHint(opts)
+		var usage *usageError
+		if errors.As(err, &usage) {
+			hint = usage.hint
+		}
+		return writeError(stderr, opts.json, ExitUsage, "invalid_arguments", err.Error(), hint)
 	}
 	if opts.versionFlag {
 		if _, err := fmt.Fprintln(stdout, a.Version); err != nil {
@@ -288,7 +294,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	reader, err := a.factory(Config{Host: host, Username: a.getenv("ROUTER_AXI_USERNAME"), Password: a.getenv("ROUTER_AXI_PASSWORD")})
 	if err != nil {
-		return writeError(stderr, opts.json, ExitUsage, "invalid_configuration", invalidRouterEndpoint, "router-axi help")
+		return writeError(stderr, opts.json, ExitUsage, "invalid_configuration", invalidRouterEndpoint, "router-axi status --host <address>")
 	}
 	if opts.command == "watch" {
 		return runWatch(ctx, reader, opts, stdout, diagnostics, a.watchSignals)
@@ -296,35 +302,35 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if opts.command == "reboot" {
 		result, err := reader.Reboot(ctx, opts.confirm)
 		if err != nil {
-			return renderProtocolError(stderr, opts.json, err)
+			return renderProtocolError(stderr, opts, err)
 		}
 		return writeReboot(stdout, result, opts.json)
 	}
 	if wanReconnect(opts) {
 		result, err := reader.WANReconnect(ctx, opts.confirm)
 		if err != nil {
-			return renderProtocolError(stderr, opts.json, err)
+			return renderProtocolError(stderr, opts, err)
 		}
 		return writeWANReconnect(stdout, result, opts.json)
 	}
 	if opts.command == "wake" {
 		result, err := reader.Wake(ctx, opts.mac, opts.confirm)
 		if err != nil {
-			return renderProtocolError(stderr, opts.json, err)
+			return renderProtocolError(stderr, opts, err)
 		}
 		return writeWake(stdout, result, opts.json)
 	}
 	if firmwareCheck(opts) {
 		result, err := reader.FirmwareCheck(ctx, opts.confirm)
 		if err != nil {
-			return renderProtocolError(stderr, opts.json, err)
+			return renderProtocolError(stderr, opts, err)
 		}
 		return writeFirmwareCheck(stdout, result, opts.json)
 	}
 	if opts.command == "backup" {
 		passphrase := a.getenv("ROUTER_AXI_BACKUP_PASSWORD")
 		if passphrase == "" {
-			return writeError(stderr, opts.json, ExitUsage, "backup_passphrase_missing", "backup requires ROUTER_AXI_BACKUP_PASSWORD; the export passphrase is never read from arguments or other variables", "router-axi backup --help")
+			return writeError(stderr, opts.json, ExitUsage, "backup_passphrase_missing", "backup requires ROUTER_AXI_BACKUP_PASSWORD; the export passphrase is never read from arguments or other variables", backupUsageHint("backup_passphrase_missing", opts.host))
 		}
 		return a.runBackup(ctx, reader, opts, stdout, stderr, passphrase)
 	}
@@ -339,7 +345,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 				if writeJSON(stdout, wifiPreviewJSON(result)) != ExitOK {
 					return ExitInternal
 				}
-			} else if err := writeWiFiPreview(stdout, result, opts.host); err != nil {
+			} else if err := writeWiFiPreview(stdout, result, opts); err != nil {
 				return ExitInternal
 			}
 			return ExitOK
@@ -452,23 +458,23 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if err != nil {
 		if opts.command == "doctor" {
 			if opts.json {
-				return writeDoctorPartialError(stdout, value.(tr064.Doctor), protocolError(err))
-			} else if writeErr := writeCompact(a, stdout, opts.command, value); writeErr != nil {
+				return writeDoctorPartialError(stdout, value.(tr064.Doctor), protocolError(err, opts.host))
+			} else if writeErr := writeCompact(a, stdout, opts, value); writeErr != nil {
 				return ExitInternal
 			}
 		}
-		return renderProtocolError(stderr, opts.json, err)
+		return renderProtocolError(stderr, opts, err)
 	}
 	if opts.json {
 		return writeJSON(stdout, value)
 	}
 	if mutation {
-		if err := writeWiFiMutation(stdout, value.(wifiMutationResult).WiFi); err != nil {
+		if err := writeWiFiMutation(stdout, value.(wifiMutationResult).WiFi, opts); err != nil {
 			return ExitInternal
 		}
 		return ExitOK
 	}
-	if err := writeCompact(a, stdout, opts.command, value); err != nil {
+	if err := writeCompact(a, stdout, opts, value); err != nil {
 		return ExitInternal
 	}
 	return ExitOK
@@ -476,6 +482,7 @@ func (a *App) Run(ctx context.Context, args []string, stdout, stderr io.Writer) 
 
 func parse(args []string) (options, error) {
 	opts := options{limit: tr064.DefaultEventLogLimit, interval: defaultWatchInterval, count: defaultWatchCount, flags: map[string]bool{}}
+	rawFields := ""
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--group":
@@ -583,6 +590,13 @@ func parse(args []string) (options, error) {
 				return opts, errors.New("--agent requires claude, codex, opencode, or all")
 			}
 			opts.agent = args[i]
+		case "--fields":
+			opts.flags["--fields"] = true
+			i++
+			if rawFields != "" || i >= len(args) || args[i] == "" || strings.HasPrefix(args[i], "-") {
+				return opts, errors.New("--fields requires one comma-separated list of column names")
+			}
+			rawFields = args[i]
 		case "--force":
 			opts.flags["--force"] = true
 			opts.force = true
@@ -680,6 +694,13 @@ func parse(args []string) (options, error) {
 	if err := validateFlagContext(opts); err != nil {
 		return opts, err
 	}
+	if rawFields != "" && !opts.help && fieldsCommand(opts) {
+		fields, err := parseFields(opts.command, rawFields, opts.host)
+		if err != nil {
+			return opts, err
+		}
+		opts.fields = fields
+	}
 	if deviceDetail(opts) && !opts.ipSet && !opts.help {
 		return opts, errors.New("devices detail requires --ip ADDRESS")
 	}
@@ -720,16 +741,16 @@ var commandHelp = map[string]string{
 	"overview": "usage: router-axi overview [--host ADDRESS] [--json] [--help]\nRead-only combined view: router identity, WAN state, and traffic totals in one read.\nexamples: router-axi overview; router-axi overview --json\n",
 	"wan":      "usage: router-axi wan [detail] [--host ADDRESS] [--json] [reconnect [--confirm]] [--help]\nRead-only internet connection state: status, external address, IP family, uptime, and last error. Use wan detail for bounded physical-link properties, optional router-reported rates, totals, and DNS, and connection type, IPv6 status, NAT, and PPP disconnect prevention. wan reconnect drops the internet connection once: preview without --confirm.\nexamples: router-axi wan; router-axi wan --json; router-axi wan detail; router-axi wan reconnect\n",
 	"traffic":  "usage: router-axi traffic [--host ADDRESS] [--json] [--help]\nRead-only total downloaded and uploaded byte counters with the observation time.\nexamples: router-axi traffic; router-axi traffic --json\n",
-	"calls":    "usage: router-axi calls [--all] [--host ADDRESS] [--json] [--help]\nRead-only call history. Defaults to the 100 most recent entries; --all lists everything. No required arguments.\nexamples: router-axi calls; router-axi calls --all; router-axi calls --all --json\n",
-	"devices":  "usage: router-axi devices [--all] [detail --ip ADDRESS] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments. devices detail reports one device selected by its IPv4 address.\nexamples: router-axi devices; router-axi devices --all --json; router-axi devices detail --ip 192.0.2.20\n",
-	"leases":   "usage: router-axi leases [--all] [--host ADDRESS] [--json] [--help]\nRead-only observed lease metadata from the Hosts table: name, addresses, address source, and remaining lease time. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi leases; router-axi leases --all --json\n",
+	"calls":    "usage: router-axi calls [--all] [--fields NAMES] [--host ADDRESS] [--json] [--help]\nRead-only call history. Defaults to the 100 most recent entries; --all lists everything. No required arguments. --fields takes comma-separated columns from id,direction,remote,name,date,duration (default: all); --json always reports every field.\nexamples: router-axi calls; router-axi calls --all; router-axi calls --fields date,duration; router-axi calls --all --json\n",
+	"devices":  "usage: router-axi devices [--all] [--fields NAMES] [detail --ip ADDRESS] [--host ADDRESS] [--json] [--help]\nRead-only connected and remembered LAN clients. Defaults to 100 entries; --all lists everything. No required arguments. --fields takes comma-separated columns from name,ip_address,mac_address,interface_type,active (default: all); --json always reports every field. devices detail reports one device selected by its IPv4 address.\nexamples: router-axi devices; router-axi devices --all --json; router-axi devices --fields name,ip_address; router-axi devices detail --ip 192.0.2.20\n",
+	"leases":   "usage: router-axi leases [--all] [--fields NAMES] [--host ADDRESS] [--json] [--help]\nRead-only observed lease metadata from the Hosts table: name, addresses, address source, and remaining lease time. Defaults to 100 entries; --all lists everything. No required arguments. Default columns: name,ip_address,mac_address,active; --fields takes comma-separated columns from name,ip_address,mac_address,address_source,lease_time_remaining,interface_type,active; --json always reports every field.\nexamples: router-axi leases; router-axi leases --all --json; router-axi leases --fields name,ip_address,lease_time_remaining\n",
 	"dhcp":     "usage: router-axi dhcp [--host ADDRESS] [--json] [--help]\nRead-only DHCP server configuration from documented LANHostConfigManagement actions advertised by the router. Reports server state and available range, subnet, router, DNS, and domain settings; never reservation inventory.\nexamples: router-axi dhcp; router-axi dhcp --json\n",
 	"firmware": "usage: router-axi firmware [--host ADDRESS] [--json] [check [--confirm]] [--help]\nRead-only installed firmware, reported update availability, and auto-update configuration from UserInterface:GetInfo and X_AVM-DE_GetInfo. Does not refresh the update check or change configuration. firmware check asks the router to check for an update once: preview without --confirm.\nexamples: router-axi firmware; router-axi firmware --json; router-axi firmware check\n",
 	"account":  "usage: router-axi account [--host ADDRESS] [--json] [--help]\nRead-only current username, configured rights, anonymous login, default password posture, and second-factor enabled state. Never enumerates users or retrieves passwords.\nexamples: router-axi account; router-axi account --json\n",
 	"dsl":      "usage: router-axi dsl [detail] [--host ADDRESS] [--json] [--help]\nRead-only DSL link diagnostics from documented WANDSLInterfaceConfig:X_AVM-DE_GetDSLInfo. Reports link state, rates, margins, attenuation, and error counters; never credentials or line identifiers. dsl detail reports the total error counters and the router's line-fault diagnosis.\nexamples: router-axi dsl; router-axi dsl --json; router-axi dsl detail\n",
-	"wifi":     "usage: router-axi wifi [detail [--instance N]] [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection; wifi detail reports one radio's safe documented properties. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi detail --instance 1; router-axi wifi disable --instance 1 --confirm\n",
-	"guest":    "usage: router-axi guest [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID, aggregate radio state, and raw timeout/isolation configuration; never keys, BSSIDs, or client details.\nexamples: router-axi guest; router-axi guest --json\n",
-	"forwards": "usage: router-axi forwards [--all] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments.\nexamples: router-axi forwards; router-axi forwards --all --json\n",
+	"wifi":     "usage: router-axi wifi [--fields NAMES] [detail [--instance N]] [--host ADDRESS] [--json] [enable|disable [--instance N] --confirm] [--help]\nRead-only Wi-Fi radio inspection. Default columns: ssid,enabled,band,channel,associated_devices; --fields takes comma-separated columns from service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode; --json always reports every field. wifi detail reports one radio's safe documented properties. wifi enable|disable changes one radio: --instance N (1 or greater; required when the router advertises more than one radio), preview without --confirm.\nexamples: router-axi wifi; router-axi wifi --fields service_id,ssid; router-axi wifi detail --instance 1; router-axi wifi disable --instance 1 --confirm\n",
+	"guest":    "usage: router-axi guest [--fields NAMES] [--host ADDRESS] [--json] [--help]\nRead-only documented guest Wi-Fi inspection: public SSID, aggregate radio state, and raw timeout/isolation configuration; never keys, BSSIDs, or client details. Default columns: ssid,enabled,band,channel,associated_clients; --fields takes comma-separated columns from service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode; --json always reports every field.\nexamples: router-axi guest; router-axi guest --json; router-axi guest --fields service_id,ssid,standard\n",
+	"forwards": "usage: router-axi forwards [--all] [--fields NAMES] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments. Default columns: enabled,protocol,external_port,internal_client,internal_port; --fields takes comma-separated columns from enabled,protocol,external_port,internal_client,internal_port,description,remote_host,lease_duration; --json always reports every field.\nexamples: router-axi forwards; router-axi forwards --all --json; router-axi forwards --fields external_port,description\n",
 	"exposure": "usage: router-axi exposure [--host ADDRESS] [--json] [--help]\nRead-only exposure flags of router services: enabled, port, and status values only. remote reports remote_access and ddns from X_AVM-DE_RemoteAccess:GetInfo and GetDDNSInfo and myfritz from X_AVM-DE_MyFritz:GetInfo. local reports storage, upnp, webdav, speedtest, and tr069 from GetInfo of X_AVM-DE_Storage, X_AVM-DE_UPnP, X_AVM-DE_WebDAVClient, X_AVM-DE_Speedtest, and ManagementServer. Each action is validated against the service description first.\nA part whose service or action the router does not advertise or rejects as an invalid action is unsupported (null in JSON); the command fails as unsupported only when no part is available. Arguments that the documents added later are unknown when absent. Usernames, e-mail addresses, host names, URLs, and every other returned identifier are never kept or printed. tr069 reports the periodic-inform and managed-upgrade flags; the action returns no TR-069 enable flag.\nThe logged-in account needs the configuration right for upnp, webdav, speedtest, and tr069. Port-forwarding rules are in router-axi forwards.\nexamples: router-axi exposure; router-axi exposure --json\n",
 	"version":  "usage: router-axi version [--json] [--help]\nPrint the router-axi version without contacting the router.\nexamples: router-axi version; router-axi version --json\n",
 }
@@ -773,6 +794,7 @@ var flagSpecs = map[string]flagSpec{
 	"--all": {valid: func(opts options) bool {
 		return opts.command == "calls" || opts.command == "devices" && opts.action == "" || opts.command == "leases" || opts.command == "forwards"
 	}, invalid: "--all is valid only for calls, devices, leases, or forwards"},
+	"--fields":   {valid: fieldsCommand, invalid: "--fields is valid only with calls, devices, guest, leases, forwards, or wifi (not wifi detail)"},
 	"--instance": {valid: wifiTargeted, invalid: "--instance is valid only with wifi detail, wifi enable, or wifi disable"},
 	"--ip":       {valid: deviceDetail, invalid: "--ip is valid only with devices detail"},
 	"--confirm":  {valid: confirmable, invalid: "--confirm is valid only with firmware check, reboot, wake, wan reconnect, wifi enable, or wifi disable"},
@@ -790,18 +812,18 @@ var commandFlags = map[string][]string{
 	"overview": {"--host", "--json", "--help"},
 	"wan":      {"--host", "--json", "--confirm", "--help"},
 	"traffic":  {"--host", "--json", "--help"},
-	"guest":    {"--host", "--json", "--help"},
+	"guest":    {"--host", "--json", "--fields", "--help"},
 	"watch":    {"--host", "--json", "--interval", "--count", "--help"},
-	"calls":    {"--host", "--json", "--all", "--help"},
-	"devices":  {"--host", "--json", "--all", "--ip", "--help"},
-	"leases":   {"--host", "--json", "--all", "--help"},
+	"calls":    {"--host", "--json", "--all", "--fields", "--help"},
+	"devices":  {"--host", "--json", "--all", "--fields", "--ip", "--help"},
+	"leases":   {"--host", "--json", "--all", "--fields", "--help"},
 	"dhcp":     {"--host", "--json", "--help"},
 	"dsl":      {"--host", "--json", "--help"},
 	"firmware": {"--host", "--json", "--confirm", "--help"},
 	"account":  {"--host", "--json", "--help"},
-	"forwards": {"--host", "--json", "--all", "--help"},
+	"forwards": {"--host", "--json", "--all", "--fields", "--help"},
 	"exposure": {"--host", "--json", "--help"},
-	"wifi":     {"--host", "--json", "--instance", "--confirm", "--help"},
+	"wifi":     {"--host", "--json", "--fields", "--instance", "--confirm", "--help"},
 	"reboot":   {"--host", "--json", "--confirm", "--help"},
 	"wake":     {"--host", "--json", "--confirm", "--help"},
 	"backup":   {"--host", "--json", "--output", "--force", "--help"},
@@ -824,7 +846,7 @@ func validateFlagContext(opts options) error {
 	for _, flag := range flags {
 		allowed[flag] = true
 	}
-	for _, flag := range []string{"--group", "--limit", "--interval", "--count", "--all", "--instance", "--ip", "--confirm", "--output", "--force", "--path", "--agent", "--host", "--json", "--help"} {
+	for _, flag := range []string{"--group", "--limit", "--interval", "--count", "--all", "--fields", "--instance", "--ip", "--confirm", "--output", "--force", "--path", "--agent", "--host", "--json", "--help"} {
 		if !opts.flags[flag] {
 			continue
 		}
@@ -946,8 +968,8 @@ func collapseHome(path string, home string, err error) string {
 	return path
 }
 
-func writeCompact(a *App, w io.Writer, command string, value any) error {
-	switch command {
+func writeCompact(a *App, w io.Writer, opts options, value any) error {
+	switch opts.command {
 	case "doctor":
 		v := value.(tr064.Doctor)
 		if _, err := fmt.Fprintf(w, "doctor:\n  endpoint: %s\n  reachability: %s\n  protocol: %s\n  authentication: %s\n  model: %s\n  firmware: %s\ncapabilities:\n", scalar(v.Endpoint), check(v.Reachability), check(v.Protocol), check(v.Authentication), scalar(v.Model), scalar(v.Firmware)); err != nil {
@@ -966,11 +988,14 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 		return nil
 	case "status":
 		v := value.(tr064.Status)
-		_, err := fmt.Fprintf(w, a.selfIdentification()+"router:\n  manufacturer: %s\n  model: %s\n  software: %s\n  hardware: %s\n  serial: %s\n  uptime: %s\nnext: router-axi wan\n", scalar(v.Manufacturer), scalar(v.Model), scalar(v.Software), scalar(v.Hardware), scalar(v.Serial), duration(v.UptimeSeconds))
-		return err
+		_, err := fmt.Fprintf(w, a.selfIdentification()+"router:\n  manufacturer: %s\n  model: %s\n  software: %s\n  hardware: %s\n  serial: %s\n  uptime: %s\n", scalar(v.Manufacturer), scalar(v.Model), scalar(v.Software), scalar(v.Hardware), scalar(v.Serial), duration(v.UptimeSeconds))
+		if err != nil {
+			return err
+		}
+		return writeNext(w, hintCommand(opts, "wan"), hintCommand(opts, "devices"), hintCommand(opts, "doctor"))
 	case "overview":
 		v := value.(tr064.Overview)
-		_, err := fmt.Fprintf(w, "overview:\n  router: %s (%s)\n  wan: %s, %s, %s\n  traffic: %s downloaded, %s uploaded\n  observed_at: %s\n", scalar(v.Router.Model), scalar(v.Router.Software), scalar(v.WAN.Status), scalar(v.WAN.ExternalIP), scalar(v.WAN.IPFamily), size(v.Traffic.TotalDownloadBytes), size(v.Traffic.TotalUploadBytes), scalar(v.Traffic.ObservedAt))
+		_, err := fmt.Fprintf(w, "overview:\n  router: %s (%s)\n  wan: %s, %s, %s\n  traffic: %s downloaded, %s uploaded\n  observed_at: %s\n", plain(v.Router.Model), plain(v.Router.Software), plain(v.WAN.Status), plain(v.WAN.ExternalIP), plain(v.WAN.IPFamily), size(v.Traffic.TotalDownloadBytes), size(v.Traffic.TotalUploadBytes), scalar(v.Traffic.ObservedAt))
 		return err
 	case "wan":
 		if v, ok := value.(tr064.WANDetail); ok {
@@ -992,8 +1017,11 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 			return writeWANConnection(w, v)
 		}
 		v := value.(tr064.WAN)
-		_, err := fmt.Fprintf(w, "wan:\n  status: %s\n  external_ip: %s\n  ip_family: %s\n  uptime: %s\n  last_error: %s\nnext: router-axi traffic\n", scalar(v.Status), scalar(v.ExternalIP), scalar(v.IPFamily), duration(v.UptimeSeconds), scalar(v.LastError))
-		return err
+		_, err := fmt.Fprintf(w, "wan:\n  status: %s\n  external_ip: %s\n  ip_family: %s\n  uptime: %s\n  last_error: %s\n", scalar(v.Status), scalar(v.ExternalIP), scalar(v.IPFamily), duration(v.UptimeSeconds), scalar(v.LastError))
+		if err != nil {
+			return err
+		}
+		return writeNext(w, hintCommand(opts, "traffic"))
 	case "traffic":
 		v := value.(tr064.Traffic)
 		_, err := fmt.Fprintf(w, "traffic:\n  downloaded: %s\n  uploaded: %s\n  observed_at: %s\n", size(v.TotalDownloadBytes), size(v.TotalUploadBytes), scalar(v.ObservedAt))
@@ -1001,20 +1029,14 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 	case "calls":
 		result := value.(callResult)
 		if len(result.Calls) == 0 {
-			_, err := io.WriteString(w, "calls[0]: no calls found\n")
+			_, err := io.WriteString(w, "calls: no calls found\n")
 			return err
 		}
-		if _, err := fmt.Fprintf(w, "calls[%d]{id,direction,remote,name,date,duration}:\n", len(result.Calls)); err != nil {
+		if err := writeTable(w, "calls", result.Calls, callColumns, callDefaults, opts.fields); err != nil {
 			return err
-		}
-		for _, call := range result.Calls {
-			if _, err := fmt.Fprintf(w, "  %s,%s,%s,%s,%s,%s\n", toon(call.ID), toon(call.Direction), toon(call.Remote), toon(call.Name), toon(call.Date), toon(call.Duration)); err != nil {
-				return err
-			}
 		}
 		if result.Omitted > 0 {
-			_, err := fmt.Fprintf(w, "omitted: %d\nnext: router-axi calls --all\n", result.Omitted)
-			return err
+			return writeOmitted(w, result.Omitted, opts)
 		}
 	case "wifi":
 		if v, ok := value.(tr064.RadioDetail); ok {
@@ -1026,30 +1048,25 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 		}
 		result := value.(wifiResult)
 		if len(result.Radios) == 0 {
-			_, err := io.WriteString(w, "radios[0]: no Wi-Fi services found\n")
+			_, err := io.WriteString(w, "radios: no Wi-Fi services found\n")
 			return err
 		}
-		if _, err := fmt.Fprintf(w, "radios[%d]{service_id,ssid,enabled,channel,band,standard,associated_devices,security_mode}:\n", len(result.Radios)); err != nil {
+		if err := writeTable(w, "radios", result.Radios, radioColumns, radioDefaults, opts.fields); err != nil {
 			return err
 		}
-		for _, radio := range result.Radios {
-			if _, err := fmt.Fprintf(w, "  %s,%s,%t,%d,%s,%s,%d,%s\n", toon(radio.ServiceID), toon(radio.SSID), radio.Enabled, radio.Channel, toon(radio.Band), toon(radio.Standard), radio.AssociatedDevices, toon(radio.SecurityMode)); err != nil {
-				return err
-			}
+		detail := "wifi detail"
+		if len(result.Radios) > 1 {
+			detail += " --instance <n>"
 		}
+		return writeNext(w, hintCommand(opts, detail))
 	case "guest":
 		result := value.(guestResult)
 		if len(result.Guests) == 0 {
-			_, err := io.WriteString(w, "guests[0]: no guest Wi-Fi networks found\n")
+			_, err := io.WriteString(w, "guests: no guest Wi-Fi networks found\n")
 			return err
 		}
-		if _, err := fmt.Fprintf(w, "guests[%d]{service_id,ssid,enabled,channel,band,standard,associated_clients,security_mode}:\n", len(result.Guests)); err != nil {
+		if err := writeTable(w, "guests", result.Guests, guestColumns, guestDefaults, opts.fields); err != nil {
 			return err
-		}
-		for _, guest := range result.Guests {
-			if _, err := fmt.Fprintf(w, "  %s,%s,%t,%d,%s,%s,%d,%s\n", toon(guest.ServiceID), toon(guest.SSID), guest.Enabled, guest.Channel, toon(guest.Band), toon(guest.Standard), guest.AssociatedClients, toon(guest.SecurityMode)); err != nil {
-				return err
-			}
 		}
 		return writeGuestConfiguration(w, result.Guests)
 	case "devices":
@@ -1058,42 +1075,28 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 		}
 		result := value.(deviceResult)
 		if len(result.Devices) == 0 {
-			_, err := io.WriteString(w, "devices[0]: no devices found\n")
+			_, err := io.WriteString(w, "devices: no devices found\n")
 			return err
 		}
-		if _, err := fmt.Fprintf(w, "devices[%d]{name,ip_address,mac_address,interface_type,active}:\n", len(result.Devices)); err != nil {
+		if err := writeTable(w, "devices", result.Devices, deviceColumns, deviceDefaults, opts.fields); err != nil {
 			return err
 		}
-		for _, device := range result.Devices {
-			if _, err := fmt.Fprintf(w, "  %s,%s,%s,%s,%t\n", toon(device.Name), toon(device.IPAddress), toon(device.MACAddress), toon(device.InterfaceType), device.Active); err != nil {
-				return err
-			}
-		}
+		detail := hintCommand(opts, "devices detail --ip <ip>")
 		if result.Omitted > 0 {
-			_, err := fmt.Fprintf(w, "omitted: %d\nnext: router-axi devices --all\n", result.Omitted)
-			return err
+			return writeOmitted(w, result.Omitted, opts, detail)
 		}
+		return writeNext(w, detail)
 	case "leases":
 		result := value.(leaseResult)
 		if len(result.Leases) == 0 {
-			_, err := io.WriteString(w, "leases[0]: no host observations found\n")
+			_, err := io.WriteString(w, "leases: no host observations found\n")
 			return err
 		}
-		if _, err := fmt.Fprintf(w, "leases[%d]{name,ip_address,mac_address,address_source,lease_time_remaining,interface_type,active}:\n", len(result.Leases)); err != nil {
+		if err := writeTable(w, "leases", result.Leases, leaseColumns, leaseDefaults, opts.fields); err != nil {
 			return err
-		}
-		for _, lease := range result.Leases {
-			remaining := "unknown"
-			if lease.LeaseTimeRemaining != nil {
-				remaining = strconv.FormatInt(*lease.LeaseTimeRemaining, 10)
-			}
-			if _, err := fmt.Fprintf(w, "  %s,%s,%s,%s,%s,%s,%t\n", toon(lease.Name), toon(lease.IPAddress), toon(lease.MACAddress), toon(lease.AddressSource), remaining, toon(lease.InterfaceType), lease.Active); err != nil {
-				return err
-			}
 		}
 		if result.Omitted > 0 {
-			_, err := fmt.Fprintf(w, "omitted: %d\nnext: router-axi leases --all\n", result.Omitted)
-			return err
+			return writeOmitted(w, result.Omitted, opts)
 		}
 	case "dhcp":
 		v := value.(tr064.DHCP)
@@ -1117,24 +1120,14 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 	case "forwards":
 		result := value.(forwardResult)
 		if len(result.Forwards) == 0 {
-			_, err := io.WriteString(w, "forwards[0]: no port forwards found\n")
+			_, err := io.WriteString(w, "forwards: no port forwards found\n")
 			return err
 		}
-		if _, err := fmt.Fprintf(w, "forwards[%d]{enabled,protocol,external_port,internal_client,internal_port,description,remote_host,lease_duration}:\n", len(result.Forwards)); err != nil {
+		if err := writeTable(w, "forwards", result.Forwards, forwardColumns, forwardDefaults, opts.fields); err != nil {
 			return err
-		}
-		for _, forward := range result.Forwards {
-			lease := "unknown"
-			if forward.LeaseDuration != nil {
-				lease = strconv.FormatUint(*forward.LeaseDuration, 10)
-			}
-			if _, err := fmt.Fprintf(w, "  %t,%s,%d,%s,%d,%s,%s,%s\n", forward.Enabled, toon(forward.Protocol), forward.ExternalPort, toon(forward.InternalClient), forward.InternalPort, toon(forward.Description), toon(forward.RemoteHost), lease); err != nil {
-				return err
-			}
 		}
 		if result.Omitted > 0 {
-			_, err := fmt.Fprintf(w, "omitted: %d\nnext: router-axi forwards --all\n", result.Omitted)
-			return err
+			return writeOmitted(w, result.Omitted, opts)
 		}
 	case "exposure":
 		return writeExposure(w, value.(tr064.Exposure))
@@ -1142,34 +1135,32 @@ func writeCompact(a *App, w io.Writer, command string, value any) error {
 	return nil
 }
 
-func protocolError(err error) errorSpec {
+func protocolError(err error, host string) errorSpec {
 	var protocolErr *tr064.Error
 	if !errors.As(err, &protocolErr) {
 		return errorSpec{ExitInternal, errorDetail{"internal_error", "an internal error occurred", ""}}
 	}
 	switch protocolErr.Kind {
 	case "usage":
-		hint := "router-axi wifi enable|disable --instance N"
-		if protocolErr.Operation == "wifi detail" {
-			hint = "router-axi wifi detail --instance N"
-		}
-		if protocolErr.Operation == "reboot" {
-			hint = "router-axi reboot --help"
-		}
-		if protocolErr.Operation == "wan reconnect" {
-			hint = "router-axi wan reconnect --help"
-		}
-		if protocolErr.Operation == "wake" {
-			hint = "router-axi wake --help"
-		}
-		if protocolErr.Operation == "firmware check" {
-			hint = "router-axi firmware check --help"
-		}
-		if protocolErr.Operation == "backup" {
-			hint = "router-axi backup --help"
-		}
-		if protocolErr.Operation == "devices detail" {
-			hint = "router-axi devices"
+		hint := commandHint("wifi enable|disable --instance <n>", host, nil)
+		switch protocolErr.Operation {
+		case "wifi detail":
+			hint = commandHint("wifi detail --instance <n>", host, nil)
+		case "reboot":
+			hint = "router-axi reboot --host <address>"
+		case "wan reconnect":
+			hint = "router-axi wan reconnect --host <address>"
+		case "wake":
+			hint = commandHint("wake <mac>", host, nil)
+			if protocolErr.Code == "invalid_configuration" {
+				hint = "router-axi wake <mac> --host <address>"
+			}
+		case "firmware check":
+			hint = "router-axi firmware check --host <address>"
+		case "backup":
+			hint = backupUsageHint(protocolErr.Code, host)
+		case "devices detail":
+			hint = commandHint("devices", host, nil)
 		}
 		return errorSpec{ExitUsage, errorDetail{protocolErr.Code, protocolErr.Message, hint}}
 	case "auth":
@@ -1180,13 +1171,27 @@ func protocolError(err error) errorSpec {
 		}
 		return errorSpec{ExitNetwork, errorDetail{"router_unreachable", protocolErr.Message, "check --host and local network access"}}
 	case "unsupported":
-		return errorSpec{ExitUnsupported, errorDetail{"unsupported_capability", protocolErr.Message, ""}}
+		hint := commandHint("doctor", host, nil)
+		if protocolErr.Operation == "doctor" {
+			hint = ""
+		}
+		return errorSpec{ExitUnsupported, errorDetail{"unsupported_capability", protocolErr.Message, hint}}
 	default:
 		if hint, ok := backupDiagnosticHint(protocolErr.Operation, protocolErr.Code); ok {
 			return errorSpec{ExitRouter, errorDetail{protocolErr.Code, protocolErr.Message, hint}}
 		}
 		return errorSpec{ExitRouter, errorDetail{"router_protocol_error", protocolErr.Message, ""}}
 	}
+}
+
+func backupUsageHint(code, host string) string {
+	switch code {
+	case "backup_requires_https", "invalid_configuration":
+		return "router-axi backup --host https://<address> --output <path>"
+	case "backup_passphrase_missing":
+		return "set ROUTER_AXI_BACKUP_PASSWORD, then run " + commandHint("backup --output <path>", host, nil)
+	}
+	return commandHint("backup --output <path>", host, nil)
 }
 
 func backupDiagnosticHint(operation, code string) (string, bool) {
@@ -1209,9 +1214,9 @@ func backupDiagnosticHint(operation, code string) (string, bool) {
 	}
 }
 
-func renderProtocolError(w io.Writer, jsonOutput bool, err error) int {
-	spec := protocolError(err)
-	return writeError(w, jsonOutput, spec.exit, spec.detail.Code, spec.detail.Message, spec.detail.Hint)
+func renderProtocolError(w io.Writer, opts options, err error) int {
+	spec := protocolError(err, opts.host)
+	return writeError(w, opts.json, spec.exit, spec.detail.Code, spec.detail.Message, spec.detail.Hint)
 }
 
 func writeDoctorPartialError(w io.Writer, doctor tr064.Doctor, spec errorSpec) int {
@@ -1246,30 +1251,30 @@ func writeError(w io.Writer, jsonOutput bool, exit int, code, message, hint stri
 // echoed, logged, or written anywhere but the encrypted export itself.
 func (a *App) runBackup(ctx context.Context, reader Reader, opts options, stdout, stderr io.Writer, passphrase string) int {
 	if strings.HasSuffix(opts.output, string(os.PathSeparator)) {
-		return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output must name a file, not a directory", "router-axi backup --help")
+		return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output must name a file, not a directory", hintCommand(opts, "backup --output <path>"))
 	}
 	if info, err := os.Stat(opts.output); err == nil {
 		if info.IsDir() {
-			return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output names an existing directory", "router-axi backup --help")
+			return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output names an existing directory", hintCommand(opts, "backup --output <path>"))
 		}
 		if !opts.force {
-			return writeError(stderr, opts.json, ExitUsage, "output_exists", "backup --output already exists; pass --force to overwrite it", "router-axi backup --output "+shellWord(opts.output)+" --force")
+			return writeError(stderr, opts.json, ExitUsage, "output_exists", "backup --output already exists; pass --force to overwrite it", hintCommand(opts, "backup --output "+shellWord(opts.output)+" --force"))
 		}
 	}
 	dir := filepath.Dir(opts.output)
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output parent directory does not exist", "router-axi backup --help")
+		return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output parent directory does not exist", hintCommand(opts, "backup --output <path>"))
 	}
 	data, err := reader.ConfigExport(ctx, passphrase)
 	if err != nil {
-		return renderProtocolError(stderr, opts.json, err)
+		return renderProtocolError(stderr, opts, err)
 	}
 	if writeErr := writeBackupFile(opts.output, data, opts.force); writeErr != nil {
 		if errors.Is(writeErr, os.ErrExist) && !opts.force {
-			return writeError(stderr, opts.json, ExitUsage, "output_exists", "backup --output already exists; pass --force to overwrite it", "router-axi backup --output "+shellWord(opts.output)+" --force")
+			return writeError(stderr, opts.json, ExitUsage, "output_exists", "backup --output already exists; pass --force to overwrite it", hintCommand(opts, "backup --output "+shellWord(opts.output)+" --force"))
 		}
 		if errors.Is(writeErr, errNoReplaceUnsupported) {
-			return writeError(stderr, opts.json, ExitInternal, "backup_link_unsupported", "the destination filesystem does not support the atomic no-replace write; --force writes with an atomic rename that replaces any existing file", "router-axi backup --output "+shellWord(opts.output)+" --force")
+			return writeError(stderr, opts.json, ExitInternal, "backup_link_unsupported", "the destination filesystem does not support the atomic no-replace write; --force writes with an atomic rename that replaces any existing file", hintCommand(opts, "backup --output "+shellWord(opts.output)+" --force"))
 		}
 		return writeError(stderr, opts.json, ExitInternal, "backup_write_failed", "the configuration export could not be written to the requested path", "check the destination directory and permissions")
 	}
@@ -1390,12 +1395,8 @@ func sendOnceTarget(mac string) string {
 	return "  mac: " + strconv.Quote(mac) + "\n"
 }
 
-func writeWiFiPreview(w io.Writer, result tr064.WiFiMutation, host string) error {
-	hostFlag := ""
-	if host != "" {
-		hostFlag = " --host " + shellWord(host)
-	}
-	_, err := fmt.Fprintf(w, "wifi:\n  action: %s\n  instance: %s\n  current: %s\n  intended: %s\n  changed: false\nnext: router-axi wifi %s --instance %s --confirm%s\n", result.Action, scalar(result.Instance), state(result.Current), state(result.Intended), result.Action, instanceSuffix(result.Instance), hostFlag)
+func writeWiFiPreview(w io.Writer, result tr064.WiFiMutation, opts options) error {
+	_, err := fmt.Fprintf(w, "wifi:\n  action: %s\n  instance: %s\n  current: %s\n  intended: %s\n  changed: false\nnext: %s\n", result.Action, scalar(result.Instance), state(result.Current), state(result.Intended), hintCommand(opts, "wifi "+result.Action+" --instance "+instanceSuffix(result.Instance)+" --confirm"))
 	return err
 }
 
@@ -1406,9 +1407,11 @@ func shellWord(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
-func writeWiFiMutation(w io.Writer, result wifiMutationState) error {
-	_, err := fmt.Fprintf(w, "wifi:\n  action: %s\n  instance: %s\n  previous: %s\n  current: %s\n  changed: %t\nnext: router-axi wifi\n", result.Action, scalar(result.Instance), state(result.Previous), state(result.Current), result.Changed)
-	return err
+func writeWiFiMutation(w io.Writer, result wifiMutationState, opts options) error {
+	if _, err := fmt.Fprintf(w, "wifi:\n  action: %s\n  instance: %s\n  previous: %s\n  current: %s\n  changed: %t\n", result.Action, scalar(result.Instance), state(result.Previous), state(result.Current), result.Changed); err != nil {
+		return err
+	}
+	return writeNext(w, hintCommand(opts, "wifi"))
 }
 
 func state(enabled bool) string {
@@ -1429,17 +1432,22 @@ func check(value tr064.DoctorCheck) string {
 	return value.State + "; remediation: " + value.Remediation
 }
 
-func scalar(value string) string {
+func plain(value string) string {
 	if value == "" {
 		return "unknown"
 	}
 	return value
 }
+
+func scalar(value string) string {
+	return quoteAmbiguous(plain(value))
+}
+
 func toon(value string) string {
 	if value == "" {
 		return `""`
 	}
-	if strings.ContainsAny(value, ",\n\r\"") {
+	if strings.ContainsAny(value, ",\n\r\"") || ambiguousScalar(value) {
 		return strconv.Quote(value)
 	}
 	return value
@@ -1462,7 +1470,7 @@ func optionalText(value *string) string {
 	if value == nil {
 		return "unknown"
 	}
-	return *value
+	return quoteAmbiguous(*value)
 }
 
 func optionalToon(value *string) string {

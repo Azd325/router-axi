@@ -58,7 +58,7 @@ func TestGuestConfigurationOutputPreservesRawStringsAndFieldOrder(t *testing.T) 
 				t.Fatalf("JSON = %s", stdout.String())
 			}
 		} else {
-			want := "guest_configuration[1]{service_id,timeout_active,timeout,time_remain,no_forced_off,user_isolation}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration2,1,90,42,\"router,raw\",1\n"
+			want := "guest_configuration[1]{service_id,timeout_active,timeout,time_remain,no_forced_off,user_isolation}:\n  \"urn:WLANConfiguration-com:serviceId:WLANConfiguration2\",\"1\",\"90\",\"42\",\"router,raw\",\"1\"\n"
 			if !strings.HasSuffix(stdout.String(), want) {
 				t.Fatalf("output = %q", stdout.String())
 			}

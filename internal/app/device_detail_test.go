@@ -108,7 +108,7 @@ func TestDeviceDetailHelp(t *testing.T) {
 		want []string
 	}{
 		{[]string{"devices", "detail", "--help"}, []string{"usage: router-axi devices detail --ip ADDRESS", "Hosts:X_AVM-DE_GetSpecificHostEntryByIP", "App or Phone right", "router-axi devices detail --ip 192.0.2.20 --json"}},
-		{[]string{"devices", "--help"}, []string{"usage: router-axi devices [--all] [detail --ip ADDRESS]", "router-axi devices detail --ip 192.0.2.20"}},
+		{[]string{"devices", "--help"}, []string{"usage: router-axi devices [--all] [--fields NAMES] [detail --ip ADDRESS]", "router-axi devices detail --ip 192.0.2.20"}},
 		{[]string{"--help"}, []string{"devices detail adds one device's link and access state"}},
 	} {
 		var stdout, stderr bytes.Buffer

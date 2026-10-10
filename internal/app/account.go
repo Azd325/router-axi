@@ -24,7 +24,7 @@ func writeAccount(w io.Writer, value tr064.Account) error {
 		return err
 	}
 	for _, right := range value.Rights {
-		if _, err := fmt.Fprintf(w, "    %s,%s\n", toon(right.Path), toon(right.Access)); err != nil {
+		if _, err := fmt.Fprintf(w, "    %s,%s\n", tableCell(toon(right.Path)), tableCell(toon(right.Access))); err != nil {
 			return err
 		}
 	}

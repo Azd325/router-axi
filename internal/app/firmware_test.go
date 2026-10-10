@@ -27,7 +27,7 @@ func TestFirmwareOutputContract(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"firmware"}, "firmware:\n  current_version: 8.00\n  update_available: true\n  offered_version: 8.10\n  update_state: UpdateAvailable\n  build_type: Release\n  auto_update_mode: important\n  update_time: 2026-01-30T03:00:00+01:00\n  last_version: 7.90\n  update_successful: succeeded\n"},
+		{[]string{"firmware"}, "firmware:\n  current_version: \"8.00\"\n  update_available: true\n  offered_version: \"8.10\"\n  update_state: UpdateAvailable\n  build_type: Release\n  auto_update_mode: important\n  update_time: 2026-01-30T03:00:00+01:00\n  last_version: \"7.90\"\n  update_successful: succeeded\n"},
 		{[]string{"firmware", "--json"}, `{"current_version":"8.00","update_available":true,"offered_version":"8.10","update_state":"UpdateAvailable","build_type":"Release","auto_update_mode":"important","update_time":"2026-01-30T03:00:00+01:00","last_version":"7.90","update_successful":"succeeded"}` + "\n"},
 	} {
 		code, stdout, stderr := runTest(t, test.args...)
