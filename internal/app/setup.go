@@ -40,6 +40,19 @@ type ownerRecord struct {
 	OpenCodeDependency string `json:"opencode_dependency,omitempty"`
 }
 
+var (
+	errHookConfigNotJSON         = errors.New("managed hook configuration is not valid JSON")
+	errHookConfigNotObject       = errors.New("managed hook configuration must be a JSON object")
+	errHookConfigHooks           = errors.New("managed hook configuration has incompatible hooks value")
+	errHookConfigSessionStart    = errors.New("managed hook configuration has incompatible SessionStart value")
+	errHookAmbiguous             = errors.New("multiple managed router-axi session hooks found; refuse ambiguous configuration")
+	errHookNoOwner               = errors.New("managed session hook has no owner record; refuse ambiguous configuration")
+	errOpenCodePathOccupied      = errors.New("OpenCode plugin path is occupied by unmanaged content")
+	errOpenCodeManifestNotObject = errors.New("OpenCode package.json is not a JSON object")
+	errOpenCodeDependencies      = errors.New("OpenCode package.json has incompatible dependencies")
+	errOpenCodePluginDependency  = errors.New("OpenCode package.json has incompatible @opencode-ai/plugin dependency")
+)
+
 type hookLocation struct {
 	agent        string
 	path         string
@@ -77,7 +90,7 @@ func (a *App) runSetup(opts options, stdout io.Writer) int {
 	for _, agent := range agents {
 		result, err := a.setupAgent(opts.action, agent)
 		if err != nil {
-			return writeError(stdout, opts.json, ExitInternal, "setup_failed", a.setupFailureMessage(err), "router-axi setup check --agent "+agent)
+			return writeError(stdout, opts.json, ExitInternal, "setup_failed", a.setupFailureMessage(err), a.setupFailureHint(err, opts.action, agent))
 		}
 		results = append(results, result)
 	}
@@ -133,10 +146,7 @@ func (a *App) setupFailureMessage(err error) string {
 }
 
 func fileFailureMessage(op, path string, cause error, home string) string {
-	name := filepath.Base(path)
-	if rest, ok := strings.CutPrefix(path, home+string(filepath.Separator)); ok && home != "" {
-		name = "~/" + filepath.ToSlash(rest)
-	}
+	name := displayPath(path, home)
 	switch {
 	case errors.Is(cause, fs.ErrPermission):
 		return "permission denied for " + name
@@ -144,6 +154,40 @@ func fileFailureMessage(op, path string, cause error, home string) string {
 		return "cannot read " + name
 	}
 	return "cannot write " + name
+}
+
+func displayPath(path, home string) string {
+	if rest, ok := strings.CutPrefix(path, home+string(filepath.Separator)); ok && home != "" {
+		return "~/" + filepath.ToSlash(rest)
+	}
+	return filepath.Base(path)
+}
+
+func (a *App) setupFailureHint(err error, action, agent string) string {
+	retry := ", then run router-axi setup " + action + " --agent " + agent
+	home, _ := a.homeDir()
+	location := hookLocationFor(home, agent)
+	var pathErr *fs.PathError
+	var linkErr *os.LinkError
+	switch {
+	case errors.As(err, &pathErr) && errors.Is(pathErr.Err, fs.ErrPermission):
+		return "fix the permissions of " + displayPath(pathErr.Path, home) + retry
+	case errors.As(err, &pathErr):
+		return "repair " + displayPath(pathErr.Path, home) + retry
+	case errors.As(err, &linkErr):
+		return "repair " + displayPath(linkErr.New, home) + retry
+	case errors.Is(err, errHookConfigNotJSON), errors.Is(err, errHookConfigNotObject), errors.Is(err, errHookConfigHooks), errors.Is(err, errHookConfigSessionStart):
+		return "correct " + displayPath(location.path, home) + " so that it is a JSON object with compatible hooks" + retry
+	case errors.Is(err, errHookAmbiguous), errors.Is(err, errHookNoOwner):
+		return "remove the router-axi session hook entries from " + displayPath(location.path, home) + retry
+	case errors.Is(err, errOpenCodePathOccupied):
+		return "move " + displayPath(location.path, home) + " away" + retry
+	case errors.Is(err, errOpenCodeManifestNotObject), errors.Is(err, errOpenCodeDependencies), errors.Is(err, errOpenCodePluginDependency):
+		return "correct " + displayPath(location.manifestPath, home) + " so that it is a JSON object with compatible dependencies" + retry
+	case errors.Is(err, errCodexConfigUnsafe):
+		return "make " + displayPath(location.configPath, home) + " define features once, as one [features] table with the line hooks = true or as the single line features.hooks = true" + retry
+	}
+	return "router-axi setup --help"
 }
 
 func setupAgents(value string) ([]string, error) {
@@ -161,20 +205,7 @@ func (a *App) setupAgent(action, agent string) (setupResult, error) {
 	if err != nil {
 		return setupResult{}, fmt.Errorf("resolve home directory: %w", err)
 	}
-	location := hookLocation{agent: agent}
-	switch agent {
-	case "claude":
-		location.path = filepath.Join(home, ".claude", "settings.json")
-		location.markerPath = filepath.Join(home, ".claude", ".router-axi-session-hook")
-	case "codex":
-		location.path = filepath.Join(home, ".codex", "hooks.json")
-		location.configPath = filepath.Join(home, ".codex", "config.toml")
-		location.markerPath = filepath.Join(home, ".codex", ".router-axi-session-hook")
-	case "opencode":
-		location.path = filepath.Join(home, ".config", "opencode", "plugins", "router-axi.ts")
-		location.manifestPath = filepath.Join(home, ".config", "opencode", "package.json")
-		location.markerPath = filepath.Join(home, ".config", "opencode", "plugins", ".router-axi-session-hook")
-	}
+	location := hookLocationFor(home, agent)
 	owner, err := readOwner(location.markerPath)
 	if err != nil {
 		return setupResult{}, err
@@ -200,6 +231,24 @@ func (a *App) setupAgent(action, agent string) (setupResult, error) {
 		return manageHookJSON(action, location, command, owner, a.commandStale)
 	}
 	return manageCodexHook(action, location, command, owner, a.commandStale)
+}
+
+func hookLocationFor(home, agent string) hookLocation {
+	location := hookLocation{agent: agent}
+	switch agent {
+	case "claude":
+		location.path = filepath.Join(home, ".claude", "settings.json")
+		location.markerPath = filepath.Join(home, ".claude", ".router-axi-session-hook")
+	case "codex":
+		location.path = filepath.Join(home, ".codex", "hooks.json")
+		location.configPath = filepath.Join(home, ".codex", "config.toml")
+		location.markerPath = filepath.Join(home, ".codex", ".router-axi-session-hook")
+	case "opencode":
+		location.path = filepath.Join(home, ".config", "opencode", "plugins", "router-axi.ts")
+		location.manifestPath = filepath.Join(home, ".config", "opencode", "package.json")
+		location.markerPath = filepath.Join(home, ".config", "opencode", "plugins", ".router-axi-session-hook")
+	}
+	return location
 }
 
 func manageCodexHook(action string, location hookLocation, command string, owner ownerRecord, stale func(string) bool) (setupResult, error) {
@@ -284,15 +333,15 @@ func manageHookJSON(action string, location hookLocation, command string, owner 
 		return setupResult{}, err
 	}
 	if len(data) > 0 && json.Unmarshal(data, &root) != nil {
-		return setupResult{}, errors.New("managed hook configuration is not valid JSON")
+		return setupResult{}, errHookConfigNotJSON
 	}
 	if root == nil {
-		return setupResult{}, errors.New("managed hook configuration must be a JSON object")
+		return setupResult{}, errHookConfigNotObject
 	}
 	hooksValue, hooksPresent := root["hooks"]
 	if hooksPresent {
 		if _, ok := hooksValue.(map[string]any); !ok {
-			return setupResult{}, errors.New("managed hook configuration has incompatible hooks value")
+			return setupResult{}, errHookConfigHooks
 		}
 	} else {
 		hooksValue = map[string]any{}
@@ -305,7 +354,7 @@ func manageHookJSON(action string, location hookLocation, command string, owner 
 		var ok bool
 		entries, ok = entriesValue.([]any)
 		if !ok {
-			return setupResult{}, errors.New("managed hook configuration has incompatible SessionStart value")
+			return setupResult{}, errHookConfigSessionStart
 		}
 	}
 	managed := make([]int, 0, 1)
@@ -315,7 +364,7 @@ func manageHookJSON(action string, location hookLocation, command string, owner 
 		}
 	}
 	if len(managed) > 1 {
-		return setupResult{}, errors.New("multiple managed router-axi session hooks found; refuse ambiguous configuration")
+		return setupResult{}, errHookAmbiguous
 	}
 	state := "missing"
 	if len(managed) == 1 {
@@ -329,7 +378,7 @@ func manageHookJSON(action string, location hookLocation, command string, owner 
 		return setupResult{Agent: location.agent, State: state, Command: command}, nil
 	case "install":
 		if owner.ShapeHash == "" && hasSessionMarker(entries) {
-			return setupResult{}, errors.New("managed session hook has no owner record; refuse ambiguous configuration")
+			return setupResult{}, errHookNoOwner
 		}
 		entry := map[string]any{"matcher": "", "hooks": []any{map[string]any{"type": "command", "command": command}}}
 		if len(managed) == 1 {
@@ -495,7 +544,7 @@ func openCodeDependency(path string) (bool, error) {
 	}
 	root := map[string]any{}
 	if err := json.Unmarshal(data, &root); err != nil || root == nil {
-		return false, errors.New("OpenCode package.json is not a JSON object")
+		return false, errOpenCodeManifestNotObject
 	}
 	dependencies, ok := root["dependencies"].(map[string]any)
 	if !ok {
@@ -512,12 +561,12 @@ func ensureOpenCodeDependency(path string) (bool, error) {
 		return false, err
 	}
 	if len(data) > 0 && (json.Unmarshal(data, &root) != nil || root == nil) {
-		return false, errors.New("OpenCode package.json is not a JSON object")
+		return false, errOpenCodeManifestNotObject
 	}
 	dependencies, ok := root["dependencies"].(map[string]any)
 	if !ok {
 		if _, exists := root["dependencies"]; exists {
-			return false, errors.New("OpenCode package.json has incompatible dependencies")
+			return false, errOpenCodeDependencies
 		}
 		dependencies = map[string]any{}
 		root["dependencies"] = dependencies
@@ -526,7 +575,7 @@ func ensureOpenCodeDependency(path string) (bool, error) {
 		if _, ok := dependency.(string); ok {
 			return false, nil
 		}
-		return false, errors.New("OpenCode package.json has incompatible @opencode-ai/plugin dependency")
+		return false, errOpenCodePluginDependency
 	}
 	dependencies["@opencode-ai/plugin"] = openCodePluginDependency
 	encoded, err := json.MarshalIndent(root, "", "  ")
@@ -587,7 +636,7 @@ func manageOpenCodePlugin(action string, location hookLocation, command string, 
 	}
 	managed := isManagedOpenCodePlugin(data, owner)
 	if len(data) > 0 && !managed {
-		return setupResult{}, errors.New("OpenCode plugin path is occupied by unmanaged content")
+		return setupResult{}, errOpenCodePathOccupied
 	}
 	switch action {
 	case "check":

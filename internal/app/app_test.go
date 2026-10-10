@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Azd325/router-axi/internal/tr064"
 )
@@ -1267,6 +1269,36 @@ func TestForwardsFlagsAndHelp(t *testing.T) {
 	code, stdout, stderr := runTest(t, "forwards", "--help")
 	if code != ExitOK || stdout != "usage: router-axi forwards [--all] [--fields NAMES] [--host ADDRESS] [--json] [--help]\nRead-only port-forwarding rules. Defaults to 100 entries; --all lists everything. No required arguments. Default columns: enabled,protocol,external_port,internal_client,internal_port; --fields takes comma-separated columns from enabled,protocol,external_port,internal_client,internal_port,description,remote_host,lease_duration; --json always reports every field.\nexamples: router-axi forwards; router-axi forwards --all --json; router-axi forwards --fields external_port,description\n" || stderr != "" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestDoctorNeverPrintsHostUserInformation(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	host := fmt.Sprintf("http://synthetic-user:synthetic-password@127.0.0.1:%d", port)
+	for _, jsonOutput := range []bool{false, true} {
+		application := New(func(config Config) (Reader, error) {
+			return tr064.New(config.Host, config.Username, config.Password, &http.Client{Timeout: time.Second})
+		}, func(string) string { return "" })
+		args := []string{"doctor", "--host", host}
+		if jsonOutput {
+			args = append(args, "--json")
+		}
+		var stdout, stderr bytes.Buffer
+		code := application.Run(t.Context(), args, &stdout, &stderr)
+		output := stdout.String() + stderr.String()
+		if code != ExitUsage || stderr.Len() != 0 || !strings.Contains(stdout.String(), "invalid_configuration") || strings.Contains(output, "synthetic") || strings.Contains(output, "127.0.0.1") {
+			t.Fatalf("json=%t code=%d stdout=%q stderr=%q", jsonOutput, code, stdout.String(), stderr.String())
+		}
+		if jsonOutput && !json.Valid(stdout.Bytes()) {
+			t.Fatalf("stdout=%q", stdout.String())
+		}
 	}
 }
 

@@ -32,7 +32,8 @@ type EventLog struct {
 	Lines   []EventLogLine `json:"lines"`
 	Total   int            `json:"total"`
 	Omitted int            `json:"omitted"`
-	More    string         `json:"more,omitempty"`
+	// More carries the caller's next-step command; the protocol layer leaves it empty.
+	More string `json:"more,omitempty"`
 }
 
 // EventLogGroups expands only AVM's documented filters. Phone logs require
@@ -205,9 +206,6 @@ func parseEventLog(body []byte, groups []string, limit int) (EventLog, error) {
 				result.Omitted++
 			}
 		}
-	}
-	if result.Omitted != 0 {
-		result.More = "repeat event-log with the same --host and --group selection and --limit 1000; at the hard maximum, narrow --group to sys, net, fon, wlan, or usb"
 	}
 	return result, nil
 }
