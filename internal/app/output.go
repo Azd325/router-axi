@@ -28,6 +28,13 @@ func quoteAmbiguous(value string) string {
 	return value
 }
 
+func tableCell(value string) string {
+	if strings.Contains(value, ":") && !strings.HasPrefix(value, `"`) {
+		return strconv.Quote(value)
+	}
+	return value
+}
+
 type tableColumn[T any] struct {
 	name string
 	cell func(T) string
@@ -61,8 +68,8 @@ func writeTable[T any](w io.Writer, key string, rows []T, columns []tableColumn[
 		for i, column := range selected {
 			cells[i] = column.cell(row)
 		}
-		if first := cells[0]; strings.Contains(first, ":") && !strings.HasPrefix(first, `"`) {
-			cells[0] = strconv.Quote(first)
+		for i := range cells {
+			cells[i] = tableCell(cells[i])
 		}
 		if _, err := fmt.Fprintf(w, "  %s\n", strings.Join(cells, ",")); err != nil {
 			return err

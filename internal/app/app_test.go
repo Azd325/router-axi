@@ -767,7 +767,7 @@ func TestGuestOutputContract(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"guest"}, "guests[1]{ssid,enabled,band,channel,associated_clients}:\n  synthetic-guest,true,\"5000\",36,1\nguest_configuration[1]{service_id,timeout_active,timeout,time_remain,no_forced_off,user_isolation}:\n  urn:WLANConfiguration-com:serviceId:WLANConfiguration2,unknown,unknown,unknown,unknown,unknown\n"},
+		{[]string{"guest"}, "guests[1]{ssid,enabled,band,channel,associated_clients}:\n  synthetic-guest,true,\"5000\",36,1\nguest_configuration[1]{service_id,timeout_active,timeout,time_remain,no_forced_off,user_isolation}:\n  \"urn:WLANConfiguration-com:serviceId:WLANConfiguration2\",unknown,unknown,unknown,unknown,unknown\n"},
 		{[]string{"guest", "--json"}, `{"guests":[{"service_id":"urn:WLANConfiguration-com:serviceId:WLANConfiguration2","ssid":"synthetic-guest","enabled":true,"channel":36,"band":"5000","standard":"ax","associated_clients":1,"security_mode":"11iandWPA3","configuration":{"timeout_active":null,"timeout":null,"time_remain":null,"no_forced_off":null,"user_isolation":null}}],"total":1}` + "\n"},
 	} {
 		code, stdout, stderr := runTest(t, test.args...)
@@ -1301,7 +1301,7 @@ func TestLeasesOutputContract(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"leases"}, "leases[2]{name,ip_address,mac_address,active}:\n  sanitized-static-device,192.0.2.10,02:00:00:00:00:10,true\n  \"\",192.0.2.20,02:00:00:00:00:20,false\n"},
+		{[]string{"leases"}, "leases[2]{name,ip_address,mac_address,active}:\n  sanitized-static-device,192.0.2.10,\"02:00:00:00:00:10\",true\n  \"\",192.0.2.20,\"02:00:00:00:00:20\",false\n"},
 		{[]string{"leases", "--json"}, `{"leases":[{"name":"sanitized-static-device","ip_address":"192.0.2.10","mac_address":"02:00:00:00:00:10","address_source":"Static","interface_type":"Ethernet","active":true},{"ip_address":"192.0.2.20","mac_address":"02:00:00:00:00:20","address_source":"DHCP","lease_time_remaining":3600,"interface_type":"802.11","active":false}],"total":2,"omitted":0}` + "\n"},
 	} {
 		var stdout, stderr bytes.Buffer

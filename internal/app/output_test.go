@@ -80,10 +80,10 @@ func TestFieldsSelectAndOrderColumns(t *testing.T) {
 		want string
 	}{
 		{[]string{"leases", "--fields", "lease_time_remaining,name"}, "leases[2]{lease_time_remaining,name}:\n  unknown,sanitized-static-device\n  3600,\"\"\n"},
-		{[]string{"--fields", "ssid,service_id", "wifi"}, "radios[1]{ssid,service_id}:\n  synthetic-ap,urn:WLANConfiguration-com:serviceId:WLANConfiguration1\nnext: router-axi wifi detail\n"},
+		{[]string{"--fields", "ssid,service_id", "wifi"}, "radios[1]{ssid,service_id}:\n  synthetic-ap,\"urn:WLANConfiguration-com:serviceId:WLANConfiguration1\"\nnext: router-axi wifi detail\n"},
 		{[]string{"wifi", "--fields", "service_id,ssid"}, "radios[1]{service_id,ssid}:\n  \"urn:WLANConfiguration-com:serviceId:WLANConfiguration1\",synthetic-ap\n"},
 		{[]string{"forwards", "--fields", "description"}, "forwards[1]{description}:\n  synthetic service\n"},
-		{[]string{"calls", "--fields", "id,date"}, "calls[1]{id,date}:\n  \"12\",10.03.24 12:34\n"},
+		{[]string{"calls", "--fields", "id,date"}, "calls[1]{id,date}:\n  \"12\",\"10.03.24 12:34\"\n"},
 	} {
 		code, out := runWithReader(t, fakeReader{}, test.args...)
 		if code != ExitOK || !strings.HasPrefix(out, test.want) {
@@ -195,5 +195,28 @@ func TestUsageErrorHintsAreCorrectingCommands(t *testing.T) {
 	}
 	if hint := protocolError(&tr064.Error{Kind: "usage", Operation: "wake", Message: "synthetic"}, "router.test").detail.Hint; hint != "router-axi wake <mac> --host router.test" {
 		t.Errorf("hint=%q", hint)
+	}
+}
+
+type colonRightsReader struct{ fakeReader }
+
+func (colonRightsReader) Account(context.Context) (tr064.Account, error) {
+	return tr064.Account{Username: "synthetic", Rights: []tr064.AccountRight{{Path: "App:Phone", Access: "readwrite"}}}, nil
+}
+
+func TestColonCellsAreQuotedInEveryTable(t *testing.T) {
+	for _, test := range []struct {
+		reader Reader
+		args   []string
+		want   string
+	}{
+		{fakeReader{}, []string{"leases"}, ",\"02:00:00:00:00:10\",true\n"},
+		{fakeReader{}, []string{"guest"}, "  \"urn:WLANConfiguration-com:serviceId:WLANConfiguration2\",unknown,"},
+		{colonRightsReader{}, []string{"account"}, "    \"App:Phone\",readwrite\n"},
+	} {
+		code, out := runWithReader(t, test.reader, test.args...)
+		if code != ExitOK || !strings.Contains(out, test.want) {
+			t.Errorf("args=%v code=%d out=%q", test.args, code, out)
+		}
 	}
 }

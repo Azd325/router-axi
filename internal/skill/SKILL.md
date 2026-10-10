@@ -84,7 +84,8 @@ Compact AXI text by default (`key:` blocks, or `list[N]{columns}:` tables);
 `--json` emits JSON on stdout with stable field order. Empty results state
 zero results explicitly as a plain `key: text` line. List commands accept
 `--fields a,b` to choose columns; `--json` always reports every field. Text
-that looks like a number or boolean is quoted (`software: "8.20"`). Successful
+that looks like a number or boolean, and any table cell with a colon, is
+quoted (`software: "8.20"`). Successful
 commands suggest the next operation with `next:`, repeating an explicit
 `--host`. Structured results and errors use stdout in the selected format;
 stderr is reserved for diagnostics, including watch's `output_failed` fallback
