@@ -125,54 +125,60 @@ func closingTOMLQuote(text string) int {
 	return -1
 }
 
-func tomlBracketDelta(text string) int {
+func lexTOMLLine(text, open string) (string, int) {
 	depth := 0
-	for i := 0; i < len(text); i++ {
-		switch text[i] {
-		case '"', '\'':
+	for i := 0; i < len(text); {
+		if open != "" {
+			switch {
+			case open == `"""` && text[i] == '\\':
+				i += 2
+			case strings.HasPrefix(text[i:], open):
+				open = ""
+				i += 3
+			default:
+				i++
+			}
+			continue
+		}
+		switch c := text[i]; {
+		case strings.HasPrefix(text[i:], `"""`) || strings.HasPrefix(text[i:], `'''`):
+			open = text[i : i+3]
+			i += 3
+		case c == '"' || c == '\'':
 			end := closingTOMLQuote(text[i:])
 			if end < 0 {
-				return depth
+				return open, depth
 			}
-			i += end
-		case '#':
-			return depth
-		case '[':
+			i += end + 1
+		case c == '#':
+			return open, depth
+		case c == '[':
 			depth++
-		case ']':
+			i++
+		case c == ']':
 			depth--
+			i++
+		default:
+			i++
 		}
 	}
-	return depth
+	return open, depth
 }
 
 func scanCodexConfig(content string) (codexConfigScan, error) {
 	scan := codexConfigScan{lines: splitTOMLLines(content), hooksLine: -1, featuresLast: -1}
-	inFeatures, inMultiline, inTable := false, false, false
-	arrayDepth := 0
+	inFeatures, inTable := false, false
+	open, arrayDepth := "", 0
 	for i, line := range scan.lines {
 		text := line.text
 		trimmed := strings.TrimSpace(text)
-		if !inMultiline && (trimmed == "" || strings.HasPrefix(trimmed, "#")) {
+		if open == "" && (trimmed == "" || strings.HasPrefix(trimmed, "#")) {
 			continue
 		}
-		quotes := strings.Count(text, `"""`) + strings.Count(text, `'''`)
-		if inMultiline {
-			if quotes%2 == 1 {
-				inMultiline = false
-			}
-			if inFeatures {
-				scan.featuresLast = i
-			}
-			continue
-		}
-		if quotes%2 == 1 {
-			inMultiline = true
-		}
-		if arrayDepth > 0 {
-			if !inMultiline {
-				arrayDepth += tomlBracketDelta(text)
-			}
+		if open != "" || arrayDepth > 0 {
+			var delta int
+			open, delta = lexTOMLLine(text, open)
+			arrayDepth = max(0, arrayDepth+delta)
 			if inFeatures {
 				scan.featuresLast = i
 			}
@@ -194,9 +200,9 @@ func scanCodexConfig(content string) (codexConfigScan, error) {
 			}
 			continue
 		}
-		if !inMultiline {
-			arrayDepth = max(0, tomlBracketDelta(text))
-		}
+		var delta int
+		open, delta = lexTOMLLine(text, "")
+		arrayDepth = max(0, delta)
 		if inFeatures {
 			scan.featuresLast = i
 			if tomlHooksKey.MatchString(text) {

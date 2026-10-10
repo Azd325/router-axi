@@ -462,6 +462,10 @@ func TestSetupCodexInstallEnablesHooksFeature(t *testing.T) {
 		{"quoted features table", "[\"features\"]\nother = 1\n", "[\"features\"]\nother = 1\nhooks = true\n", "added"},
 		{"triple quote inside comment", "# use \"\"\" here\n[features]\nother = 1\n", "# use \"\"\" here\n[features]\nother = 1\nhooks = true\n", "added"},
 		{"array element looks like header", "list = [\n  [features],\n  [\"a\"]\n]\n[features]\nother = 1\n", "list = [\n  [features],\n  [\"a\"]\n]\n[features]\nother = 1\nhooks = true\n", "added"},
+		{"other delimiter inside multiline", "notes = \"\"\"\nuse ''' in python\n\"\"\"\n[features]\nother = 1\n", "notes = \"\"\"\nuse ''' in python\n\"\"\"\n[features]\nother = 1\nhooks = true\n", "added"},
+		{"delimiter in trailing comment", "a = 1 # \"\"\"\n[features]\nother = 1\n", "a = 1 # \"\"\"\n[features]\nother = 1\nhooks = true\n", "added"},
+		{"delimiter in single-line string", "x = '\"\"\"'\n[features]\nother = 1\n", "x = '\"\"\"'\n[features]\nother = 1\nhooks = true\n", "added"},
+		{"array opens multiline string", "x = [\"\"\"\na\n\"\"\",\n  [1]\n]\n[features]\nother = 1\n", "x = [\"\"\"\na\n\"\"\",\n  [1]\n]\n[features]\nother = 1\nhooks = true\n", "added"},
 		{"multiline string", "text = \"\"\"\n[features]\nhooks = false\n\"\"\"\n", "text = \"\"\"\n[features]\nhooks = false\n\"\"\"\n\n[features]\nhooks = true\n", "added"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
