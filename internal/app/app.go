@@ -1142,16 +1142,16 @@ func protocolError(err error, host string) errorSpec {
 	}
 	switch protocolErr.Kind {
 	case "usage":
-		hint := "router-axi wifi enable|disable --instance <n>" + hostFlag(host)
+		hint := commandHint("wifi enable|disable --instance <n>", host, nil)
 		switch protocolErr.Operation {
 		case "wifi detail":
-			hint = "router-axi wifi detail --instance <n>" + hostFlag(host)
+			hint = commandHint("wifi detail --instance <n>", host, nil)
 		case "reboot":
 			hint = "router-axi reboot --host <address>"
 		case "wan reconnect":
 			hint = "router-axi wan reconnect --host <address>"
 		case "wake":
-			hint = "router-axi wake <mac>" + hostFlag(host)
+			hint = commandHint("wake <mac>", host, nil)
 			if protocolErr.Code == "invalid_configuration" {
 				hint = "router-axi wake <mac> --host <address>"
 			}
@@ -1160,7 +1160,7 @@ func protocolError(err error, host string) errorSpec {
 		case "backup":
 			hint = backupUsageHint(protocolErr.Code, host)
 		case "devices detail":
-			hint = "router-axi devices" + hostFlag(host)
+			hint = commandHint("devices", host, nil)
 		}
 		return errorSpec{ExitUsage, errorDetail{protocolErr.Code, protocolErr.Message, hint}}
 	case "auth":
@@ -1171,7 +1171,7 @@ func protocolError(err error, host string) errorSpec {
 		}
 		return errorSpec{ExitNetwork, errorDetail{"router_unreachable", protocolErr.Message, "check --host and local network access"}}
 	case "unsupported":
-		hint := "router-axi doctor" + hostFlag(host)
+		hint := commandHint("doctor", host, nil)
 		if protocolErr.Operation == "doctor" {
 			hint = ""
 		}
@@ -1189,9 +1189,9 @@ func backupUsageHint(code, host string) string {
 	case "backup_requires_https", "invalid_configuration":
 		return "router-axi backup --host https://<address> --output <path>"
 	case "backup_passphrase_missing":
-		return "set ROUTER_AXI_BACKUP_PASSWORD, then run router-axi backup --output <path>" + hostFlag(host)
+		return "set ROUTER_AXI_BACKUP_PASSWORD, then run " + commandHint("backup --output <path>", host, nil)
 	}
-	return "router-axi backup --output <path>" + hostFlag(host)
+	return commandHint("backup --output <path>", host, nil)
 }
 
 func backupDiagnosticHint(operation, code string) (string, bool) {
@@ -1251,19 +1251,19 @@ func writeError(w io.Writer, jsonOutput bool, exit int, code, message, hint stri
 // echoed, logged, or written anywhere but the encrypted export itself.
 func (a *App) runBackup(ctx context.Context, reader Reader, opts options, stdout, stderr io.Writer, passphrase string) int {
 	if strings.HasSuffix(opts.output, string(os.PathSeparator)) {
-		return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output must name a file, not a directory", "router-axi backup --output <path>"+hostFlag(opts.host))
+		return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output must name a file, not a directory", hintCommand(opts, "backup --output <path>"))
 	}
 	if info, err := os.Stat(opts.output); err == nil {
 		if info.IsDir() {
-			return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output names an existing directory", "router-axi backup --output <path>"+hostFlag(opts.host))
+			return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output names an existing directory", hintCommand(opts, "backup --output <path>"))
 		}
 		if !opts.force {
-			return writeError(stderr, opts.json, ExitUsage, "output_exists", "backup --output already exists; pass --force to overwrite it", "router-axi backup --output "+shellWord(opts.output)+" --force"+hostFlag(opts.host))
+			return writeError(stderr, opts.json, ExitUsage, "output_exists", "backup --output already exists; pass --force to overwrite it", hintCommand(opts, "backup --output "+shellWord(opts.output)+" --force"))
 		}
 	}
 	dir := filepath.Dir(opts.output)
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output parent directory does not exist", "router-axi backup --output <path>"+hostFlag(opts.host))
+		return writeError(stderr, opts.json, ExitUsage, "invalid_output", "backup --output parent directory does not exist", hintCommand(opts, "backup --output <path>"))
 	}
 	data, err := reader.ConfigExport(ctx, passphrase)
 	if err != nil {
@@ -1271,10 +1271,10 @@ func (a *App) runBackup(ctx context.Context, reader Reader, opts options, stdout
 	}
 	if writeErr := writeBackupFile(opts.output, data, opts.force); writeErr != nil {
 		if errors.Is(writeErr, os.ErrExist) && !opts.force {
-			return writeError(stderr, opts.json, ExitUsage, "output_exists", "backup --output already exists; pass --force to overwrite it", "router-axi backup --output "+shellWord(opts.output)+" --force"+hostFlag(opts.host))
+			return writeError(stderr, opts.json, ExitUsage, "output_exists", "backup --output already exists; pass --force to overwrite it", hintCommand(opts, "backup --output "+shellWord(opts.output)+" --force"))
 		}
 		if errors.Is(writeErr, errNoReplaceUnsupported) {
-			return writeError(stderr, opts.json, ExitInternal, "backup_link_unsupported", "the destination filesystem does not support the atomic no-replace write; --force writes with an atomic rename that replaces any existing file", "router-axi backup --output "+shellWord(opts.output)+" --force"+hostFlag(opts.host))
+			return writeError(stderr, opts.json, ExitInternal, "backup_link_unsupported", "the destination filesystem does not support the atomic no-replace write; --force writes with an atomic rename that replaces any existing file", hintCommand(opts, "backup --output "+shellWord(opts.output)+" --force"))
 		}
 		return writeError(stderr, opts.json, ExitInternal, "backup_write_failed", "the configuration export could not be written to the requested path", "check the destination directory and permissions")
 	}
@@ -1396,7 +1396,7 @@ func sendOnceTarget(mac string) string {
 }
 
 func writeWiFiPreview(w io.Writer, result tr064.WiFiMutation, opts options) error {
-	_, err := fmt.Fprintf(w, "wifi:\n  action: %s\n  instance: %s\n  current: %s\n  intended: %s\n  changed: false\nnext: router-axi wifi %s --instance %s --confirm%s\n", result.Action, scalar(result.Instance), state(result.Current), state(result.Intended), result.Action, instanceSuffix(result.Instance), hostFlag(opts.host))
+	_, err := fmt.Fprintf(w, "wifi:\n  action: %s\n  instance: %s\n  current: %s\n  intended: %s\n  changed: false\nnext: %s\n", result.Action, scalar(result.Instance), state(result.Current), state(result.Intended), hintCommand(opts, "wifi "+result.Action+" --instance "+instanceSuffix(result.Instance)+" --confirm"))
 	return err
 }
 
