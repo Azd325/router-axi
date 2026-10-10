@@ -183,7 +183,7 @@ type usageError struct{ message, hint string }
 
 func (e *usageError) Error() string { return e.message }
 
-func parseFields(command, value string) ([]string, error) {
+func parseFields(command, value, host string) ([]string, error) {
 	valid := fieldNames(command)
 	if valid == nil {
 		return nil, nil
@@ -198,13 +198,13 @@ func parseFields(command, value string) ([]string, error) {
 		if !known {
 			return nil, &usageError{
 				message: "unknown field for " + command + ": " + strconv.Quote(name) + "; valid fields: " + strings.Join(valid, ", "),
-				hint:    "router-axi " + command + " --fields " + strings.Join(valid[:2], ","),
+				hint:    "router-axi " + command + " --fields " + strings.Join(valid[:2], ",") + hostFlag(host),
 			}
 		}
 		if seen[name] {
 			return nil, &usageError{
 				message: "--fields lists " + name + " more than once",
-				hint:    "router-axi " + command + " --fields " + strings.Join(valid[:2], ","),
+				hint:    "router-axi " + command + " --fields " + strings.Join(valid[:2], ",") + hostFlag(host),
 			}
 		}
 		seen[name] = true

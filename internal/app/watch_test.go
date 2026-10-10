@@ -414,3 +414,14 @@ func TestWatchSignals(t *testing.T) {
 		}
 	}
 }
+
+func TestWatchUnsupportedHintOmitsHost(t *testing.T) {
+	reader := &watchReader{read: func(context.Context, int) (tr064.WatchSnapshot, error) {
+		return tr064.WatchSnapshot{}, &tr064.Error{Kind: "unsupported", Message: "synthetic"}
+	}}
+	var out, stderr bytes.Buffer
+	code := watchApp(reader).Run(t.Context(), []string{"watch", "--host", "192.168.77.1", "--count", "1", "--json"}, &out, &stderr)
+	if code != ExitUnsupported || strings.Contains(out.String(), "192.168.77.1") || !strings.Contains(out.String(), `"hint":"router-axi doctor --host <address>"`) {
+		t.Fatalf("code=%d out=%s", code, out.String())
+	}
+}

@@ -109,6 +109,11 @@ func watchReadError(w io.Writer, opts options, index int, err error) int {
 	if result.Kind == "usage" {
 		return writeError(w, jsonOutput, ExitUsage, "invalid_configuration", result.Message, "router-axi watch --host <address>")
 	}
+	opts.host = ""
+	if result.Kind == "unsupported" {
+		spec := protocolError(result, "")
+		return writeError(w, jsonOutput, spec.exit, spec.detail.Code, spec.detail.Message, "router-axi doctor --host <address>")
+	}
 	return renderProtocolError(w, opts, result)
 }
 

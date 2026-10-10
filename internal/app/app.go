@@ -695,7 +695,7 @@ func parse(args []string) (options, error) {
 		return opts, err
 	}
 	if rawFields != "" && !opts.help && fieldsCommand(opts) {
-		fields, err := parseFields(opts.command, rawFields)
+		fields, err := parseFields(opts.command, rawFields, opts.host)
 		if err != nil {
 			return opts, err
 		}
@@ -1171,7 +1171,11 @@ func protocolError(err error, host string) errorSpec {
 		}
 		return errorSpec{ExitNetwork, errorDetail{"router_unreachable", protocolErr.Message, "check --host and local network access"}}
 	case "unsupported":
-		return errorSpec{ExitUnsupported, errorDetail{"unsupported_capability", protocolErr.Message, "router-axi doctor" + hostFlag(host)}}
+		hint := "router-axi doctor" + hostFlag(host)
+		if protocolErr.Operation == "doctor" {
+			hint = ""
+		}
+		return errorSpec{ExitUnsupported, errorDetail{"unsupported_capability", protocolErr.Message, hint}}
 	default:
 		if hint, ok := backupDiagnosticHint(protocolErr.Operation, protocolErr.Code); ok {
 			return errorSpec{ExitRouter, errorDetail{protocolErr.Code, protocolErr.Message, hint}}

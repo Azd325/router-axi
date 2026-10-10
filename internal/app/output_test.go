@@ -220,3 +220,20 @@ func TestColonCellsAreQuotedInEveryTable(t *testing.T) {
 		}
 	}
 }
+
+func TestFieldsHintsCarryHost(t *testing.T) {
+	for _, fields := range []string{"bogus", "name,name"} {
+		code, out := runWithReader(t, fakeReader{}, "leases", "--host", "router.test", "--fields", fields)
+		if code != ExitUsage || !strings.HasSuffix(out, "  hint: router-axi leases --fields name,ip_address --host router.test\n") {
+			t.Errorf("fields=%q code=%d out=%q", fields, code, out)
+		}
+	}
+}
+
+func TestDoctorUnsupportedHasNoSelfHint(t *testing.T) {
+	reader := fakeReader{err: &tr064.Error{Kind: "unsupported", Operation: "doctor", Message: "synthetic"}}
+	code, out := runWithReader(t, reader, "doctor", "--host", "router.test", "--json")
+	if code != ExitUnsupported || !strings.Contains(out, `"code":"unsupported_capability"`) || strings.Contains(out, "hint") {
+		t.Errorf("code=%d out=%q", code, out)
+	}
+}
