@@ -24,6 +24,10 @@ router-axi setup uninstall --agent opencode
 
 Repeated installs repair the executable path and are idempotent. OpenCode setup adds `@opencode-ai/plugin` when needed; uninstall removes that declaration only when router-axi added it and its value remains unchanged. Pre-existing or modified dependencies and all unrelated package metadata are preserved.
 
+The hook command is `router-axi` when `PATH` resolves that name to the running executable, and the quoted absolute path otherwise. It discards errors and always exits 0, so a missing binary never breaks session start; the OpenCode plugin guards the call with `try`/`catch` and a 5 second timeout. `setup check` reports `stale` when the program the hook names no longer exists; `setup install` repairs it.
+
+For Codex, `setup install` also sets `[features].hooks = true` in `~/.codex/config.toml`, because Codex ignores `hooks.json` without it. Only that setting is edited: every other line, comment, and the line endings stay byte for byte, and a missing file is created with only that setting. The result reports `codex_hooks_feature` as `added`, `enabled`, or `changed_from_false`. `setup check` reports it as `enabled`, `disabled`, `missing`, or `unverifiable`. `setup uninstall` leaves the setting, because other tools can depend on it. When `config.toml` defines `features` in a form that cannot be edited safely without a TOML parser (inline table, other dotted keys, duplicate tables, a non-boolean `hooks`), install fails and changes nothing; set the value by hand.
+
 The bundled Agent Skill is a secondary on-demand discovery path for agents that support the agentskills.io format:
 
 ```sh

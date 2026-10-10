@@ -14,13 +14,23 @@ import (
 
 const (
 	sessionHookMarker        = "router-axi-session-hook"
+	sessionProgramName       = "router-axi"
+	sessionCommandTail       = " session dashboard 2>/dev/null || true # " + sessionHookMarker
+	legacySessionCommandTail = " session dashboard # " + sessionHookMarker
 	openCodePluginDependency = "^1.18.30"
+
+	openCodePluginPrefix = "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport type { Plugin } from \"@opencode-ai/plugin\";\n\nconst injected = new Set<string>();\n\nexport const RouterAxiPlugin: Plugin = async () => ({\n  \"experimental.chat.system.transform\": async (input, output) => {\n    if (input.sessionID && injected.has(input.sessionID)) return;\n    let context = \"\";\n    try {\n      context = execFileSync("
+	openCodePluginSuffix = ", { encoding: \"utf8\", shell: true, timeout: 5000, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    } catch {\n      return;\n    }\n    if (input.sessionID) injected.add(input.sessionID);\n    output.system.push(context);\n  },\n});\n\nexport default RouterAxiPlugin;\n"
+
+	legacyOpenCodePluginPrefix = "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport type { Plugin } from \"@opencode-ai/plugin\";\n\nconst injected = new Set<string>();\n\nexport const RouterAxiPlugin: Plugin = async () => ({\n  \"experimental.chat.system.transform\": async (input, output) => {\n    if (input.sessionID && injected.has(input.sessionID)) return;\n    const context = execFileSync("
+	legacyOpenCodePluginSuffix = ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    if (input.sessionID) injected.add(input.sessionID);\n    output.system.push(context);\n  },\n});\n\nexport default RouterAxiPlugin;\n"
 )
 
 type setupResult struct {
-	Agent   string `json:"agent"`
-	State   string `json:"state"`
-	Command string `json:"command,omitempty"`
+	Agent             string `json:"agent"`
+	State             string `json:"state"`
+	Command           string `json:"command,omitempty"`
+	CodexHooksFeature string `json:"codex_hooks_feature,omitempty"`
 }
 
 type ownerRecord struct {
@@ -32,6 +42,7 @@ type ownerRecord struct {
 type hookLocation struct {
 	agent        string
 	path         string
+	configPath   string
 	manifestPath string
 	markerPath   string
 }
@@ -81,6 +92,11 @@ func (a *App) runSetup(opts options, stdout io.Writer) int {
 				return ExitInternal
 			}
 		}
+		if result.CodexHooksFeature != "" {
+			if _, err := fmt.Fprintf(stdout, "  codex_hooks_feature: %s\n", result.CodexHooksFeature); err != nil {
+				return ExitInternal
+			}
+		}
 	}
 	return ExitOK
 }
@@ -107,6 +123,7 @@ func (a *App) setupAgent(action, agent string) (setupResult, error) {
 		location.markerPath = filepath.Join(home, ".claude", ".router-axi-session-hook")
 	case "codex":
 		location.path = filepath.Join(home, ".codex", "hooks.json")
+		location.configPath = filepath.Join(home, ".codex", "config.toml")
 		location.markerPath = filepath.Join(home, ".codex", ".router-axi-session-hook")
 	case "opencode":
 		location.path = filepath.Join(home, ".config", "opencode", "plugins", "router-axi.ts")
@@ -123,9 +140,9 @@ func (a *App) setupAgent(action, agent string) (setupResult, error) {
 			if err != nil {
 				return setupResult{}, err
 			}
-			return manageOpenCodePlugin(action, location, command, owner)
+			return manageOpenCodePlugin(action, location, command, owner, a.commandStale)
 		}
-		return manageOpenCodePlugin(action, location, "", owner)
+		return manageOpenCodePlugin(action, location, "", owner, a.commandStale)
 	}
 	command := ""
 	if action == "install" {
@@ -134,7 +151,44 @@ func (a *App) setupAgent(action, agent string) (setupResult, error) {
 			return setupResult{}, err
 		}
 	}
-	return manageHookJSON(action, location, command, owner)
+	if agent != "codex" {
+		return manageHookJSON(action, location, command, owner, a.commandStale)
+	}
+	return manageCodexHook(action, location, command, owner, a.commandStale)
+}
+
+func manageCodexHook(action string, location hookLocation, command string, owner ownerRecord, stale func(string) bool) (setupResult, error) {
+	var config []byte
+	var feature codexHooksUpdate
+	if action == "install" {
+		var err error
+		if config, err = readCodexConfig(location.configPath); err != nil {
+			return setupResult{}, err
+		}
+		if feature, err = enableCodexHooks(string(config)); err != nil {
+			return setupResult{}, err
+		}
+	}
+	result, err := manageHookJSON(action, location, command, owner, stale)
+	if err != nil {
+		return setupResult{}, err
+	}
+	switch action {
+	case "install":
+		if feature.Content != string(config) {
+			if err := writeCodexConfig(location.configPath, []byte(feature.Content)); err != nil {
+				return setupResult{}, err
+			}
+		}
+		result.CodexHooksFeature = feature.State
+	case "check":
+		data, err := readCodexConfig(location.configPath)
+		if err != nil {
+			return setupResult{}, err
+		}
+		result.CodexHooksFeature = codexHooksState(string(data))
+	}
+	return result, nil
 }
 
 func (a *App) sessionCommand() (string, error) {
@@ -142,14 +196,43 @@ func (a *App) sessionCommand() (string, error) {
 	if err != nil || path == "" {
 		return "", errors.New("resolve router-axi executable")
 	}
-	return shellQuote(path) + " session dashboard # " + sessionHookMarker, nil
+	program := shellQuote(path)
+	if a.pathResolvesTo(path) {
+		program = sessionProgramName
+	}
+	return program + sessionCommandTail, nil
+}
+
+func (a *App) pathResolvesTo(path string) bool {
+	found, err := a.lookPath(sessionProgramName)
+	if err != nil {
+		return false
+	}
+	foundInfo, err := os.Stat(found)
+	if err != nil {
+		return false
+	}
+	pathInfo, err := os.Stat(path)
+	return err == nil && os.SameFile(foundInfo, pathInfo)
+}
+
+func (a *App) commandStale(command string) bool {
+	program, ok := sessionProgram(command)
+	if !ok {
+		return false
+	}
+	if program == sessionProgramName {
+		_, err := a.lookPath(program)
+		return err != nil
+	}
+	return !a.programExists(program)
 }
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
-func manageHookJSON(action string, location hookLocation, command string, owner ownerRecord) (setupResult, error) {
+func manageHookJSON(action string, location hookLocation, command string, owner ownerRecord, stale func(string) bool) (setupResult, error) {
 	root := map[string]any{}
 	data, err := os.ReadFile(location.path)
 	if err != nil && !os.IsNotExist(err) {
@@ -192,6 +275,9 @@ func manageHookJSON(action string, location hookLocation, command string, owner 
 	state := "missing"
 	if len(managed) == 1 {
 		state = "installed"
+		if hookCommand, _ := managedEntryCommand(entries[managed[0]]); stale(hookCommand) {
+			state = "stale"
+		}
 	}
 	switch action {
 	case "check":
@@ -266,18 +352,50 @@ func isManagedHook(value any, owner ownerRecord) bool {
 	return ok && valid && shapeHash == owner.ShapeHash && isManagedCommand(command, owner)
 }
 
+func managedEntryCommand(value any) (string, bool) {
+	entry, ok := value.(map[string]any)
+	if !ok {
+		return "", false
+	}
+	hooks, ok := entry["hooks"].([]any)
+	if !ok || len(hooks) != 1 {
+		return "", false
+	}
+	hook, ok := hooks[0].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	command, ok := hook["command"].(string)
+	return command, ok
+}
+
 func isManagedCommand(command string, owner ownerRecord) bool {
 	return owner.ShapeHash != "" && (command == owner.Command || isSessionCommand(command))
 }
 
 func isSessionCommand(command string) bool {
-	suffix := "' session dashboard # " + sessionHookMarker
-	if !strings.HasPrefix(command, "'") || !strings.HasSuffix(command, suffix) {
-		return false
+	_, ok := sessionProgram(command)
+	return ok
+}
+
+func sessionProgram(command string) (string, bool) {
+	for _, tail := range []string{sessionCommandTail, legacySessionCommandTail} {
+		head, found := strings.CutSuffix(command, tail)
+		if !found {
+			continue
+		}
+		if head == sessionProgramName {
+			return head, true
+		}
+		if !strings.HasPrefix(head, "'") || !strings.HasSuffix(head, "'") || len(head) < 2 {
+			continue
+		}
+		path := strings.ReplaceAll(head[1:len(head)-1], "'\\''", "'")
+		if shellQuote(path) == head {
+			return path, true
+		}
 	}
-	path := strings.TrimSuffix(strings.TrimPrefix(command, "'"), suffix)
-	path = strings.ReplaceAll(path, "'\\''", "'")
-	return shellQuote(path)+" session dashboard # "+sessionHookMarker == command
+	return "", false
 }
 
 func hookShapeHash(value any) (string, bool) {
@@ -417,7 +535,7 @@ func removeOwnedOpenCodeDependency(path string, owner ownerRecord) error {
 	return atomicWrite(path, append(encoded, '\n'), 0o600)
 }
 
-func manageOpenCodePlugin(action string, location hookLocation, command string, owner ownerRecord) (setupResult, error) {
+func manageOpenCodePlugin(action string, location hookLocation, command string, owner ownerRecord, stale func(string) bool) (setupResult, error) {
 	data, err := os.ReadFile(location.path)
 	if err != nil && !os.IsNotExist(err) {
 		return setupResult{}, err
@@ -435,6 +553,9 @@ func manageOpenCodePlugin(action string, location hookLocation, command string, 
 		state := "missing"
 		if managed && dependency {
 			state = "installed"
+			if pluginCommand, _, _ := openCodePluginParts(data); stale(pluginCommand) {
+				state = "stale"
+			}
 		}
 		return setupResult{Agent: location.agent, State: state, Command: command}, nil
 	case "uninstall":
@@ -459,7 +580,7 @@ func manageOpenCodePlugin(action string, location hookLocation, command string, 
 		if err != nil {
 			return setupResult{}, err
 		}
-		plugin := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport type { Plugin } from \"@opencode-ai/plugin\";\n\nconst injected = new Set<string>();\n\nexport const RouterAxiPlugin: Plugin = async () => ({\n  \"experimental.chat.system.transform\": async (input, output) => {\n    if (input.sessionID && injected.has(input.sessionID)) return;\n    const context = execFileSync(" + jsonStringCommand(command) + ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    if (input.sessionID) injected.add(input.sessionID);\n    output.system.push(context);\n  },\n});\n\nexport default RouterAxiPlugin;\n"
+		plugin := openCodePluginPrefix + jsonStringCommand(command) + openCodePluginSuffix
 		if err := atomicWrite(location.path, []byte(plugin), 0o600); err != nil {
 			if restoreErr := restoreFile(location.manifestPath, manifestData, manifestExists); restoreErr != nil {
 				return setupResult{}, fmt.Errorf("write plugin: %w; rollback manifest: %v", err, restoreErr)
@@ -492,18 +613,19 @@ func isManagedOpenCodePlugin(data []byte, owner ownerRecord) bool {
 
 func openCodePluginParts(data []byte) (string, string, bool) {
 	content := string(data)
-	prefix := "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport type { Plugin } from \"@opencode-ai/plugin\";\n\nconst injected = new Set<string>();\n\nexport const RouterAxiPlugin: Plugin = async () => ({\n  \"experimental.chat.system.transform\": async (input, output) => {\n    if (input.sessionID && injected.has(input.sessionID)) return;\n    const context = execFileSync("
-	suffix := ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    if (input.sessionID) injected.add(input.sessionID);\n    output.system.push(context);\n  },\n});\n\nexport default RouterAxiPlugin;\n"
-	if !strings.HasPrefix(content, prefix) || !strings.HasSuffix(content, suffix) {
-		return "", "", false
+	for _, shape := range [][2]string{{openCodePluginPrefix, openCodePluginSuffix}, {legacyOpenCodePluginPrefix, legacyOpenCodePluginSuffix}} {
+		prefix, suffix := shape[0], shape[1]
+		if !strings.HasPrefix(content, prefix) || !strings.HasSuffix(content, suffix) {
+			continue
+		}
+		encodedCommand := strings.TrimSuffix(strings.TrimPrefix(content, prefix), suffix)
+		var command string
+		if json.Unmarshal([]byte(encodedCommand), &command) != nil {
+			continue
+		}
+		return command, contentHash([]byte(prefix + jsonStringCommand("") + suffix)), true
 	}
-	encodedCommand := strings.TrimSuffix(strings.TrimPrefix(content, prefix), suffix)
-	var command string
-	if json.Unmarshal([]byte(encodedCommand), &command) != nil {
-		return "", "", false
-	}
-	normalized := prefix + jsonStringCommand("") + suffix
-	return command, contentHash([]byte(normalized)), true
+	return "", "", false
 }
 
 func jsonStringCommand(value string) string {
@@ -575,4 +697,9 @@ func restoreFile(path string, data []byte, existed bool) error {
 		return nil
 	}
 	return atomicWrite(path, data, 0o600)
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil || !os.IsNotExist(err)
 }

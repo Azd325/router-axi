@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +18,8 @@ func setupApp(t *testing.T, home string) *App {
 	}, func(string) string { return "" })
 	application.homeDir = func() (string, error) { return home, nil }
 	application.executable = func() (string, error) { return "/opt/router-axi/router-axi", nil }
+	application.lookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	application.programExists = func(string) bool { return true }
 	return application
 }
 
@@ -204,7 +207,7 @@ func TestSetupPreservesUnrelatedClaudeHooksAndRepairsPath(t *testing.T) {
 		t.Fatalf("install: code=%d stdout=%q", code, stdout.String())
 	}
 	config := readPersistedHookConfig(t, path)
-	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[0].Hooks[0].Command != "keep-me" || config.Hooks.SessionStart[1].Hooks[0].Command != "'/opt/router-axi/router-axi' session dashboard # "+sessionHookMarker {
+	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[0].Hooks[0].Command != "keep-me" || config.Hooks.SessionStart[1].Hooks[0].Command != "'/opt/router-axi/router-axi' session dashboard 2>/dev/null || true # "+sessionHookMarker {
 		t.Fatalf("settings lost unrelated hook or managed path: %+v", config)
 	}
 	application.executable = func() (string, error) { return "/new/router-axi", nil }
@@ -213,7 +216,7 @@ func TestSetupPreservesUnrelatedClaudeHooksAndRepairsPath(t *testing.T) {
 		t.Fatalf("repair: code=%d stdout=%q", code, stdout.String())
 	}
 	config = readPersistedHookConfig(t, path)
-	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[1].Hooks[0].Command != "'/new/router-axi' session dashboard # "+sessionHookMarker {
+	if len(config.Hooks.SessionStart) != 2 || config.Hooks.SessionStart[1].Hooks[0].Command != "'/new/router-axi' session dashboard 2>/dev/null || true # "+sessionHookMarker {
 		t.Fatalf("managed path was not repaired: %+v", config)
 	}
 }
@@ -414,5 +417,290 @@ func TestSetupUsage(t *testing.T) {
 		if code != ExitUsage || stderr != "" {
 			t.Fatalf("args=%q code=%d stdout=%q stderr=%q", args, code, stdout, stderr)
 		}
+	}
+}
+
+func runSetup(t *testing.T, application *App, args ...string) (int, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	code := application.Run(t.Context(), append([]string{"setup"}, args...), &stdout, &stderr)
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr=%q", stderr.String())
+	}
+	return code, stdout.String()
+}
+
+func codexConfigPath(home string) string { return filepath.Join(home, ".codex", "config.toml") }
+
+func writeCodexConfigFixture(t *testing.T, home, content string) {
+	t.Helper()
+	path := codexConfigPath(home)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o640); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSetupCodexInstallEnablesHooksFeature(t *testing.T) {
+	for _, test := range []struct {
+		name, before, after, state string
+	}{
+		{"missing file", "", "[features]\nhooks = true\n", "added"},
+		{"blank file", "\n\n", "[features]\nhooks = true\n", "added"},
+		{"no features table", "model = \"x\" # keep\n\n[tools]\nweb = true", "model = \"x\" # keep\n\n[tools]\nweb = true\n\n[features]\nhooks = true\n", "added"},
+		{"CRLF file", "model = \"x\"\r\n", "model = \"x\"\r\n\r\n[features]\r\nhooks = true\r\n", "added"},
+		{"features without hooks", "# top\n[features]\nother = true\n\n# next\n[tools]\nweb = true\n", "# top\n[features]\nother = true\nhooks = true\n\n# next\n[tools]\nweb = true\n", "added"},
+		{"features at end without newline", "[features]\nother = true", "[features]\nother = true\nhooks = true\n", "added"},
+		{"false", "[features]\nhooks = false # off\nother = 1\n", "[features]\nhooks = true # off\nother = 1\n", "changed_from_false"},
+		{"true", "[features]\nhooks = true\n", "[features]\nhooks = true\n", "enabled"},
+		{"dotted true", "features.hooks = true\n", "features.hooks = true\n", "enabled"},
+		{"dotted false", "features.hooks = false\n", "features.hooks = true\n", "changed_from_false"},
+		{"multiline string", "text = \"\"\"\n[features]\nhooks = false\n\"\"\"\n", "text = \"\"\"\n[features]\nhooks = false\n\"\"\"\n\n[features]\nhooks = true\n", "added"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			if test.before != "" {
+				writeCodexConfigFixture(t, home, test.before)
+			}
+			code, stdout := runSetup(t, setupApp(t, home), "install", "--agent", "codex")
+			if code != ExitOK || !strings.Contains(stdout, "codex_hooks_feature: "+test.state+"\n") {
+				t.Fatalf("code=%d stdout=%q", code, stdout)
+			}
+			data, err := os.ReadFile(codexConfigPath(home))
+			if err != nil || string(data) != test.after {
+				t.Fatalf("config=%q err=%v want %q", data, err, test.after)
+			}
+			if test.before != "" {
+				info, _ := os.Stat(codexConfigPath(home))
+				if info.Mode().Perm() != 0o640 {
+					t.Fatalf("mode=%v", info.Mode().Perm())
+				}
+			}
+		})
+	}
+}
+
+func TestSetupCodexCheckReportsFeatureAndUninstallLeavesIt(t *testing.T) {
+	home := t.TempDir()
+	application := setupApp(t, home)
+	code, stdout := runSetup(t, application, "check", "--agent", "codex", "--json")
+	if code != ExitOK || !strings.Contains(stdout, `"codex_hooks_feature":"missing"`) {
+		t.Fatalf("missing: code=%d stdout=%q", code, stdout)
+	}
+	writeCodexConfigFixture(t, home, "[features]\nhooks = false\n")
+	if _, stdout = runSetup(t, application, "check", "--agent", "codex"); !strings.Contains(stdout, "codex_hooks_feature: disabled") {
+		t.Fatalf("disabled: %q", stdout)
+	}
+	if code, stdout = runSetup(t, application, "install", "--agent", "codex"); code != ExitOK || !strings.Contains(stdout, "codex_hooks_feature: changed_from_false") {
+		t.Fatalf("install: code=%d stdout=%q", code, stdout)
+	}
+	if _, stdout = runSetup(t, application, "check", "--agent", "codex"); !strings.Contains(stdout, "state: installed") || !strings.Contains(stdout, "codex_hooks_feature: enabled") {
+		t.Fatalf("enabled: %q", stdout)
+	}
+	if code, stdout = runSetup(t, application, "uninstall", "--agent", "codex"); code != ExitOK || strings.Contains(stdout, "codex_hooks_feature") {
+		t.Fatalf("uninstall: code=%d stdout=%q", code, stdout)
+	}
+	data, _ := os.ReadFile(codexConfigPath(home))
+	if string(data) != "[features]\nhooks = true\n" {
+		t.Fatalf("uninstall changed config: %q", data)
+	}
+}
+
+func TestSetupCodexRefusesUnsafeConfigWithoutWriting(t *testing.T) {
+	for name, content := range map[string]string{
+		"inline table":     "features = { hooks = false }\n",
+		"other dotted key": "features.other = true\n",
+		"string value":     "[features]\nhooks = \"yes\"\n",
+		"duplicate hooks":  "[features]\nhooks = true\nhooks = false\n",
+		"array of tables":  "[[features]]\nhooks = true\n",
+		"duplicate table":  "[features]\na = 1\n[features]\nb = 1\n",
+		"hooks sub table":  "[features]\nhooks.x = 1\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			writeCodexConfigFixture(t, home, content)
+			code, stdout := runSetup(t, setupApp(t, home), "install", "--agent", "codex")
+			if code != ExitInternal || !strings.Contains(stdout, "set [features].hooks = true manually") {
+				t.Fatalf("code=%d stdout=%q", code, stdout)
+			}
+			data, _ := os.ReadFile(codexConfigPath(home))
+			if string(data) != content {
+				t.Fatalf("config changed: %q", data)
+			}
+			if _, err := os.Stat(filepath.Join(home, ".codex", "hooks.json")); !os.IsNotExist(err) {
+				t.Fatalf("hook written despite refusal: %v", err)
+			}
+			if _, stdout = runSetup(t, setupApp(t, home), "check", "--agent", "codex"); !strings.Contains(stdout, "codex_hooks_feature: unverifiable") {
+				t.Fatalf("check: %q", stdout)
+			}
+		})
+	}
+}
+
+func TestSetupCodexOtherAgentsNeverTouchConfig(t *testing.T) {
+	home := t.TempDir()
+	application := setupApp(t, home)
+	for _, agent := range []string{"claude", "opencode"} {
+		if code, stdout := runSetup(t, application, "install", "--agent", agent); code != ExitOK || strings.Contains(stdout, "codex_hooks_feature") {
+			t.Fatalf("%s: code=%d stdout=%q", agent, code, stdout)
+		}
+	}
+	if _, err := os.Stat(codexConfigPath(home)); !os.IsNotExist(err) {
+		t.Fatalf("config.toml created: %v", err)
+	}
+}
+
+func TestSetupHookCommandUsesBinaryNameOnlyWhenPathResolvesToExecutable(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "real-router-axi")
+	other := filepath.Join(dir, "other-router-axi")
+	for _, path := range []string{binary, other} {
+		if err := os.WriteFile(path, []byte(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	link := filepath.Join(dir, "router-axi")
+	if err := os.Symlink(binary, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, found, want string
+	}{
+		{"same file through symlink", link, "router-axi session dashboard 2>/dev/null || true # " + sessionHookMarker},
+		{"different file", other, shellQuote(binary) + " session dashboard 2>/dev/null || true # " + sessionHookMarker},
+		{"not on PATH", "", shellQuote(binary) + " session dashboard 2>/dev/null || true # " + sessionHookMarker},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			home := t.TempDir()
+			application := setupApp(t, home)
+			application.executable = func() (string, error) { return binary, nil }
+			application.lookPath = func(string) (string, error) {
+				if test.found == "" {
+					return "", exec.ErrNotFound
+				}
+				return test.found, nil
+			}
+			if code, stdout := runSetup(t, application, "install", "--agent", "claude"); code != ExitOK {
+				t.Fatalf("code=%d stdout=%q", code, stdout)
+			}
+			config := readPersistedHookConfig(t, filepath.Join(home, ".claude", "settings.json"))
+			if got := config.Hooks.SessionStart[0].Hooks[0].Command; got != test.want {
+				t.Fatalf("command=%q want %q", got, test.want)
+			}
+			if code, stdout := runSetup(t, application, "check", "--agent", "claude"); code != ExitOK || !strings.Contains(stdout, "state: installed") {
+				t.Fatalf("check: code=%d stdout=%q", code, stdout)
+			}
+		})
+	}
+}
+
+func TestSetupRepairsLegacyHookAndPluginShapes(t *testing.T) {
+	home := t.TempDir()
+	application := setupApp(t, home)
+	if code, stdout := runSetup(t, application, "install", "--agent", "claude"); code != ExitOK {
+		t.Fatalf("install: code=%d stdout=%q", code, stdout)
+	}
+	settings := filepath.Join(home, ".claude", "settings.json")
+	data, _ := os.ReadFile(settings)
+	legacy := strings.ReplaceAll(strings.ReplaceAll(string(data), " 2\\u003e/dev/null || true", ""), " 2>/dev/null || true", "")
+	if legacy == string(data) {
+		t.Fatal("fixture was not rewritten to the legacy command")
+	}
+	if err := os.WriteFile(settings, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if code, stdout := runSetup(t, application, "check", "--agent", "claude"); code != ExitOK || !strings.Contains(stdout, "state: installed") {
+		t.Fatalf("legacy check: code=%d stdout=%q", code, stdout)
+	}
+	if code, _ := runSetup(t, application, "install", "--agent", "claude"); code != ExitOK {
+		t.Fatalf("legacy repair failed")
+	}
+	if config := readPersistedHookConfig(t, settings); len(config.Hooks.SessionStart) != 1 || !strings.Contains(config.Hooks.SessionStart[0].Hooks[0].Command, "2>/dev/null || true") {
+		t.Fatalf("legacy hook not repaired: %+v", config)
+	}
+
+	plugin := filepath.Join(home, ".config", "opencode", "plugins", "router-axi.ts")
+	if code, stdout := runSetup(t, application, "install", "--agent", "opencode"); code != ExitOK {
+		t.Fatalf("install: code=%d stdout=%q", code, stdout)
+	}
+	command, err := application.sessionCommand()
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyCommand := strings.ReplaceAll(command, " 2>/dev/null || true", "")
+	legacyPlugin := legacyOpenCodePluginPrefix + jsonStringCommand(legacyCommand) + legacyOpenCodePluginSuffix
+	if err := os.WriteFile(plugin, []byte(legacyPlugin), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := readOwner(filepath.Join(filepath.Dir(plugin), ".router-axi-session-hook"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, owner.ShapeHash, _ = openCodePluginParts([]byte(legacyPlugin))
+	if err := writeOwner(filepath.Join(filepath.Dir(plugin), ".router-axi-session-hook"), owner); err != nil {
+		t.Fatal(err)
+	}
+	if code, stdout := runSetup(t, application, "check", "--agent", "opencode"); code != ExitOK || !strings.Contains(stdout, "state: installed") {
+		t.Fatalf("legacy plugin check: code=%d stdout=%q", code, stdout)
+	}
+	if code, stdout := runSetup(t, application, "install", "--agent", "opencode"); code != ExitOK {
+		t.Fatalf("legacy plugin repair: code=%d stdout=%q", code, stdout)
+	}
+	data, _ = os.ReadFile(plugin)
+	if !strings.Contains(string(data), "try {") || !strings.Contains(string(data), "timeout: 5000") || !strings.Contains(string(data), "} catch {") {
+		t.Fatalf("plugin lacks failure guard: %s", data)
+	}
+}
+
+func TestSetupCheckReportsStaleWhenProgramIsGone(t *testing.T) {
+	for _, agent := range []string{"claude", "codex", "opencode"} {
+		t.Run(agent, func(t *testing.T) {
+			home := t.TempDir()
+			application := setupApp(t, home)
+			if code, stdout := runSetup(t, application, "install", "--agent", agent); code != ExitOK {
+				t.Fatalf("install: code=%d stdout=%q", code, stdout)
+			}
+			application.programExists = func(string) bool { return false }
+			if code, stdout := runSetup(t, application, "check", "--agent", agent); code != ExitOK || !strings.Contains(stdout, "state: stale") {
+				t.Fatalf("check: code=%d stdout=%q", code, stdout)
+			}
+			application.programExists = func(string) bool { return true }
+			if _, stdout := runSetup(t, application, "check", "--agent", agent); !strings.Contains(stdout, "state: installed") {
+				t.Fatalf("check after restore: %q", stdout)
+			}
+		})
+	}
+}
+
+func TestSetupCheckReportsStaleWhenBinaryNameLeavesPath(t *testing.T) {
+	home := t.TempDir()
+	application := setupApp(t, home)
+	binary := filepath.Join(t.TempDir(), "router-axi")
+	if err := os.WriteFile(binary, nil, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	application.executable = func() (string, error) { return binary, nil }
+	application.lookPath = func(string) (string, error) { return binary, nil }
+	if code, stdout := runSetup(t, application, "install", "--agent", "claude"); code != ExitOK {
+		t.Fatalf("install: code=%d stdout=%q", code, stdout)
+	}
+	application.lookPath = func(string) (string, error) { return "", exec.ErrNotFound }
+	if _, stdout := runSetup(t, application, "check", "--agent", "claude"); !strings.Contains(stdout, "state: stale") {
+		t.Fatalf("check: %q", stdout)
+	}
+}
+
+func TestSetupHookCommandFailsSafe(t *testing.T) {
+	application := setupApp(t, t.TempDir())
+	application.executable = func() (string, error) { return "/nonexistent/router-axi", nil }
+	command, err := application.sessionCommand()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("sh", "-c", command).CombinedOutput()
+	if err != nil || len(out) != 0 {
+		t.Fatalf("hook command failed loudly: err=%v out=%q", err, out)
 	}
 }
