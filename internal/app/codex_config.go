@@ -89,7 +89,7 @@ func parseTOMLTableHeader(text string) (keys []string, array, ok bool) {
 			key, rest = rest[1:end], rest[end+1:]
 		default:
 			end := strings.IndexFunc(rest, func(r rune) bool {
-				return !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-')
+				return (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' && r != '-'
 			})
 			if end <= 0 {
 				return nil, false, false
