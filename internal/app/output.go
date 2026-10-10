@@ -198,13 +198,13 @@ func parseFields(command, value, host string) ([]string, error) {
 		if !known {
 			return nil, &usageError{
 				message: "unknown field for " + command + ": " + strconv.Quote(name) + "; valid fields: " + strings.Join(valid, ", "),
-				hint:    "router-axi " + command + " --fields " + strings.Join(valid[:2], ",") + hostFlag(host),
+				hint:    commandHint(command+" --fields "+strings.Join(valid[:2], ","), host, nil),
 			}
 		}
 		if seen[name] {
 			return nil, &usageError{
 				message: "--fields lists " + name + " more than once",
-				hint:    "router-axi " + command + " --fields " + strings.Join(valid[:2], ",") + hostFlag(host),
+				hint:    commandHint(command+" --fields "+strings.Join(valid[:2], ","), host, nil),
 			}
 		}
 		seen[name] = true
@@ -219,7 +219,11 @@ func hostFlag(host string) string {
 		return ""
 	}
 	if strings.Contains(host, "://") {
-		if parsed, err := url.Parse(host); err == nil && parsed.User != nil {
+		parsed, err := url.Parse(host)
+		if err != nil {
+			return " --host <address>"
+		}
+		if parsed.User != nil {
 			parsed.User = nil
 			host = parsed.String()
 		}
@@ -230,7 +234,15 @@ func hostFlag(host string) string {
 }
 
 func hintCommand(opts options, args string) string {
-	return "router-axi " + args + hostFlag(opts.host)
+	return commandHint(args, opts.host, opts.fields)
+}
+
+func commandHint(args, host string, fields []string) string {
+	hint := "router-axi " + args
+	if tokens := strings.Fields(args); len(fields) > 0 && len(tokens) > 0 && fieldNames(tokens[0]) != nil && (len(tokens) == 1 || strings.HasPrefix(tokens[1], "-")) {
+		hint += " --fields " + strings.Join(fields, ",")
+	}
+	return hint + hostFlag(host)
 }
 
 func writeNext(w io.Writer, hints ...string) error {

@@ -237,3 +237,51 @@ func TestDoctorUnsupportedHasNoSelfHint(t *testing.T) {
 		t.Errorf("code=%d out=%q", code, out)
 	}
 }
+
+func TestOmittedHintCarriesFields(t *testing.T) {
+	forwards := make([]tr064.Forward, 103)
+	for i := range forwards {
+		forwards[i] = tr064.Forward{Protocol: "TCP", ExternalPort: uint64(8000 + i), InternalClient: "192.0.2.1", InternalPort: 80}
+	}
+	for _, test := range []struct {
+		reader  Reader
+		command string
+		fields  string
+	}{
+		{manyLeasesReader{}, "leases", "name,lease_time_remaining"},
+		{manyCallsReader{}, "calls", "date,duration"},
+		{manyDevicesReader{}, "devices", "name,ip_address"},
+		{forwardsReader{forwards: forwards}, "forwards", "external_port,description"},
+	} {
+		code, out := runWithReader(t, test.reader, test.command, "--fields", test.fields, "--host", "router.test")
+		want := "router-axi " + test.command + " --all --fields " + test.fields + " --host router.test"
+		if code != ExitOK || !strings.Contains(out, want) {
+			t.Errorf("%s code=%d out=%q", test.command, code, out)
+		}
+	}
+}
+
+func TestHintToCommandWithoutFieldsDoesNotCarryThem(t *testing.T) {
+	code, out := runWithReader(t, fakeReader{}, "wifi", "--fields", "ssid,channel")
+	if code != ExitOK || !strings.Contains(out, "next: router-axi wifi detail\n") || strings.Contains(out, "next: router-axi wifi detail --fields") {
+		t.Errorf("wifi code=%d out=%q", code, out)
+	}
+	code, out = runWithReader(t, manyDevicesReader{}, "devices", "--fields", "name")
+	if code != ExitOK || strings.Contains(out, "detail --ip <ip> --fields") {
+		t.Errorf("devices code=%d out=%q", code, out)
+	}
+	code, out = runWithReader(t, fakeReader{})
+	if code != ExitOK || strings.Contains(out, "--fields") {
+		t.Errorf("home code=%d out=%q", code, out)
+	}
+}
+
+func TestUnparsableHostUserInfoNeverEchoed(t *testing.T) {
+	if got := hostFlag("https://user:sec%ret@router.test"); got != " --host <address>" {
+		t.Errorf("hostFlag=%q", got)
+	}
+	code, out := runWithReader(t, fakeReader{}, "leases", "--host", "https://user:sec%ret@router.test", "--fields", "bogus")
+	if code != ExitUsage || strings.Contains(out, "sec%ret") || !strings.Contains(out, "--fields name,ip_address --host <address>") {
+		t.Errorf("code=%d out=%q", code, out)
+	}
+}
