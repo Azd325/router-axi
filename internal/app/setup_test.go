@@ -777,7 +777,7 @@ func TestSetupFailedNamesFilesWithoutHomePathOrRawError(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
-		}, "claude", "permission denied for ~/.claude/"},
+		}, "claude", "permission denied for ~/.claude/settings.json"},
 		{"package.json is a directory", func(t *testing.T, home string) {
 			if err := os.MkdirAll(filepath.Join(home, ".config", "opencode", "package.json"), 0o700); err != nil {
 				t.Fatal(err)

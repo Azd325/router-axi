@@ -3138,7 +3138,6 @@ func TestRequestNetworkErrorMessagesAreFixedPerFaultClass(t *testing.T) {
 		{"dns", wrap(&net.OpError{Op: "dial", Err: &net.DNSError{Err: "no such host", Name: "fritz.box"}}), "the router host name could not be resolved"},
 		{"deadline", wrap(context.DeadlineExceeded), "the router did not answer in time"},
 		{"transport timeout", wrap(&net.OpError{Op: "dial", Err: timeoutError{}}), "the router did not answer in time"},
-		{"canceled", wrap(context.Canceled), "the request was canceled"},
 		{"other", wrap(errors.New("private-network-error 192.0.2.77")), "the router could not be reached"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

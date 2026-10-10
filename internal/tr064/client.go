@@ -2637,8 +2637,6 @@ func networkFaultMessage(err error) string {
 		return "the router host name could not be resolved"
 	case errors.Is(err, context.DeadlineExceeded) || errors.As(err, &netErr) && netErr.Timeout():
 		return "the router did not answer in time"
-	case errors.Is(err, context.Canceled):
-		return "the request was canceled"
 	}
 	return "the router could not be reached"
 }

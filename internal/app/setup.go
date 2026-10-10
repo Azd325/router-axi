@@ -667,22 +667,29 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
+	writeErr := func(err error) error {
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			err = pathErr.Err
+		}
+		return &fs.PathError{Op: "write", Path: path, Err: err}
+	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".router-axi-*")
 	if err != nil {
-		return err
+		return writeErr(err)
 	}
 	tmpPath := tmp.Name()
 	defer func() { _ = os.Remove(tmpPath) }()
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
-		return err
+		return writeErr(err)
 	}
 	if err := tmp.Chmod(mode); err != nil {
 		_ = tmp.Close()
-		return err
+		return writeErr(err)
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return writeErr(err)
 	}
 	return os.Rename(tmpPath, path)
 }
