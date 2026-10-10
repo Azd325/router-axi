@@ -457,6 +457,11 @@ func TestSetupCodexInstallEnablesHooksFeature(t *testing.T) {
 		{"true", "[features]\nhooks = true\n", "[features]\nhooks = true\n", "enabled"},
 		{"dotted true", "features.hooks = true\n", "features.hooks = true\n", "enabled"},
 		{"dotted false", "features.hooks = false\n", "features.hooks = true\n", "changed_from_false"},
+		{"path-keyed table after features", "[features]\nother = true\n\n[projects.\"/Users/x/code~@+\"]\ntrust_level = \"trusted\"\n", "[features]\nother = true\nhooks = true\n\n[projects.\"/Users/x/code~@+\"]\ntrust_level = \"trusted\"\n", "added"},
+		{"hooks key in path-keyed table", "[projects.\"/a/b\"]\nhooks = false\n", "[projects.\"/a/b\"]\nhooks = false\n\n[features]\nhooks = true\n", "added"},
+		{"quoted features table", "[\"features\"]\nother = 1\n", "[\"features\"]\nother = 1\nhooks = true\n", "added"},
+		{"triple quote inside comment", "# use \"\"\" here\n[features]\nother = 1\n", "# use \"\"\" here\n[features]\nother = 1\nhooks = true\n", "added"},
+		{"array element looks like header", "list = [\n  [features],\n  [\"a\"]\n]\n[features]\nother = 1\n", "list = [\n  [features],\n  [\"a\"]\n]\n[features]\nother = 1\nhooks = true\n", "added"},
 		{"multiline string", "text = \"\"\"\n[features]\nhooks = false\n\"\"\"\n", "text = \"\"\"\n[features]\nhooks = false\n\"\"\"\n\n[features]\nhooks = true\n", "added"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -510,13 +515,14 @@ func TestSetupCodexCheckReportsFeatureAndUninstallLeavesIt(t *testing.T) {
 
 func TestSetupCodexRefusesUnsafeConfigWithoutWriting(t *testing.T) {
 	for name, content := range map[string]string{
-		"inline table":     "features = { hooks = false }\n",
-		"other dotted key": "features.other = true\n",
-		"string value":     "[features]\nhooks = \"yes\"\n",
-		"duplicate hooks":  "[features]\nhooks = true\nhooks = false\n",
-		"array of tables":  "[[features]]\nhooks = true\n",
-		"duplicate table":  "[features]\na = 1\n[features]\nb = 1\n",
-		"hooks sub table":  "[features]\nhooks.x = 1\n",
+		"inline table":       "features = { hooks = false }\n",
+		"other dotted key":   "features.other = true\n",
+		"string value":       "[features]\nhooks = \"yes\"\n",
+		"duplicate hooks":    "[features]\nhooks = true\nhooks = false\n",
+		"array of tables":    "[[features]]\nhooks = true\n",
+		"duplicate table":    "[features]\na = 1\n[features]\nb = 1\n",
+		"hooks sub table":    "[features]\nhooks.x = 1\n",
+		"unparseable header": "[features\nhooks = true\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			home := t.TempDir()
@@ -622,35 +628,70 @@ func TestSetupRepairsLegacyHookAndPluginShapes(t *testing.T) {
 	}
 
 	plugin := filepath.Join(home, ".config", "opencode", "plugins", "router-axi.ts")
-	if code, stdout := runSetup(t, application, "install", "--agent", "opencode"); code != ExitOK {
-		t.Fatalf("install: code=%d stdout=%q", code, stdout)
-	}
-	command, err := application.sessionCommand()
-	if err != nil {
+	marker := filepath.Join(filepath.Dir(plugin), ".router-axi-session-hook")
+	const legacyCommand = `'/opt/router-axi/router-axi' session dashboard # router-axi-session-hook`
+	const v050Plugin = `// router-axi-session-hook
+import { execFileSync } from "node:child_process";
+import type { Plugin } from "@opencode-ai/plugin";
+
+const injected = new Set<string>();
+
+export const RouterAxiPlugin: Plugin = async () => ({
+  "experimental.chat.system.transform": async (input, output) => {
+    if (input.sessionID && injected.has(input.sessionID)) return;
+    const context = execFileSync("'/opt/router-axi/router-axi' session dashboard # router-axi-session-hook", { encoding: "utf8", shell: true, stdio: ["ignore", "pipe", "ignore"] });
+    if (input.sessionID) injected.add(input.sessionID);
+    output.system.push(context);
+  },
+});
+
+export default RouterAxiPlugin;
+`
+	const v050ShapeHash = "2d55dee34fe20323212d1e5ae783c68079f318d8d7f239af6fd0075402f11a09"
+	if err := os.MkdirAll(filepath.Dir(plugin), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	legacyCommand := strings.ReplaceAll(command, " 2>/dev/null || true", "")
-	legacyPlugin := legacyOpenCodePluginPrefix + jsonStringCommand(legacyCommand) + legacyOpenCodePluginSuffix
-	if err := os.WriteFile(plugin, []byte(legacyPlugin), 0o600); err != nil {
+	if err := os.WriteFile(plugin, []byte(v050Plugin), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	owner, err := readOwner(filepath.Join(filepath.Dir(plugin), ".router-axi-session-hook"))
-	if err != nil {
+	if err := writeOwner(marker, ownerRecord{Command: legacyCommand, ShapeHash: v050ShapeHash}); err != nil {
 		t.Fatal(err)
 	}
-	_, owner.ShapeHash, _ = openCodePluginParts([]byte(legacyPlugin))
-	if err := writeOwner(filepath.Join(filepath.Dir(plugin), ".router-axi-session-hook"), owner); err != nil {
+	if err := os.WriteFile(filepath.Join(home, ".config", "opencode", "package.json"), []byte("{\"dependencies\":{\"@opencode-ai/plugin\":\"^1.18.30\"}}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if code, stdout := runSetup(t, application, "check", "--agent", "opencode"); code != ExitOK || !strings.Contains(stdout, "state: installed") {
-		t.Fatalf("legacy plugin check: code=%d stdout=%q", code, stdout)
+		t.Fatalf("v0.5.0 plugin check: code=%d stdout=%q", code, stdout)
 	}
 	if code, stdout := runSetup(t, application, "install", "--agent", "opencode"); code != ExitOK {
-		t.Fatalf("legacy plugin repair: code=%d stdout=%q", code, stdout)
+		t.Fatalf("v0.5.0 plugin repair: code=%d stdout=%q", code, stdout)
 	}
+	const repairedPlugin = `// router-axi-session-hook
+import { execFileSync } from "node:child_process";
+import type { Plugin } from "@opencode-ai/plugin";
+
+const injected = new Set<string>();
+
+export const RouterAxiPlugin: Plugin = async () => ({
+  "experimental.chat.system.transform": async (input, output) => {
+    if (input.sessionID && injected.has(input.sessionID)) return;
+    let context = "";
+    try {
+      context = execFileSync("'/opt/router-axi/router-axi' session dashboard 2\u003e/dev/null || true # router-axi-session-hook", { encoding: "utf8", shell: true, timeout: 5000, stdio: ["ignore", "pipe", "ignore"] });
+    } catch {
+      return;
+    }
+    if (!context.trim()) return;
+    if (input.sessionID) injected.add(input.sessionID);
+    output.system.push(context);
+  },
+});
+
+export default RouterAxiPlugin;
+`
 	data, _ = os.ReadFile(plugin)
-	if !strings.Contains(string(data), "try {") || !strings.Contains(string(data), "timeout: 5000") || !strings.Contains(string(data), "} catch {") {
-		t.Fatalf("plugin lacks failure guard: %s", data)
+	if string(data) != repairedPlugin {
+		t.Fatalf("generated plugin contract changed:\n%s", data)
 	}
 }
 
@@ -702,5 +743,58 @@ func TestSetupHookCommandFailsSafe(t *testing.T) {
 	out, err := exec.Command("sh", "-c", command).CombinedOutput()
 	if err != nil || len(out) != 0 {
 		t.Fatalf("hook command failed loudly: err=%v out=%q", err, out)
+	}
+}
+
+func TestSetupFailedNamesFilesWithoutHomePathOrRawError(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(t *testing.T, home string)
+		agent string
+		want  string
+	}{
+		{"config.toml is a directory", func(t *testing.T, home string) {
+			if err := os.MkdirAll(codexConfigPath(home), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}, "codex", "cannot read ~/.codex/config.toml"},
+		{"hooks.json is unreadable", func(t *testing.T, home string) {
+			path := filepath.Join(home, ".codex", "hooks.json")
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("{}"), 0o000); err != nil {
+				t.Fatal(err)
+			}
+		}, "codex", "permission denied for ~/.codex/hooks.json"},
+		{"settings directory is read-only", func(t *testing.T, home string) {
+			dir := filepath.Join(home, ".claude")
+			if err := os.MkdirAll(dir, 0o500); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		}, "claude", "permission denied for ~/.claude/"},
+		{"package.json is a directory", func(t *testing.T, home string) {
+			if err := os.MkdirAll(filepath.Join(home, ".config", "opencode", "package.json"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}, "opencode", "cannot read ~/.config/opencode/package.json"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if os.Geteuid() == 0 {
+				t.Skip("permission errors are not raised for root")
+			}
+			home := t.TempDir()
+			test.setup(t, home)
+			for _, extra := range [][]string{nil, {"--json"}} {
+				code, stdout := runSetup(t, setupApp(t, home), append([]string{"install", "--agent", test.agent}, extra...)...)
+				if code != ExitInternal || !strings.Contains(stdout, "setup_failed") || !strings.Contains(stdout, test.want) {
+					t.Fatalf("code=%d stdout=%q want %q", code, stdout, test.want)
+				}
+				if strings.Contains(stdout, home) {
+					t.Fatalf("home path leaked: %q", stdout)
+				}
+			}
+		})
 	}
 }

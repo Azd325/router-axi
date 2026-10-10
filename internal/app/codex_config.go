@@ -18,7 +18,6 @@ const (
 )
 
 var (
-	tomlTableHeader      = regexp.MustCompile(`^\s*(\[\[?)\s*([A-Za-z0-9_."' -]+?)\s*(\]\]?)\s*(?:#.*)?$`)
 	tomlHooksBool        = regexp.MustCompile(`^(\s*hooks\s*=\s*)(true|false)(\s*(?:#.*)?)$`)
 	tomlDottedHooks      = regexp.MustCompile(`^(\s*features\s*\.\s*hooks\s*=\s*)(true|false)(\s*(?:#.*)?)$`)
 	tomlHooksKey         = regexp.MustCompile(`^\s*["']?hooks["']?\s*[.=]`)
@@ -69,11 +68,94 @@ func splitTOMLLines(content string) []tomlLine {
 	return lines
 }
 
+func parseTOMLTableHeader(text string) (keys []string, array, ok bool) {
+	rest := strings.TrimSpace(text)
+	if array = strings.HasPrefix(rest, "[["); array {
+		rest = rest[2:]
+	} else {
+		rest = rest[1:]
+	}
+	for {
+		rest = strings.TrimLeft(rest, " \t")
+		var key string
+		switch {
+		case rest == "":
+			return nil, false, false
+		case rest[0] == '"' || rest[0] == '\'':
+			end := closingTOMLQuote(rest)
+			if end < 0 {
+				return nil, false, false
+			}
+			key, rest = rest[1:end], rest[end+1:]
+		default:
+			end := strings.IndexFunc(rest, func(r rune) bool {
+				return !(r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-')
+			})
+			if end <= 0 {
+				return nil, false, false
+			}
+			key, rest = rest[:end], rest[end:]
+		}
+		keys = append(keys, key)
+		rest = strings.TrimLeft(rest, " \t")
+		if strings.HasPrefix(rest, ".") {
+			rest = rest[1:]
+			continue
+		}
+		break
+	}
+	closer := "]"
+	if array {
+		closer = "]]"
+	}
+	rest, found := strings.CutPrefix(rest, closer)
+	rest = strings.TrimSpace(rest)
+	return keys, array, found && (rest == "" || strings.HasPrefix(rest, "#"))
+}
+
+func closingTOMLQuote(text string) int {
+	for i := 1; i < len(text); i++ {
+		switch {
+		case text[0] == '"' && text[i] == '\\':
+			i++
+		case text[i] == text[0]:
+			return i
+		}
+	}
+	return -1
+}
+
+func tomlBracketDelta(text string) int {
+	depth := 0
+	for i := 0; i < len(text); i++ {
+		switch text[i] {
+		case '"', '\'':
+			end := closingTOMLQuote(text[i:])
+			if end < 0 {
+				return depth
+			}
+			i += end
+		case '#':
+			return depth
+		case '[':
+			depth++
+		case ']':
+			depth--
+		}
+	}
+	return depth
+}
+
 func scanCodexConfig(content string) (codexConfigScan, error) {
 	scan := codexConfigScan{lines: splitTOMLLines(content), hooksLine: -1, featuresLast: -1}
 	inFeatures, inMultiline, inTable := false, false, false
+	arrayDepth := 0
 	for i, line := range scan.lines {
 		text := line.text
+		trimmed := strings.TrimSpace(text)
+		if !inMultiline && (trimmed == "" || strings.HasPrefix(trimmed, "#")) {
+			continue
+		}
 		quotes := strings.Count(text, `"""`) + strings.Count(text, `'''`)
 		if inMultiline {
 			if quotes%2 == 1 {
@@ -87,22 +169,33 @@ func scanCodexConfig(content string) (codexConfigScan, error) {
 		if quotes%2 == 1 {
 			inMultiline = true
 		}
-		trimmed := strings.TrimSpace(text)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		if arrayDepth > 0 {
+			if !inMultiline {
+				arrayDepth += tomlBracketDelta(text)
+			}
+			if inFeatures {
+				scan.featuresLast = i
+			}
 			continue
 		}
-		if header := tomlTableHeader.FindStringSubmatch(text); header != nil && len(header[1]) == len(header[3]) {
+		if strings.HasPrefix(trimmed, "[") {
+			keys, array, ok := parseTOMLTableHeader(text)
+			if !ok {
+				return scan, errCodexConfigUnsafe
+			}
 			inTable = true
-			name := strings.Trim(header[2], `"' `)
-			inFeatures = name == "features"
+			inFeatures = len(keys) == 1 && keys[0] == "features"
 			if inFeatures {
-				if len(header[1]) == 2 || scan.featuresFound {
+				if array || scan.featuresFound {
 					return scan, errCodexConfigUnsafe
 				}
 				scan.featuresFound = true
 				scan.featuresLast = i
 			}
 			continue
+		}
+		if !inMultiline {
+			arrayDepth = max(0, tomlBracketDelta(text))
 		}
 		if inFeatures {
 			scan.featuresLast = i

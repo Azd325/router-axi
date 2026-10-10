@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,7 @@ const (
 	openCodePluginDependency = "^1.18.30"
 
 	openCodePluginPrefix = "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport type { Plugin } from \"@opencode-ai/plugin\";\n\nconst injected = new Set<string>();\n\nexport const RouterAxiPlugin: Plugin = async () => ({\n  \"experimental.chat.system.transform\": async (input, output) => {\n    if (input.sessionID && injected.has(input.sessionID)) return;\n    let context = \"\";\n    try {\n      context = execFileSync("
-	openCodePluginSuffix = ", { encoding: \"utf8\", shell: true, timeout: 5000, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    } catch {\n      return;\n    }\n    if (input.sessionID) injected.add(input.sessionID);\n    output.system.push(context);\n  },\n});\n\nexport default RouterAxiPlugin;\n"
+	openCodePluginSuffix = ", { encoding: \"utf8\", shell: true, timeout: 5000, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    } catch {\n      return;\n    }\n    if (!context.trim()) return;\n    if (input.sessionID) injected.add(input.sessionID);\n    output.system.push(context);\n  },\n});\n\nexport default RouterAxiPlugin;\n"
 
 	legacyOpenCodePluginPrefix = "// " + sessionHookMarker + "\nimport { execFileSync } from \"node:child_process\";\nimport type { Plugin } from \"@opencode-ai/plugin\";\n\nconst injected = new Set<string>();\n\nexport const RouterAxiPlugin: Plugin = async () => ({\n  \"experimental.chat.system.transform\": async (input, output) => {\n    if (input.sessionID && injected.has(input.sessionID)) return;\n    const context = execFileSync("
 	legacyOpenCodePluginSuffix = ", { encoding: \"utf8\", shell: true, stdio: [\"ignore\", \"pipe\", \"ignore\"] });\n    if (input.sessionID) injected.add(input.sessionID);\n    output.system.push(context);\n  },\n});\n\nexport default RouterAxiPlugin;\n"
@@ -76,7 +77,7 @@ func (a *App) runSetup(opts options, stdout io.Writer) int {
 	for _, agent := range agents {
 		result, err := a.setupAgent(opts.action, agent)
 		if err != nil {
-			return writeError(stdout, opts.json, ExitInternal, "setup_failed", err.Error(), "router-axi setup check --agent "+agent)
+			return writeError(stdout, opts.json, ExitInternal, "setup_failed", a.setupFailureMessage(err), "router-axi setup check --agent "+agent)
 		}
 		results = append(results, result)
 	}
@@ -99,6 +100,35 @@ func (a *App) runSetup(opts options, stdout io.Writer) int {
 		}
 	}
 	return ExitOK
+}
+
+func (a *App) setupFailureMessage(err error) string {
+	home, _ := a.homeDir()
+	var pathErr *fs.PathError
+	var linkErr *os.LinkError
+	switch {
+	case errors.As(err, &pathErr):
+		return fileFailureMessage(pathErr.Op, pathErr.Path, pathErr.Err, home)
+	case errors.As(err, &linkErr):
+		return fileFailureMessage("rename", linkErr.New, linkErr.Err, home)
+	case errors.Unwrap(err) != nil:
+		return "setup failed for an unexpected reason"
+	}
+	return err.Error()
+}
+
+func fileFailureMessage(op, path string, cause error, home string) string {
+	name := filepath.Base(path)
+	if rest, ok := strings.CutPrefix(path, home+string(filepath.Separator)); ok && home != "" {
+		name = "~/" + filepath.ToSlash(rest)
+	}
+	switch {
+	case errors.Is(cause, fs.ErrPermission):
+		return "permission denied for " + name
+	case op == "open" || op == "read" || op == "readfile" || op == "stat" || op == "lstat" || op == "readlink":
+		return "cannot read " + name
+	}
+	return "cannot write " + name
 }
 
 func setupAgents(value string) ([]string, error) {
