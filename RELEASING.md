@@ -76,7 +76,9 @@ The maintainer decides how to recover from a broken release. Choose one:
 - Withdraw or deprecate the version where the Go module ecosystem supports it.
 
 A published version or tag is never replaced, moved, or re-created. A fault gets
-a new version.
+a new version. GitHub enforces this for releases published after 2026-10-11,
+because immutable releases are enabled for this repository: their tag and
+attached files are locked, while the title and release notes stay editable.
 
 Verify the chosen recovery with the clean-install steps above. Link the decision
 from the GitHub release notes of the affected version, so users learn which
