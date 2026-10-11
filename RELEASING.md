@@ -37,10 +37,12 @@ pull request, then run this checklist from a clean checkout:
       coverage is separately opt-in, never writes an export file, and requires
       `ROUTER_AXI_BACKUP_PASSWORD`.
 
-- [ ] Create and push the SemVer tag on the checked `main` commit.
+- [ ] Create the signed SemVer tag on the checked `main` commit, verify it, and
+      push it.
 
   ```sh
-  git tag -a "$VERSION" -m "router-axi $VERSION"
+  git tag -s "$VERSION" -m "router-axi $VERSION"
+  git verify-tag "$VERSION"
   git push origin "$VERSION"
   ```
 
@@ -64,3 +66,18 @@ pull request, then run this checklist from a clean checkout:
   "$install_dir/router-axi" --help
   rm -rf "$install_dir"
   ```
+
+## Recovery
+
+The maintainer decides how to recover from a broken release. Choose one:
+
+- Point users to the previous working version in the GitHub release notes.
+- Publish a corrective patch release with the next SemVer version.
+- Withdraw or deprecate the version where the Go module ecosystem supports it.
+
+A published version or tag is never replaced, moved, or re-created. A fault gets
+a new version.
+
+Verify the chosen recovery with the clean-install steps above. Link the decision
+from the GitHub release notes of the affected version, so users learn which
+version works.
