@@ -1,6 +1,6 @@
 # router-axi
 
-[![CI](https://github.com/Azd325/router-axi/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Azd325/router-axi/actions/workflows/ci.yml) [![Latest release](https://img.shields.io/github/v/release/Azd325/router-axi)](https://github.com/Azd325/router-axi/releases) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE) [![Go version](https://img.shields.io/github/go-mod/go-version/Azd325/router-axi)](go.mod) [![Go Reference](https://pkg.go.dev/badge/github.com/Azd325/router-axi.svg)](https://pkg.go.dev/github.com/Azd325/router-axi)
+[![CI](https://img.shields.io/github/actions/workflow/status/Azd325/router-axi/ci.yml?branch=main)](https://github.com/Azd325/router-axi/actions/workflows/ci.yml) [![Latest release](https://img.shields.io/github/v/release/Azd325/router-axi)](https://github.com/Azd325/router-axi/releases) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE) [![Go version](https://img.shields.io/github/go-mod/go-version/Azd325/router-axi)](go.mod) [![Go Reference](https://pkg.go.dev/badge/github.com/Azd325/router-axi.svg)](https://pkg.go.dev/github.com/Azd325/router-axi)
 
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
