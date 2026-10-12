@@ -1,5 +1,7 @@
 # router-axi
 
+[![CI](https://img.shields.io/github/actions/workflow/status/Azd325/router-axi/ci.yml?branch=main)](https://github.com/Azd325/router-axi/actions/workflows/ci.yml) [![Latest release](https://img.shields.io/github/v/release/Azd325/router-axi)](https://github.com/Azd325/router-axi/releases) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE) [![Go version](https://img.shields.io/github/go-mod/go-version/Azd325/router-axi)](go.mod) [![Go Reference](https://pkg.go.dev/badge/github.com/Azd325/router-axi.svg)](https://pkg.go.dev/github.com/Azd325/router-axi)
+
 An agent-ergonomic CLI for inspecting and operating supported home routers.
 
 The current release provides device information, WAN status, traffic statistics, bounded event-log text with group filtering, call-list access, connected-device, observed lease metadata, DHCP server configuration, DSL link diagnostics, firmware update status, account rights and login posture, Wi-Fi configuration detail, documented guest Wi-Fi with timeout and isolation detail, port-forward inspection, and service exposure flags through documented FRITZ!Box TR-064 interfaces, plus confirmed Wi-Fi changes, WAN reconnect, reboot, Wake-on-LAN, firmware update check, and configuration export.
