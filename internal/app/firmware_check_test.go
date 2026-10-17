@@ -26,8 +26,8 @@ func TestFirmwareCheckOutputContract(t *testing.T) {
 	}{
 		{[]string{"firmware", "check"}, "firmware_check:\n  endpoint: \"http://router.test:49000\"\n  preview: true\n  effect: the router will check for a firmware update; no update will be installed\n  execute: \"router-axi firmware check --host http://router.test:49000 --confirm\"\n"},
 		{[]string{"firmware", "check", "--json"}, `{"firmware_check":{"endpoint":"http://router.test:49000","preview":true,"effect":"the router will check for a firmware update; no update will be installed","execute":"router-axi firmware check --host http://router.test:49000 --confirm --json"}}` + "\n"},
-		{[]string{"firmware", "check", "--confirm"}, "firmware_check:\n  endpoint: \"http://router.test:49000\"\n  accepted: true\n  recovery: acceptance does not mean an update exists; run router-axi firmware to read the reported state; do not automatically repeat firmware check\n"},
-		{[]string{"--confirm", "--json", "firmware", "check"}, `{"firmware_check":{"endpoint":"http://router.test:49000","accepted":true,"recovery":"acceptance does not mean an update exists; run router-axi firmware to read the reported state; do not automatically repeat firmware check"}}` + "\n"},
+		{[]string{"firmware", "check", "--confirm"}, "firmware_check:\n  endpoint: \"http://router.test:49000\"\n  accepted: true\n  recovery: acceptance does not mean an update exists; run `router-axi firmware` to read the reported state; do not automatically repeat firmware check\n"},
+		{[]string{"--confirm", "--json", "firmware", "check"}, "{\"firmware_check\":{\"endpoint\":\"http://router.test:49000\",\"accepted\":true,\"recovery\":\"acceptance does not mean an update exists; run `router-axi firmware` to read the reported state; do not automatically repeat firmware check\"}}\n"},
 	} {
 		code, stdout, stderr := runTest(t, test.args...)
 		if code != ExitOK || stdout != test.want || stderr != "" {

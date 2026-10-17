@@ -167,7 +167,7 @@ func wifiPreviewJSON(result tr064.WiFiMutation) wifiPreviewResult {
 }
 
 const rebootEffect = "the router will restart and temporarily interrupt all local services"
-const rebootRecovery = "wait for the router to recover, then run router-axi doctor; do not automatically repeat reboot"
+const rebootRecovery = "wait for the router to recover, then run `router-axi doctor`; do not automatically repeat reboot"
 
 const backupNext = "keep the export passphrase safe; the backup can only be restored with it"
 
@@ -1194,7 +1194,7 @@ func backupUsageHint(code, host string) string {
 	case "backup_requires_https", "invalid_configuration":
 		return "router-axi backup --host https://<address> --output <path>"
 	case "backup_passphrase_missing":
-		return "set ROUTER_AXI_BACKUP_PASSWORD, then run " + commandHint("backup --output <path>", host, nil)
+		return "set ROUTER_AXI_BACKUP_PASSWORD, then run `" + commandHint("backup --output <path>", host, nil) + "`"
 	}
 	return commandHint("backup --output <path>", host, nil)
 }

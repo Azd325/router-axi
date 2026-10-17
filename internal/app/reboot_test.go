@@ -21,8 +21,8 @@ func TestRebootOutputContract(t *testing.T) {
 	}{
 		{[]string{"reboot"}, "reboot:\n  endpoint: \"http://router.test:49000\"\n  preview: true\n  effect: the router will restart and temporarily interrupt all local services\n  execute: \"router-axi reboot --host http://router.test:49000 --confirm\"\n"},
 		{[]string{"reboot", "--json"}, `{"reboot":{"endpoint":"http://router.test:49000","preview":true,"effect":"the router will restart and temporarily interrupt all local services","execute":"router-axi reboot --host http://router.test:49000 --confirm --json"}}` + "\n"},
-		{[]string{"reboot", "--confirm"}, "reboot:\n  endpoint: \"http://router.test:49000\"\n  accepted: true\n  recovery: wait for the router to recover, then run router-axi doctor; do not automatically repeat reboot\n"},
-		{[]string{"--confirm", "--json", "reboot"}, `{"reboot":{"endpoint":"http://router.test:49000","accepted":true,"recovery":"wait for the router to recover, then run router-axi doctor; do not automatically repeat reboot"}}` + "\n"},
+		{[]string{"reboot", "--confirm"}, "reboot:\n  endpoint: \"http://router.test:49000\"\n  accepted: true\n  recovery: wait for the router to recover, then run `router-axi doctor`; do not automatically repeat reboot\n"},
+		{[]string{"--confirm", "--json", "reboot"}, "{\"reboot\":{\"endpoint\":\"http://router.test:49000\",\"accepted\":true,\"recovery\":\"wait for the router to recover, then run `router-axi doctor`; do not automatically repeat reboot\"}}\n"},
 	} {
 		code, stdout, stderr := runTest(t, test.args...)
 		if code != ExitOK || stdout != test.want || stderr != "" {

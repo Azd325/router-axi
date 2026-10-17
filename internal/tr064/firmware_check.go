@@ -87,5 +87,5 @@ func firmwareCheckPreflightError(err error) *Error {
 }
 
 func firmwareCheckUncertain(kind string, status int) *Error {
-	return &Error{Kind: kind, Code: "firmware_check_uncertain", Operation: firmwareCheckOperation, StatusCode: status, Message: "firmware check outcome is uncertain; the router may have started the update check; run router-axi firmware to read the reported state; do not automatically repeat"}
+	return &Error{Kind: kind, Code: "firmware_check_uncertain", Operation: firmwareCheckOperation, StatusCode: status, Message: "firmware check outcome is uncertain; the router may have started the update check; run `router-axi firmware` to read the reported state; do not automatically repeat"}
 }

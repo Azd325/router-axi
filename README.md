@@ -634,7 +634,7 @@ firmware_check:
 ```
 
 ```json
-{"firmware_check":{"endpoint":"http://router.test:49000","accepted":true,"recovery":"acceptance does not mean an update exists; run router-axi firmware to read the reported state; do not automatically repeat firmware check"}}
+{"firmware_check":{"endpoint":"http://router.test:49000","accepted":true,"recovery":"acceptance does not mean an update exists; run `router-axi firmware` to read the reported state; do not automatically repeat firmware check"}}
 ```
 
 The [FRITZ! TR-064 UserInterface document v25](https://fritz.support/resources/TR-064_User_Interface.pdf),
@@ -903,7 +903,7 @@ The deterministic JSON distinction is:
 
 ```json
 {"reboot":{"endpoint":"http://router.test:49000","preview":true,"effect":"the router will restart and temporarily interrupt all local services","execute":"router-axi reboot --host http://router.test:49000 --confirm --json"}}
-{"reboot":{"endpoint":"http://router.test:49000","accepted":true,"recovery":"wait for the router to recover, then run router-axi doctor; do not automatically repeat reboot"}}
+{"reboot":{"endpoint":"http://router.test:49000","accepted":true,"recovery":"wait for the router to recover, then run `router-axi doctor`; do not automatically repeat reboot"}}
 ```
 
 **Disruption and recovery:** reboot temporarily interrupts all local services,
@@ -969,7 +969,7 @@ additional requests occur after the ForceTermination POST.
 
 ```json
 {"wan_reconnect":{"endpoint":"http://router.test:49000","preview":true,"effect":"the internet connection will drop and a new external address may be assigned","execute":"router-axi wan reconnect --host http://router.test:49000 --confirm --json"}}
-{"wan_reconnect":{"endpoint":"http://router.test:49000","accepted":true,"recovery":"wait for the connection to return, then run router-axi wan; do not automatically repeat wan reconnect"}}
+{"wan_reconnect":{"endpoint":"http://router.test:49000","accepted":true,"recovery":"wait for the connection to return, then run `router-axi wan`; do not automatically repeat wan reconnect"}}
 ```
 
 **WAN reconnect is not idempotent.** Each confirmed invocation can drop the
