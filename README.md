@@ -56,7 +56,8 @@ This installs `router-axi` in `GOBIN`, or in `GOPATH/bin` when `GOBIN` is not
 set. The command becomes available after that directory is on `PATH`.
 
 With Nix, run `nix run github:Azd325/router-axi`, or take this repository as a
-flake input and use `packages.<system>.router-axi`.
+flake input and use `packages.<system>.router-axi`. Nix builds report the
+version as `dev-<short revision>`, not a release tag.
 
 From a checked-out repository, use the launcher instead:
 
