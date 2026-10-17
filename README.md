@@ -55,6 +55,9 @@ go install github.com/Azd325/router-axi/cmd/router-axi@latest
 This installs `router-axi` in `GOBIN`, or in `GOPATH/bin` when `GOBIN` is not
 set. The command becomes available after that directory is on `PATH`.
 
+With Nix, run `nix run github:Azd325/router-axi`, or take this repository as a
+flake input and use `packages.<system>.router-axi`.
+
 From a checked-out repository, use the launcher instead:
 
 ```sh
