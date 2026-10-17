@@ -133,6 +133,9 @@ func assertFirmwareCheckError(t *testing.T, client *Client, confirm bool, kind s
 	if uncertain != (protocolErr.Code == "firmware_check_uncertain") {
 		t.Fatalf("incorrect uncertainty: %#v", protocolErr)
 	}
+	if uncertain && protocolErr.Message != "firmware check outcome is uncertain; the router may have started the update check; run `router-axi firmware` to read the reported state; do not automatically repeat" {
+		t.Fatalf("message=%q", protocolErr.Message)
+	}
 	for _, secret := range []string{"private-", client.base.Host, "__ORIGIN__"} {
 		if strings.Contains(protocolErr.Error(), secret) {
 			t.Fatal("error exposed discarded data")

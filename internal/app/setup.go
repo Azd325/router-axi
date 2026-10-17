@@ -164,7 +164,7 @@ func displayPath(path, home string) string {
 }
 
 func (a *App) setupFailureHint(err error, action, agent string) string {
-	retry := ", then run router-axi setup " + action + " --agent " + agent
+	retry := ", then run `router-axi setup " + action + " --agent " + agent + "`"
 	home, _ := a.homeDir()
 	location := hookLocationFor(home, agent)
 	var pathErr *fs.PathError

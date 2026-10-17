@@ -432,22 +432,22 @@ func TestSetupFailureHintNamesFileAndSameAction(t *testing.T) {
 			if err := os.MkdirAll(codexConfigPath(home), 0o700); err != nil {
 				t.Fatal(err)
 			}
-		}, "check", "codex", "repair ~/.codex/config.toml, then run router-axi setup check --agent codex"},
+		}, "check", "codex", "repair ~/.codex/config.toml, then run `router-axi setup check --agent codex`"},
 		{"settings.json is not JSON", func(t *testing.T, home string) {
 			writeSetupFile(t, filepath.Join(home, ".claude", "settings.json"), "{")
-		}, "install", "claude", "correct ~/.claude/settings.json so that it is a JSON object with compatible hooks, then run router-axi setup install --agent claude"},
+		}, "install", "claude", "correct ~/.claude/settings.json so that it is a JSON object with compatible hooks, then run `router-axi setup install --agent claude`"},
 		{"hooks.json hooks is a list", func(t *testing.T, home string) {
 			writeSetupFile(t, filepath.Join(home, ".codex", "hooks.json"), `{"hooks":[]}`)
-		}, "uninstall", "codex", "correct ~/.codex/hooks.json so that it is a JSON object with compatible hooks, then run router-axi setup uninstall --agent codex"},
+		}, "uninstall", "codex", "correct ~/.codex/hooks.json so that it is a JSON object with compatible hooks, then run `router-axi setup uninstall --agent codex`"},
 		{"plugin path is occupied", func(t *testing.T, home string) {
 			writeSetupFile(t, filepath.Join(home, ".config", "opencode", "plugins", "router-axi.ts"), "export const other = 1;\n")
-		}, "install", "opencode", "move ~/.config/opencode/plugins/router-axi.ts away, then run router-axi setup install --agent opencode"},
+		}, "install", "opencode", "move ~/.config/opencode/plugins/router-axi.ts away, then run `router-axi setup install --agent opencode`"},
 		{"package.json is a list", func(t *testing.T, home string) {
 			writeSetupFile(t, filepath.Join(home, ".config", "opencode", "package.json"), "[]")
-		}, "install", "opencode", "correct ~/.config/opencode/package.json so that it is a JSON object with compatible dependencies, then run router-axi setup install --agent opencode"},
+		}, "install", "opencode", "correct ~/.config/opencode/package.json so that it is a JSON object with compatible dependencies, then run `router-axi setup install --agent opencode`"},
 		{"config.toml defines features twice", func(t *testing.T, home string) {
 			writeCodexConfigFixture(t, home, "[features]\nhooks = false\n\n[features]\nother = true\n")
-		}, "install", "codex", "make ~/.codex/config.toml define features once, as one [features] table with the line hooks = true or as the single line features.hooks = true, then run router-axi setup install --agent codex"},
+		}, "install", "codex", "make ~/.codex/config.toml define features once, as one [features] table with the line hooks = true or as the single line features.hooks = true, then run `router-axi setup install --agent codex`"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			home := t.TempDir()

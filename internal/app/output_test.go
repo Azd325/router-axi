@@ -196,6 +196,9 @@ func TestUsageErrorHintsAreCorrectingCommands(t *testing.T) {
 	if hint := protocolError(&tr064.Error{Kind: "usage", Operation: "wake", Message: "synthetic"}, "router.test").detail.Hint; hint != "router-axi wake <mac> --host router.test" {
 		t.Errorf("hint=%q", hint)
 	}
+	if hint := protocolError(&tr064.Error{Kind: "usage", Code: "backup_passphrase_missing", Operation: "backup", Message: "synthetic"}, "router.test").detail.Hint; hint != "set ROUTER_AXI_BACKUP_PASSWORD, then run `router-axi backup --output <path> --host router.test`" {
+		t.Errorf("hint=%q", hint)
+	}
 }
 
 type colonRightsReader struct{ fakeReader }

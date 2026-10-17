@@ -26,8 +26,8 @@ func TestWANReconnectOutputContract(t *testing.T) {
 	}{
 		{[]string{"wan", "reconnect"}, "wan_reconnect:\n  endpoint: \"http://router.test:49000\"\n  preview: true\n  effect: the internet connection will drop and a new external address may be assigned\n  execute: \"router-axi wan reconnect --host http://router.test:49000 --confirm\"\n"},
 		{[]string{"wan", "reconnect", "--json"}, `{"wan_reconnect":{"endpoint":"http://router.test:49000","preview":true,"effect":"the internet connection will drop and a new external address may be assigned","execute":"router-axi wan reconnect --host http://router.test:49000 --confirm --json"}}` + "\n"},
-		{[]string{"wan", "reconnect", "--confirm"}, "wan_reconnect:\n  endpoint: \"http://router.test:49000\"\n  accepted: true\n  recovery: wait for the connection to return, then run router-axi wan; do not automatically repeat wan reconnect\n"},
-		{[]string{"--confirm", "--json", "wan", "reconnect"}, `{"wan_reconnect":{"endpoint":"http://router.test:49000","accepted":true,"recovery":"wait for the connection to return, then run router-axi wan; do not automatically repeat wan reconnect"}}` + "\n"},
+		{[]string{"wan", "reconnect", "--confirm"}, "wan_reconnect:\n  endpoint: \"http://router.test:49000\"\n  accepted: true\n  recovery: wait for the connection to return, then run `router-axi wan`; do not automatically repeat wan reconnect\n"},
+		{[]string{"--confirm", "--json", "wan", "reconnect"}, "{\"wan_reconnect\":{\"endpoint\":\"http://router.test:49000\",\"accepted\":true,\"recovery\":\"wait for the connection to return, then run `router-axi wan`; do not automatically repeat wan reconnect\"}}\n"},
 	} {
 		code, stdout, stderr := runTest(t, test.args...)
 		if code != ExitOK || stdout != test.want || stderr != "" {
