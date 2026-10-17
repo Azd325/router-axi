@@ -7,8 +7,9 @@
     devenv.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { nixpkgs, devenv, ... }@inputs:
+  outputs = { self, nixpkgs, devenv, ... }@inputs:
     let
+      version = "dev-${self.shortRev or self.dirtyShortRev or "dirty"}";
       systems = [
         "aarch64-darwin"
         "aarch64-linux"
@@ -22,11 +23,11 @@
           pkgs = nixpkgs.legacyPackages.${system};
           router-axi = pkgs.buildGoModule {
             pname = "router-axi";
-            version = "0.6.1";
+            inherit version;
             src = ./.;
             subPackages = [ "cmd/router-axi" ];
             vendorHash = "sha256-g+yaVIx4jxpAQ/+WrGKxhVeliYx7nLQe/zsGpxV4Fn4=";
-            ldflags = [ "-X main.version=v0.6.1" ];
+            ldflags = [ "-X main.version=${version}" ];
             meta = {
               description = "Agent-ergonomic local router CLI";
               homepage = "https://github.com/Azd325/router-axi";
