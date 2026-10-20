@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -34,6 +35,22 @@ func TestSkillHelpNotStale(t *testing.T) {
 	}
 	if want := stdout.String(); block != want {
 		t.Fatalf("SKILL.md help block is stale; regenerate it from router-axi help.\nwant:\n%q\ngot:\n%q", want, block)
+	}
+}
+
+func TestCommandSurfaceIsDocumented(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for command := range commandFlags {
+		bullet := regexp.MustCompile("(?m)^- `" + regexp.QuoteMeta(command) + "[ `]")
+		if !bullet.Match(skill.Bytes()) {
+			t.Errorf("SKILL.md command list lacks a bullet for %q", command)
+		}
+		if !strings.Contains(string(readme), "router-axi "+command) {
+			t.Errorf("README.md lacks an example for %q", command)
+		}
 	}
 }
 

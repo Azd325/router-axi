@@ -1,6 +1,6 @@
 ---
 name: router-axi
-description: Inspect and operate a supported home router through the router-axi CLI (FRITZ!Box TR-064). Use when an agent needs to review router status, WAN, traffic, calls, devices, leases, DHCP server configuration, DSL link diagnostics, account rights and login posture, Wi-Fi, guest Wi-Fi, port forwards, or service exposure flags, or to make confirmed wifi, WAN reconnect, reboot, Wake-on-LAN, firmware update check, or backup changes from a terminal.
+description: Inspect and operate a supported home router through the router-axi CLI (FRITZ!Box TR-064). Use when an agent needs to review router status, WAN, traffic, calls, event log, devices, leases, DHCP server configuration, DSL link diagnostics, account rights and login posture, Wi-Fi, guest Wi-Fi, port forwards, or service exposure flags, or to make confirmed wifi, WAN reconnect, reboot, Wake-on-LAN, firmware update check, or backup changes from a terminal.
 ---
 
 # router-axi
@@ -15,7 +15,7 @@ documentation; run the CLI for live router state.
 
 ## Command surface
 
-- `router-axi` — status is the default view (router identity and firmware).
+- `status` — router identity and firmware; the default view when no command is given.
 - `doctor` — bounded connectivity and capability diagnosis.
 - `overview` — identity, WAN state, and traffic totals in one atomic read.
 - `wan` — compact internet connection state; `wan detail` explicitly reads bounded physical-link properties, optional router-reported rates, totals, and DNS, and connection type, IPv6 status, NAT, and PPP disconnect prevention; `wan reconnect` previews dropping the internet connection and executes once with `--confirm`.
@@ -24,6 +24,7 @@ documentation; run the CLI for live router state.
   --count 6` (bounds 1s–1m and 1–3600, no unbounded mode, JSONL with `--json`,
   Ctrl-C exits 130).
 - `calls` — call history (100 entries default, `--all` for the full list).
+- `event-log` — bounded read-only event-log text from the documented `DeviceInfo:X_AVM-DE_GetDeviceLogPath` download; `--group` filters by documented log group, `--limit` bounds the lines, and telephony is excluded by default.
 - `devices` — connected and known LAN clients (100 entries by default,
   `--all` for the full list); `devices detail --ip ADDRESS` reports one
   device's port, speed, guest and VPN flags, WAN access, and update state.

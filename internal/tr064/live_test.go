@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/Azd325/router-axi/internal/nettest"
 )
 
 const liveTestFlag = "ROUTER_AXI_LIVE_TEST"
@@ -72,7 +74,7 @@ func TestLiveWiFi(t *testing.T) {
 	if !enabled {
 		t.Skip("live router tests require explicit local opt-in and complete configuration")
 	}
-	client, err := New(settings.host, settings.username, settings.password, nil)
+	client, err := New(settings.host, settings.username, settings.password, nettest.LiveClient(10*time.Second))
 	if err != nil {
 		t.Fatal("live router configuration was rejected")
 	}
@@ -112,7 +114,7 @@ func TestLiveGuestWiFi(t *testing.T) {
 	if !enabled {
 		t.Skip("live router tests require explicit local opt-in and complete configuration")
 	}
-	client, err := New(settings.host, settings.username, settings.password, nil)
+	client, err := New(settings.host, settings.username, settings.password, nettest.LiveClient(10*time.Second))
 	if err != nil {
 		t.Fatal("live router configuration was rejected")
 	}
@@ -132,7 +134,7 @@ func TestLiveForwards(t *testing.T) {
 	if !enabled {
 		t.Skip("live router tests require explicit local opt-in and complete configuration")
 	}
-	client, err := New(settings.host, settings.username, settings.password, nil)
+	client, err := New(settings.host, settings.username, settings.password, nettest.LiveClient(10*time.Second))
 	if err != nil {
 		t.Fatal("live router configuration was rejected")
 	}
@@ -162,7 +164,7 @@ func TestLiveDSL(t *testing.T) {
 	if !enabled {
 		t.Skip("live router tests require explicit local opt-in and complete configuration")
 	}
-	client, err := New(settings.host, settings.username, settings.password, nil)
+	client, err := New(settings.host, settings.username, settings.password, nettest.LiveClient(10*time.Second))
 	if err != nil {
 		t.Fatal("live router configuration was rejected")
 	}
@@ -184,7 +186,7 @@ func TestLiveLeases(t *testing.T) {
 	if !enabled {
 		t.Skip("live router tests require explicit local opt-in and complete configuration")
 	}
-	client, err := New(settings.host, settings.username, settings.password, nil)
+	client, err := New(settings.host, settings.username, settings.password, nettest.LiveClient(10*time.Second))
 	if err != nil {
 		t.Fatal("live router configuration was rejected")
 	}
@@ -250,7 +252,7 @@ func TestLiveBackup(t *testing.T) {
 	if !enabled {
 		t.Skip("live backup coverage requires ROUTER_AXI_LIVE_TEST=1 plus ROUTER_AXI_LIVE_BACKUP_TEST=1, complete configuration, and ROUTER_AXI_BACKUP_PASSWORD")
 	}
-	client, err := New(settings.host, settings.username, settings.password, nil)
+	client, err := New(settings.host, settings.username, settings.password, nettest.LiveClient(10*time.Second))
 	if err != nil {
 		t.Fatal("live router configuration was rejected")
 	}
@@ -282,7 +284,7 @@ func TestLiveWiFiMutation(t *testing.T) {
 	if !enabled || os.Getenv(liveMutationTestFlag) != "1" {
 		t.Skip("live mutation coverage requires ROUTER_AXI_LIVE_TEST=1 plus an additional explicit ROUTER_AXI_LIVE_MUTATION_TEST=1 opt-in and complete configuration")
 	}
-	client, err := New(settings.host, settings.username, settings.password, nil)
+	client, err := New(settings.host, settings.username, settings.password, nettest.LiveClient(10*time.Second))
 	if err != nil {
 		t.Fatal("live router configuration was rejected")
 	}
@@ -349,7 +351,7 @@ func TestLiveReadOnlyCommands(t *testing.T) {
 	if !enabled {
 		t.Skip("live router tests require explicit local opt-in and complete configuration")
 	}
-	client, err := New(settings.host, settings.username, settings.password, nil)
+	client, err := New(settings.host, settings.username, settings.password, nettest.LiveClient(10*time.Second))
 	if err != nil {
 		t.Fatal("live router configuration was rejected")
 	}
