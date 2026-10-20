@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -927,9 +928,11 @@ func TestWiFiClientPrivacyBoundary(t *testing.T) {
 // TestEverySubcommandHelpDepth asserts the AXI help contract: every
 // subcommand help must include a usage line, flags, and concrete examples.
 func TestEverySubcommandHelpDepth(t *testing.T) {
-	for _, command := range []string{"doctor", "status", "overview", "wan", "traffic", "calls", "devices", "leases", "dhcp", "dsl", "firmware", "wifi", "guest", "forwards", "exposure", "watch", "reboot", "backup"} {
+	helpWithoutExamples := map[string]bool{"skill": true}
+	for command, flags := range commandFlags {
 		text := help(command, "")
-		if !strings.HasPrefix(text, "usage: router-axi "+command) || !strings.Contains(text, "--host ADDRESS") || !strings.Contains(text, "--json") || !strings.Contains(text, "examples: router-axi "+command) && !strings.Contains(text, "Examples: router-axi "+command) {
+		missingExamples := !helpWithoutExamples[command] && !strings.Contains(text, "examples: router-axi "+command) && !strings.Contains(text, "Examples: router-axi "+command)
+		if !strings.HasPrefix(text, "usage: router-axi "+command) || slices.Contains(flags, "--host") && !strings.Contains(text, "--host ADDRESS") || !strings.Contains(text, "--json") || missingExamples {
 			t.Fatalf("help for %s lacks usage, flags, or examples: %q", command, text)
 		}
 	}
@@ -1305,10 +1308,14 @@ func TestDoctorNeverPrintsHostUserInformation(t *testing.T) {
 func TestFactoryFailuresDoNotExposeRouterEndpoints(t *testing.T) {
 	const host = "http://username:password@192.0.2.1/private"
 	const factoryError = "invalid router address " + host
-	commands := [][]string{
-		{"watch"}, {"doctor"}, {"status"}, {"overview"}, {"wan"}, {"traffic"}, {"calls"}, {"devices"},
-		{"leases"}, {"dhcp"}, {"dsl"}, {"firmware"}, {"wifi"}, {"guest"}, {"forwards"}, {"exposure"}, {"reboot"}, {"backup", "--output", "backup.export"},
+	requiredArgs := map[string][]string{"backup": {"--output", "backup.export"}, "wake": {"02:00:00:00:00:01"}}
+	var commands [][]string
+	for command, flags := range commandFlags {
+		if slices.Contains(flags, "--host") {
+			commands = append(commands, append([]string{command}, requiredArgs[command]...))
+		}
 	}
+	slices.SortFunc(commands, func(a, b []string) int { return strings.Compare(a[0], b[0]) })
 	for _, command := range commands {
 		for _, jsonOutput := range []bool{false, true} {
 			args := append(append([]string{}, command...), "--host", host)
@@ -1605,7 +1612,7 @@ func TestWiFiMutationPreviewRequiresExplicitConfirmation(t *testing.T) {
 
 func TestWiFiMutationPreviewHintRepeatsExplicitHost(t *testing.T) {
 	for host, want := range map[string]string{
-		"192.168.178.2":      " --host 192.168.178.2",
+		"192.0.2.2":          " --host 192.0.2.2",
 		"http://[::1]:49000": " --host 'http://[::1]:49000'",
 		"it's.test":          ` --host 'it'\''s.test'`,
 	} {

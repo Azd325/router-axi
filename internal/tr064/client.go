@@ -2138,6 +2138,9 @@ func (c *Client) Reboot(ctx context.Context, confirm bool) (RebootResult, error)
 // postOnce sends one SOAP action outside the retrying request
 // path. sent is false when the request never left this process.
 func (c *Client) postOnce(ctx context.Context, target service, action, challenge string, arguments ...soapArgument) (body []byte, status int, sent bool, err error) {
+	if err := checkAction(action); err != nil {
+		return nil, 0, false, err
+	}
 	control := c.base.ResolveReference(&url.URL{Path: target.ControlURL})
 	var argumentXML strings.Builder
 	for _, argument := range arguments {
@@ -2397,6 +2400,9 @@ func (c *Client) ConfigExport(ctx context.Context, passphrase string) ([]byte, e
 	}
 	target, err := client.uniqueService(deviceConfigPrefix, "backup", configExportRemediation)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkAction(configExportAction); err != nil {
 		return nil, err
 	}
 	control := client.base.ResolveReference(&url.URL{Path: target.ControlURL})
@@ -3201,6 +3207,9 @@ func (c *Client) action(ctx context.Context, prefix, action string, arguments ..
 }
 
 func (c *Client) actionOnService(ctx context.Context, svc service, action string, arguments ...soapArgument) (soapValues, error) {
+	if err := checkAction(action); err != nil {
+		return soapValues{}, err
+	}
 	var argumentXML strings.Builder
 	for _, argument := range arguments {
 		argumentXML.WriteString("<" + argument.Name + ">")

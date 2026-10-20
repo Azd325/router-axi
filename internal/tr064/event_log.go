@@ -105,6 +105,9 @@ func (c *Client) EventLog(ctx context.Context, selection string, limit int) (Eve
 	if !found {
 		return EventLog{}, &Error{Kind: "unsupported", Operation: "event-log", Message: "router does not advertise grouped event logs; " + eventLogRemediation}
 	}
+	if err := checkAction(eventLogAction); err != nil {
+		return EventLog{}, err
+	}
 	control := client.base.ResolveReference(&url.URL{Path: target.ControlURL})
 	envelope := `<?xml version="1.0"?><s:Envelope xmlns:s="` + soapNamespace + `" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"><s:Body><u:` + eventLogAction + ` xmlns:u="` + target.Type + `"></u:` + eventLogAction + `></s:Body></s:Envelope>`
 	headers := http.Header{"Content-Type": {`text/xml; charset="utf-8"`}, "SOAPAction": {`"` + target.Type + `#` + eventLogAction + `"`}}

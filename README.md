@@ -120,6 +120,7 @@ router-axi guest --json
 router-axi skill install
 router-axi setup install --agent all
 router-axi setup check --agent claude
+router-axi session dashboard
 router-axi wifi enable
 router-axi wifi disable
 router-axi wifi disable --instance 1 --confirm
