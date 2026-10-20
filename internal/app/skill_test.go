@@ -43,9 +43,17 @@ func TestCommandSurfaceIsDocumented(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	raw := string(skill.Bytes())
+	_, section, found := strings.Cut(raw, "\n## Command surface\n")
+	if !found {
+		t.Fatal("SKILL.md lacks a Command surface section")
+	}
+	if end := strings.Index(section, "\n## "); end >= 0 {
+		section = section[:end]
+	}
 	for command := range commandFlags {
 		bullet := regexp.MustCompile("(?m)^- `" + regexp.QuoteMeta(command) + "[ `]")
-		if !bullet.Match(skill.Bytes()) {
+		if !bullet.MatchString(section) {
 			t.Errorf("SKILL.md command list lacks a bullet for %q", command)
 		}
 		if !strings.Contains(string(readme), "router-axi "+command) {
