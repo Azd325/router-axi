@@ -20,6 +20,7 @@ var live = http.DefaultTransport
 
 func Main(m *testing.M) {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
 	transport.DialContext = dialLoopback
 	http.DefaultTransport = transport
 	os.Exit(m.Run())
