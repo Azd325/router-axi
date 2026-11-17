@@ -21,7 +21,7 @@
       packages = nixpkgs.lib.genAttrs systems (system:
         let
           pkgs = nixpkgs.legacyPackages.${system};
-          router-axi = pkgs.buildGoModule {
+          router-axi = (pkgs.buildGoModule.override { go = pkgs.go_1_26; }) {
             pname = "router-axi";
             inherit version;
             src = ./.;
